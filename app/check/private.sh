@@ -50,8 +50,7 @@ fi
 # Opens the cookie page at the private URL from the command bar of the key window, a private one,
 # and sets $tab to its tab.
 open_private_page() {
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+  resting_key t "private window"
   send insert "$private_url"
   send key return
   expect "^browser: loaded [0-9]* $private_url\$" "the private window didn't load the cookie page"
@@ -237,7 +236,7 @@ echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regu
 
 # In a private window, the extensions allowed in Incognito run as in Chrome, and the others don't:
 # the Extensions menu lists only the allowed one, never uBlock Origin, the browser's own, which
-# blocks there as Settings' Ad Blocking (#2107), and the allowed one pins at the URL field and has its Site Controls tile. Two
+# blocks there as Settings › Privacy's Ad Blocking (#2107), and the allowed one pins at the URL field and has its Site Controls tile. Two
 # extensions in a profile of the block's own: a first launch has Chrome list them, and Chrome's
 # preferences then allow one in Incognito and not the other, as chrome://extensions' Allow in
 # Incognito sets them, before the launch the block checks.
@@ -384,8 +383,7 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   window=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
   expect "^browser: window opened $window\$" "the private window didn't open"
   new_window_bar
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+  resting_key t "private window"
   send insert "${site}icon.html"
   send key return
   expect '^browser: title [0-9]* icon safari$' "the private window's icon page didn't open in Safari's engine"

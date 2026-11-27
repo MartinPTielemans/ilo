@@ -1,0 +1,10 @@
+source: https://help.asana.com/s/article/save-time-in-asana
+source: https://help.asana.com/s/article/asana-overview-for-screen-reader-users
+source: https://help.asana.com/s/article/task-actions
+checked: 2026-11-27
+holds: shortcuts
+---
+Keys beat clicks
+⌘+/ on a Mac, Ctrl+/ elsewhere, lists every key. Most of Asana's keys are Tab and then a letter.
+Tab+Q adds a task from anywhere. On a task, Tab+A assigns it, Tab+M assigns it to the user, Tab+D sets its due date, Tab+P adds it to a project, Tab+S adds a subtask and Tab+F a collaborator. Tab+N makes a section, Tab+X shows the task alone, and Tab+Enter goes back to the list.
+With a task selected, Enter adds a task under it and Shift+Enter one above it.

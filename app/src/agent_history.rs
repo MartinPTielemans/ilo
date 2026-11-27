@@ -33,11 +33,14 @@ pub struct Step {
     pub site: String,
     /// Why it was refused, or empty if it wasn't.
     pub refused: String,
-    /// A request's method and path, its whole address, and what it sent, or would have; empty
-    /// for any other step, and for a request kept before they were.
+    /// A request's method and path, its whole address, and what it sent, or would have; a web
+    /// search's count of the thread's searches, never their words; empty for any other step, and
+    /// for a request kept before they were.
     pub target: String,
     pub url: String,
     pub sent: Vec<Sent>,
+    /// The access its task had as it was judged, by its name, or empty for a step kept before.
+    pub tier: String,
 }
 
 /// A past task or session, as its receipt showed it.
@@ -61,11 +64,45 @@ pub struct Past {
     /// connected app's id, or a ⌘T CLI's (`agents::task_answers`). Empty for an entry from before
     /// they were kept.
     pub answers: String,
+    /// How its last turn ended, or None for an entry from before that was kept, and for a sort.
+    pub end: Option<crate::agents::kept::End>,
+    /// A sort of today's tabs into folders, in place of a task: then its entry is its counts, its
+    /// assistant's id in `agent`, and when it ran, and nothing else.
+    pub sorted: Option<Sorted>,
+}
+
+/// What an entry keeps of a sort of today's tabs into folders (#4252): counts alone, never a
+/// title, a site or a folder's name. One for each list handed over, folders 0 if it failed.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Sorted {
+    /// The tabs handed over, the tabs put in folders, and the folders that took them.
+    pub handed: usize,
+    pub moved: usize,
+    pub folders: usize,
 }
 
 impl Past {
-    /// What its row says under its title: "Claude Code · 14:02 · 1 order placed · 3 pages".
-    pub fn about(&self) -> String {
+    /// A sort's entry, by `assistant`'s id, such as "claude", from `started` to `ended`.
+    pub fn sort(assistant: &str, started: u64, ended: u64, sorted: Sorted) -> Past {
+        Past {
+            id: format!("sort-{started}"),
+            title: String::new(),
+            agent: assistant.to_string(),
+            started,
+            ended,
+            pages: Vec::new(),
+            orders: 0,
+            messages: 0,
+            steps: Vec::new(),
+            answers: String::new(),
+            end: None,
+            sorted: Some(sorted),
+        }
+    }
+
+    /// What its row says under its title, with `when` it ended as the list it's in says a time:
+    /// "Claude Code · 14:02 · 1 order placed · 3 pages".
+    pub fn about(&self, when: &str) -> String {
         let count = |n: usize, one: &str, many: &str| match n {
             0 => None,
             1 => Some(format!("1 {one}")),
@@ -73,7 +110,7 @@ impl Past {
         };
         let parts = [
             Some(self.agent.clone()).filter(|agent| !agent.is_empty()),
-            Some(crate::agents::local_time(self.ended)),
+            Some(when.to_string()).filter(|when| !when.is_empty()),
             count(self.orders, "order placed", "orders placed"),
             count(self.messages, "message sent", "messages sent"),
             count(self.pages.len(), "page", "pages"),
@@ -81,10 +118,20 @@ impl Past {
         parts.into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
+    /// What its row says under its title, with `when` it ended as W4 says a time, today's time or
+    /// an earlier day's date: how its last turn ended, "Done 14:02", or the time alone for an entry
+    /// from before that was kept.
+    pub fn ended(&self, when: &str) -> String {
+        match self.end {
+            Some(end) => format!("{} {when}", end.word().alone(&self.agent)),
+            None => when.to_string(),
+        }
+    }
+
     /// What its page says under its title: "Claude Code · 12 min · 14:02 · 1 order placed · 3
     /// pages", as its row with how long it ran.
     pub fn page_about(&self) -> String {
-        let about = self.about();
+        let about = self.about(&crate::agents::local_time(self.ended));
         match about
             .strip_prefix(&self.agent)
             .filter(|_| !self.agent.is_empty())
@@ -118,7 +165,16 @@ impl Past {
         sites
     }
 
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
+        // No title or pages: a build from before sorts reads no task in the line, and skips it.
+        if let Some(sorted) = self.sorted {
+            return json!({
+                "id": self.id, "agent": self.agent, "started": self.started, "ended": self.ended,
+                "sorted": {
+                    "handed": sorted.handed, "moved": sorted.moved, "folders": sorted.folders,
+                },
+            });
+        }
         let pages: Vec<Value> = (self.pages.iter())
             .map(|(title, url)| json!({ "title": title, "url": url }))
             .collect();
@@ -136,20 +192,49 @@ impl Past {
                     kept["url"] = json!(step.url);
                     kept["sent"] = json!(sent);
                 }
+                // A search's entry holds its count alone, which its row says (Z46).
+                if step.action == crate::agents::tools::SEARCHED {
+                    kept["target"] = json!(step.target);
+                }
+                if !step.tier.is_empty() {
+                    kept["tier"] = json!(step.tier);
+                }
                 kept
             })
             .collect();
-        json!({
+        let mut kept = json!({
             "id": self.id, "title": self.title, "agent": self.agent,
             "started": self.started, "ended": self.ended, "pages": pages,
             "orders": self.orders, "messages": self.messages, "steps": steps,
             "answers": self.answers,
-        })
+        });
+        if let Some(end) = self.end {
+            kept["end"] = json!(end.id());
+        }
+        kept
     }
 
     fn from_json(value: &Value) -> Option<Past> {
         let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
         let number = |key: &str| value.get(key).and_then(Value::as_u64);
+        if let Some(sorted) = value.get("sorted") {
+            let count = |key: &str| Some(sorted.get(key)?.as_u64()? as usize);
+            let sorted = Sorted {
+                handed: count("handed")?,
+                moved: count("moved")?,
+                folders: count("folders")?,
+            };
+            let past = Past::sort(
+                &text("agent")?,
+                number("started")?,
+                number("ended")?,
+                sorted,
+            );
+            return Some(Past {
+                id: text("id")?,
+                ..past
+            });
+        }
         let pages = (value.get("pages")?.as_array()?.iter())
             .filter_map(|page| {
                 let field = |key: &str| page.get(key).and_then(Value::as_str).map(str::to_string);
@@ -186,6 +271,7 @@ impl Past {
                 target: field("target").unwrap_or_default(),
                 url: field("url").unwrap_or_default(),
                 sent,
+                tier: field("tier").unwrap_or_default(),
             })
         })
         .collect();
@@ -200,6 +286,11 @@ impl Past {
             messages: number("messages")? as usize,
             steps,
             answers: text("answers").unwrap_or_default(),
+            // An entry from before its end was kept has none, nor one a later build ended otherwise.
+            end: text("end").and_then(|end| {
+                (crate::agents::kept::End::ALL.into_iter()).find(|each| each.id() == end)
+            }),
+            sorted: None,
         })
     }
 }

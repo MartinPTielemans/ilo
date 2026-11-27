@@ -209,7 +209,10 @@ impl Shell {
     /// Take Over, or Hand Back: the bar's first button and ⌘↩.
     pub(super) fn agent_bar_primary(&mut self, cx: &mut Context<Self>) {
         match self.agent_bar() {
+            // The page the bar is on, never another its agent is at work in: a task works on
+            // several at once (#4102).
             Some(Bar::Working { agent, tab, .. }) => {
+                let tab = self.agent_page().map_or(tab, |(_, shown)| shown);
                 self.browser.take_over(agent, tab, cx);
                 self.select(tab, cx);
             }
@@ -232,17 +235,18 @@ pub(super) fn stop_keys() -> String {
     keystroke_label(STOP_KEY)
 }
 
+/// The bar's title on a page the user took over, which its row at the sidebar's foot ends in too.
+pub(super) const DRIVING: &str = crate::agents::task::DRIVING;
+
 /// What the bar says, its title and the line under it, and the tab it's about.
 pub(super) fn bar_words(bar: &Bar) -> (String, String, u64) {
     match bar {
         Bar::Working {
             name, doing, tab, ..
         } => (format!("{name} is at work"), doing.to_string(), *tab),
-        Bar::Held { name, why, tab } if why.is_empty() => (
-            "You're driving".to_string(),
-            format!("{name} can't act here"),
-            *tab,
-        ),
+        Bar::Held { name, why, tab } if why.is_empty() => {
+            (DRIVING.to_string(), format!("{name} can't act here"), *tab)
+        }
         Bar::Held { name, why, tab } => (format!("{name} needs you"), why.to_string(), *tab),
     }
 }

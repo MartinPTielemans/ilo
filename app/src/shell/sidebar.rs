@@ -12,15 +12,16 @@ use gpui::{
 };
 
 use super::access::Accessible as _;
+use crate::glow;
 use crate::tokens::shell::{SHOWN_MARKER, SHOWN_MARKER_HIT};
 
 use super::{
-    CARD_INSET, PLATE_INSET, PRIVATE_SHADE, REVEAL_BACK, REVEAL_HOLD, REVEAL_IN_DAMPING,
+    EDGE_STRIP, PLATE_INSET, PRIVATE_SHADE, REVEAL_BACK, REVEAL_HOLD, REVEAL_IN_DAMPING,
     REVEAL_IN_RESPONSE, REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE,
     REVEAL_OVERSHOOT, REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX,
     SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
 };
-use crate::tokens::shell::{FOOTER_HEIGHT, NAV_SIZE, NAV_TOP, NAV_TRAIL, PLUS_INSET};
+use crate::tokens::shell::{FOOTER_HEIGHT, PLUS_INSET};
 
 /// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long,
 /// counted again each time it's asked for (Arc 1.171, measured by an outside reverse-engineering,
@@ -55,20 +56,6 @@ impl gpui::Global for SidebarRight {}
 /// Whether Sidebar position is Right.
 pub fn sidebar_right(cx: &gpui::App) -> bool {
     cx.try_global::<SidebarRight>().is_some_and(|right| right.0)
-}
-
-/// Settings › Tabs & Sidebar's Top bar, off by default (#3160): the header's row widens across the
-/// window's top and the URL field moves into it, the card under it. This device's, not synced, as
-/// Sidebar position is, and every window follows at once. A view preference: agents have no call
-/// to change it.
-#[derive(Clone, Copy)]
-pub struct TopBar(pub bool);
-
-impl gpui::Global for TopBar {}
-
-/// Whether Top bar is on.
-pub fn top_bar(cx: &gpui::App) -> bool {
-    cx.try_global::<TopBar>().is_some_and(|on| on.0)
 }
 
 /// `x` across a window `width` wide, measured from the sidebar's side: itself on the left, from the
@@ -200,7 +187,6 @@ impl Shell {
                     }),
                 )
         };
-        let head = NAV_TOP + NAV_SIZE;
         // The reveal's panel is the edge's container there, from its own left.
         let left = match (revealed, self.right) {
             (false, true) => self.column_x(),
@@ -213,10 +199,9 @@ impl Shell {
             .bottom_0()
             .left(px(left))
             .w(px(SIDEBAR_EDGE))
-            .child(part("sidebar-edge-head", NAV_TRAIL, cx).top_0().h(px(head)))
             .child(
                 part("sidebar-edge", SIDEBAR_EDGE, cx)
-                    .top(px(head))
+                    .top_0()
                     .bottom(px(FOOTER_HEIGHT)),
             )
             .child(
@@ -327,8 +312,8 @@ impl Shell {
         if to != self.sidebar_width {
             self.sidebar_width = to;
             self.browser.set_sidebar_width(to, cx);
-            // The tasks' lines and chips at the foot wrap to the new width.
-            self.reshape_foot(cx);
+            // A done card's finding wraps to the width.
+            self.place_cards(cx);
         }
         self.width_motion = (from != to).then(|| (from, crate::motion::start(cx)));
         if self.width_motion.is_none() {
@@ -525,7 +510,7 @@ impl Shell {
             .w_full()
             .h(px(SHOWN_MARKER))
             .rounded(px(SHOWN_MARKER / 2.))
-            .bg(self.palette.selected(0.));
+            .bg(self.palette.shown(0.));
         let marker = div()
             .id("shown-marker")
             .absolute()
@@ -567,9 +552,8 @@ impl Shell {
     }
 
     fn window_buttons_drawn(&self) -> WindowButtons {
-        // A Little ilo window's are over its bar, where the window's own go, as are Windows' at the
-        // top bar's end, which nothing covers.
-        if self.little.is_some() || self.buttons_at_bar_end() {
+        // A Little ilo window's are over its bar, where the window's own go.
+        if self.little.is_some() {
             return WindowButtons {
                 window: true,
                 library: false,
@@ -580,8 +564,7 @@ impl Shell {
             self.library_open,
             self.library_moving(),
             self.library_at_rest(),
-            // The bar keeps them while the sidebar is hidden, as it keeps the header's buttons.
-            self.bar_on() || (!self.sidebar_hidden && self.sidebar_motion.is_none()),
+            !self.sidebar_hidden && self.sidebar_motion.is_none(),
         )
     }
 
@@ -645,10 +628,9 @@ impl Shell {
         (space, Some((beside, t)))
     }
 
-    /// The gradient down the window, at `y` from its top (0) to its bottom (1), where the sidebar
-    /// is: the Space's colour, going to the same at HSL lightness + 0.25, or its theme's colours.
-    /// While the sidebar pages between two Spaces, it cross-fades from one's to the other's as the
-    /// pages move.
+    /// The Space's colour where the sidebar's middle is, `y` from the window's top (0) to its
+    /// bottom (1): its glows there. While the sidebar pages between two Spaces, it cross-fades from
+    /// one's to the other's as the pages move.
     pub(super) fn gradient_color(&self, y: f32) -> Hsla {
         let x = self.sidebar_x();
         let (space, beside) = self.colored_pages();
@@ -668,8 +650,8 @@ impl Shell {
         .into()
     }
 
-    /// `space`'s colour `x` of the way across the window and `y` of the way down, as the gradient
-    /// has it: its theme's, or nothing over the underlay without one.
+    /// `space`'s colour `x` of the way across the window and `y` of the way down: its glows there,
+    /// to lay over the window's ground; a private window's shade; nothing without a colour.
     pub(super) fn space_color_at(&self, space: u64, x: f32, y: f32) -> Rgba {
         if self.private {
             return Rgba {
@@ -679,32 +661,37 @@ impl Shell {
                 a: PRIVATE_SHADE,
             };
         }
-        match self.space_theme(space) {
-            Some(theme) => self.theme_color_at(&theme, self.palette_of(space).layer_alpha, x, y),
-            None => Rgba {
-                r: 0.,
-                g: 0.,
-                b: 0.,
-                a: 0.,
-            },
-        }
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
+        let (foot, far) = glow::strengths(x * width, y * height, width, height, self.right());
+        self.palette_of(space).glow_at(foot, far)
     }
 
-    /// `space`'s gradient from top to bottom, for what is as tall as the window, such as its card
-    /// in the Library.
-    pub(super) fn space_gradient(&self, space: u64) -> gpui::Background {
-        // Across the window's middle, for a theme of more than one colour.
-        let stop = |y| linear_color_stop(Hsla::from(self.space_color_at(space, 0.5, y)), y);
-        linear_gradient(180., stop(0.), stop(1.))
-    }
-
-    /// The gradient as a background, over `base` where the window's look has to be opaque.
-    pub(super) fn gradient(&self, base: Option<Hsla>) -> gpui::Background {
-        let stop = |y| {
-            let color = self.gradient_color(y);
-            linear_color_stop(base.map_or(color, |base| base.blend(color)), y)
+    /// `space`'s glow at the foot of an opaque copy of its sidebar `width` by `height` with corners
+    /// of `radius`, such as the panel the hidden sidebar comes out in and its card in the Library:
+    /// the glow down the column's middle, as GPUI draws no radial gradient in a rounded box.
+    pub(super) fn foot_glow(&self, space: u64, width: f32, height: f32, radius: f32) -> gpui::Div {
+        let (_, reach) = glow::Corner::Foot.extent();
+        let reach = reach.min(height);
+        let palette = self.palette_of(space);
+        let at = |up: f32| {
+            let (foot, _) = glow::strengths(width / 2., height - up, width, height, false);
+            Hsla::from(palette.glow_at(foot, 0.))
         };
-        linear_gradient(180., stop(0.), stop(1.))
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(reach))
+            .rounded_b(px(radius))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(at(reach), 0.),
+                linear_color_stop(at(0.), 1.),
+            ))
     }
 
     /// The window's look, opaque, halfway down: what covers the rows it passes over, and the find
@@ -722,6 +709,31 @@ impl Shell {
     /// The window's look, opaque, `y` of the way down.
     pub(super) fn window_fill_at(&self, y: f32) -> Hsla {
         Hsla::from(self.palette.underlay).blend(self.gradient_color(y))
+    }
+
+    /// The strip at the hidden sidebar's side of the window, over the card: the card reaches the
+    /// window's edge then, and what it holds that takes the pointer, as a task's conversation does,
+    /// would keep moves there from the root's listener. It takes them for `pointer_over` itself,
+    /// and is under Linux's resize bands, whose presses still resize the window.
+    pub(super) fn reveal_edge(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        if !self.sidebar_hidden || self.page_fullscreen || self.little.is_some() {
+            return None;
+        }
+        let strip = div()
+            .id("reveal-edge")
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .w(px(EDGE_STRIP))
+            .block_mouse_except_scroll()
+            .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, _, cx| {
+                shell.pointer_over(event.position, cx);
+                crate::tooltip::moved(cx);
+            }));
+        Some(match self.right {
+            true => strip.right_0(),
+            false => strip.left_0(),
+        })
     }
 
     /// The pointer moved to `at` over the browser window's own view, which has the strip at its
@@ -745,7 +757,7 @@ impl Shell {
             let now = cx.background_executor().now();
             back = left.is_some_and(|left| now.duration_since(left) <= REVEAL_BACK);
         }
-        let in_strip = (0. ..CARD_INSET).contains(&side) && y >= 0.;
+        let in_strip = (0. ..EDGE_STRIP).contains(&side) && y >= 0.;
         self.reveal_strip = in_strip.then(|| match self.reveal_strip {
             Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
             None => (y, back),
@@ -814,9 +826,10 @@ impl Shell {
             }
             self.revealed_by_option = false;
         }
-        // The edge is the card's margin. Past it, out of the window, the pointer has gone to
-        // another window or display.
-        if !(0. ..CARD_INSET).contains(&x) {
+        // The edge is the strip a page reaching the window's side leaves to the UI, the resize
+        // edge's width (core/page_edge_strips.h). Past it, out of the window, the pointer has gone
+        // to another window or display.
+        if !(0. ..EDGE_STRIP).contains(&x) {
             self.reveal_wait = None;
             self.reveal_strip = None;
             // A question or a chooser keeps it out until it's answered, the Cast card and its
@@ -827,7 +840,6 @@ impl Shell {
                 && self.resize.is_none()
                 && !self.pointer_on_card
                 && !self.page_asks()
-                && self.agent_question.is_none()
                 && self.cast.is_none()
                 && !self.menu_open
             {
@@ -994,7 +1006,7 @@ mod tests {
         drag::detents::{row_y, shell_with},
         recorder::Recorder,
     };
-    use crate::tokens::shell::{FOOTER_HEIGHT, NAV_SIZE, NAV_TOP};
+    use crate::tokens::shell::{FOOTER_HEIGHT, PLUS_INSET, WINDOW_BUTTON_Y};
 
     /// A Space made while the sidebar is hidden gets a toast whose Show shows it with the sidebar
     /// back. Spaces made one after another are told of together. None for the window's first
@@ -1313,7 +1325,7 @@ mod tests {
     fn the_wheel_brings_the_marker_only_for_a_row_wholly_scrolled_out(cx: &mut TestAppContext) {
         let host = Rc::new(Recorder::default());
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
-        cx.simulate_resize(size(px(1000.), px(340.)));
+        cx.simulate_resize(size(px(1000.), px(320.)));
         shell.update(cx, |shell, cx| {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
@@ -1347,7 +1359,7 @@ mod tests {
         // At the list's top the last row still shows its top: a move past it marks nothing.
         assert_eq!(wheel(cx, 50.), None, "a marker for a row that still shows");
         // Shorter, the row is wholly under the list's bottom at its top.
-        cx.simulate_resize(size(px(1000.), px(300.)));
+        cx.simulate_resize(size(px(1000.), px(280.)));
         shell.update(cx, |shell, cx| shell.set_selected(12, cx));
         draw(&shell, cx);
         let markers: Vec<_> = (0..8).map(|_| wheel(cx, 10.)).collect();
@@ -1699,7 +1711,7 @@ mod tests {
             "the pointer over the page brought it out"
         );
         assert!(
-            !to(&shell, 5., 300., cx),
+            !to(&shell, 2., 300., cx),
             "a jump into the edge brought it out"
         );
         assert!(
@@ -1822,19 +1834,19 @@ mod tests {
     fn a_pointer_back_at_the_edge_after_an_overshoot_reveals(cx: &mut TestAppContext) {
         let shell = hidden_sidebar(cx);
         move_to(&shell, 0, 400., 300., cx);
-        move_to(&shell, 16, 4., 300., cx);
+        move_to(&shell, 16, 2., 300., cx);
         leave(&shell, 16, cx);
-        move_to(&shell, 200, 3., 300., cx);
+        move_to(&shell, 200, 1., 300., cx);
         assert!(
             out_after_the_wait(&shell, cx),
             "back at the edge after an overshoot, the pointer didn't bring the sidebar out"
         );
         // The Mac tells the leave alone.
         put_away(&shell, cx);
-        move_to(&shell, 16, 4., 300., cx);
+        move_to(&shell, 16, 2., 300., cx);
         cx.executor().advance_clock(Duration::from_millis(16));
         shell.update(cx, |shell, cx| shell.pointer_left(cx));
-        move_to(&shell, 200, 3., 300., cx);
+        move_to(&shell, 200, 1., 300., cx);
         assert!(
             out_after_the_wait(&shell, cx),
             "back at the edge after a leave alone, the pointer didn't bring the sidebar out"
@@ -1849,9 +1861,9 @@ mod tests {
         let shell = hidden_sidebar(cx);
         leave(&shell, 0, cx);
         move_to(&shell, 1500, 8., 300., cx);
-        move_to(&shell, 8, 4., 300., cx);
+        move_to(&shell, 8, 2., 300., cx);
         leave(&shell, 8, cx);
-        move_to(&shell, 200, 3., 300., cx);
+        move_to(&shell, 200, 1., 300., cx);
         assert!(
             out_after_the_wait(&shell, cx),
             "back at the edge after an overshoot from the page, the pointer didn't bring the \
@@ -1881,20 +1893,20 @@ mod tests {
     #[gpui::test]
     fn a_pointer_stopped_at_the_edge_reveals_as_it_drifts(cx: &mut TestAppContext) {
         let shell = hidden_sidebar(cx);
-        for x in [30., 9., 6., 3.] {
+        for x in [30., 9., 4., 1.] {
             move_to(&shell, 50, x, 300., cx);
         }
         assert!(
             !out_after_the_wait(&shell, cx),
             "a pointer coming straight in brought the sidebar out"
         );
-        move_to(&shell, 300, 3., 304., cx);
+        move_to(&shell, 300, 1., 304., cx);
         assert!(
             out_after_the_wait(&shell, cx),
             "a drift along the edge didn't bring the sidebar out"
         );
         put_away(&shell, cx);
-        for x in [30., 9., 6., 3.] {
+        for x in [30., 9., 4., 1.] {
             move_to(&shell, 50, x, 300., cx);
         }
         move_to(&shell, 300, 1., 300., cx);
@@ -1912,7 +1924,7 @@ mod tests {
     fn a_pointer_passing_out_across_the_edge_brings_nothing_out(cx: &mut TestAppContext) {
         let shell = hidden_sidebar(cx);
         move_to(&shell, 0, 400., 300., cx);
-        move_to(&shell, 16, 4., 300., cx);
+        move_to(&shell, 16, 2., 300., cx);
         leave(&shell, 16, cx);
         cx.executor().advance_clock(super::REVEAL_BACK);
         assert!(
@@ -1928,14 +1940,14 @@ mod tests {
     fn a_late_return_has_to_move_along_the_edge(cx: &mut TestAppContext) {
         let shell = hidden_sidebar(cx);
         move_to(&shell, 0, 400., 300., cx);
-        move_to(&shell, 16, 4., 300., cx);
+        move_to(&shell, 16, 2., 300., cx);
         leave(&shell, 16, cx);
-        move_to(&shell, 1100, 3., 300., cx);
+        move_to(&shell, 1100, 1., 300., cx);
         assert!(
             !out_after_the_wait(&shell, cx),
             "a return 1.1 s after leaving brought the sidebar out"
         );
-        move_to(&shell, 16, 3., 304., cx);
+        move_to(&shell, 16, 1., 304., cx);
         assert!(
             out_after_the_wait(&shell, cx),
             "a move along the edge after a late return didn't bring the sidebar out"
@@ -1950,7 +1962,7 @@ mod tests {
         move_to(&shell, 0, 2., 300., cx);
         move_to(&shell, 16, 8., 300., cx);
         leave(&shell, 16, cx);
-        move_to(&shell, 50, 4., 300., cx);
+        move_to(&shell, 50, 2., 300., cx);
         assert!(
             !out_after_the_wait(&shell, cx),
             "a pointer back from the page brought the sidebar out"
@@ -1963,9 +1975,9 @@ mod tests {
     fn a_return_passing_on_in_brings_nothing_out(cx: &mut TestAppContext) {
         let shell = hidden_sidebar(cx);
         move_to(&shell, 0, 400., 300., cx);
-        move_to(&shell, 16, 4., 300., cx);
+        move_to(&shell, 16, 2., 300., cx);
         leave(&shell, 16, cx);
-        move_to(&shell, 200, 3., 300., cx);
+        move_to(&shell, 200, 1., 300., cx);
         move_to(&shell, 50, 30., 300., cx);
         assert!(
             !out_after_the_wait(&shell, cx),
@@ -1980,26 +1992,26 @@ mod tests {
         let shell = hidden_sidebar(cx);
         shell.update(cx, |shell, _| shell.sidebar_hidden = false);
         move_to(&shell, 0, 400., 300., cx);
-        move_to(&shell, 16, 4., 300., cx);
+        move_to(&shell, 16, 2., 300., cx);
         leave(&shell, 16, cx);
         shell.update(cx, |shell, _| shell.sidebar_hidden = true);
-        move_to(&shell, 200, 3., 300., cx);
+        move_to(&shell, 200, 1., 300., cx);
         assert!(
             !out_after_the_wait(&shell, cx),
             "a leave while the sidebar was docked counted after it hid"
         );
-        move_to(&shell, 16, 3., 304., cx);
+        move_to(&shell, 16, 1., 304., cx);
         assert!(out_after_the_wait(&shell, cx), "the edge didn't reveal");
         // Out now: a leave and return leave it out, and once it's away count for nothing.
-        move_to(&shell, 16, 4., 310., cx);
+        move_to(&shell, 16, 2., 310., cx);
         leave(&shell, 16, cx);
-        move_to(&shell, 200, 3., 310., cx);
+        move_to(&shell, 200, 1., 310., cx);
         assert!(
             out_after_the_wait(&shell, cx),
             "the revealed sidebar went away"
         );
         put_away(&shell, cx);
-        move_to(&shell, 16, 3., 310., cx);
+        move_to(&shell, 16, 1., 310., cx);
         assert!(
             !out_after_the_wait(&shell, cx),
             "a leave while the sidebar was out counted after it went away"
@@ -2106,17 +2118,27 @@ mod tests {
         );
     }
 
-    /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 6
-    /// past it, and beside the + the 8 past that.
+    /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 10
+    /// past it, and beside the + what's past its plate.
     #[gpui::test]
     fn the_edge_leaves_the_buttons_their_plates(cx: &mut TestAppContext) {
         let (shell, _, cx) = edge_window(cx);
-        let header = NAV_TOP + NAV_SIZE / 2.;
-        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 7., header));
-        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 5., header));
+        let header = WINDOW_BUTTON_Y;
+        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 11., header));
+        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., header));
         let foot = 600. - FOOTER_HEIGHT / 2.;
-        assert!(!takes_edge(&shell, cx, SIDEBAR_WIDTH - 9., foot));
-        assert!(takes_edge(&shell, cx, SIDEBAR_WIDTH - 7., foot));
+        assert!(!takes_edge(
+            &shell,
+            cx,
+            SIDEBAR_WIDTH - PLUS_INSET - 1.,
+            foot
+        ));
+        assert!(takes_edge(
+            &shell,
+            cx,
+            SIDEBAR_WIDTH - PLUS_INSET + 1.,
+            foot
+        ));
     }
 
     /// A drag from the edge that ends over a row's close button, the sidebar stopped at its

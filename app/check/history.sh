@@ -78,9 +78,9 @@ if [ "$active" != 1 ]; then
   echo "skip: history. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# The header's buttons, centred 23.5 below the window's top.
-back_button="138 24"
-forward_button="172 24"
+# The header's buttons, centred 24 below the window's top.
+back_button="158 24"
+forward_button="182 24"
 reload_button="206 24"
 
 go_from_bar example.com
@@ -709,8 +709,7 @@ if [ "$major" -ge 157 ]; then
     expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
     new_window_bar
     send window "$(grep -c '^browser: window opened ' "$log")"
-    send key t cmd
-    expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+    resting_key t "second window"
     send insert "${site}notes.txt"
     send key return
     expect "^browser: loaded [0-9]* ${site}notes.txt\$" "the second window didn't load ${site}notes.txt"

@@ -127,6 +127,36 @@ pub struct Element {
     pub password: bool,
     /// The DOM node of the form it's in, if it's in one.
     pub form: Option<i64>,
+    /// Whether the page marks the field as one for a secret by its autofill kind: a card's number,
+    /// its security code or expiry, a one-time code, a new or current password. None while the core
+    /// doesn't say. Read by `shows_typed` alone: never put into an outline, an answer or a log.
+    pub secret: Option<bool>,
+    /// Whether the browser itself filled the field. None while the core doesn't say; read by
+    /// `shows_typed` alone.
+    pub autofilled: Option<bool>,
+}
+
+impl Element {
+    /// Whether what an agent types into it may be shown: only where the core said the page marks
+    /// it no secret and the browser didn't fill it, and never a password field's value, nor one
+    /// whose name says it's a secret. A core that doesn't say means no. A trace's step, a kept
+    /// card and a kept log all go by this.
+    pub fn shows_typed(&self) -> bool {
+        let name = self.name.to_lowercase();
+        self.secret == Some(false)
+            && self.autofilled == Some(false)
+            && !self.password
+            && !name.contains("password")
+            && !name.contains("passcode")
+    }
+}
+
+/// What an agent typed or chose in `element` that may be shown again, cut as a step's line shows
+/// it, or None where `shows_typed` doesn't let it or the element isn't known. Every road that keeps
+/// what was put in a field, a trace's step, a kept card and a refusal's line, goes by this.
+pub fn typed_shown(element: Option<&Element>, text: &str) -> Option<String> {
+    let shown = element.is_some_and(Element::shows_typed);
+    shown.then(|| clip(&one_line(text), super::tools::TYPED_SHOWN))
 }
 
 /// What has the keyboard in a page, as its outline says.
@@ -252,6 +282,7 @@ pub fn outline(tab: &TabInfo, nodes: &[Value], refs: &mut Refs, part: Option<i64
         lines: walk.lines,
         notes,
         focus: walk.focus,
+        money: money_forms(&walk.elements),
         elements: walk.elements,
         messages: walk.messages,
         editors: walk.editors,
@@ -323,6 +354,9 @@ pub struct Outline {
     messages: Vec<Option<i64>>,
     /// The DOM node of each rich-text editor, where a line break may send what it holds.
     editors: Vec<i64>,
+    /// The form of each set of fields that moves money (`money_forms`), or none for the page's
+    /// fields in no form.
+    money: Vec<Option<i64>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -378,6 +412,11 @@ impl Outline {
     /// composer's Send often sits outside every form.
     pub fn sends_message(&self, form: Option<i64>) -> bool {
         (self.messages.iter()).any(|each| form.is_none() || each.is_none() || *each == form)
+    }
+
+    /// Whether `form`'s fields, or with None the page's in no form, move money (#4369).
+    pub fn moves_money(&self, form: Option<i64>) -> bool {
+        self.money.contains(&form)
     }
 
     /// Whether the element on the DOM node `node` is a rich-text editor.
@@ -703,6 +742,8 @@ impl<'a> Walk<'a> {
                 name: name.into(),
                 password,
                 form: self.form,
+                secret: node.get("secret").and_then(Value::as_bool),
+                autofilled: node.get("autofilled").and_then(Value::as_bool),
             };
             if state(node, "focused") {
                 self.focus = Focus::On(element.clone());
@@ -1205,7 +1246,7 @@ const SEND: &[&str] = &[
     "skicka",
     "create topic",
 ];
-/// Words that move money, as a button's name has them, which ask on a bank's or money site
+/// Words that move money, as a button's name has them, which ask on a sensitive site
 /// alone: a yes to opening one isn't a yes to what's done there.
 const MOVES: &[&str] = &[
     "withdraw",
@@ -1257,82 +1298,74 @@ const MESSAGING: &[&str] = &[
     "web.telegram.org",
     "reddit.com",
 ];
-/// Banks' and money sites without "bank" in their host, each a site whole, as each country's
-/// site is one of its own.
-const BANKS: &[&str] = &[
-    "chase.com",
-    "wellsfargo.com",
-    "bankofamerica.com",
-    "citi.com",
-    "capitalone.com",
-    "schwab.com",
-    "fidelity.com",
-    "vanguard.com",
-    "paypal.com",
-    "venmo.com",
-    "revolut.com",
-    "wise.com",
-    "monzo.com",
-    "coinbase.com",
-    "americanexpress.com",
-    "discover.com",
-    "pnc.com",
-    "td.com",
-    "ally.com",
-    "sofi.com",
-    "robinhood.com",
-    "etoro.com",
-    "interactivebrokers.com",
-    "binance.com",
-    "kraken.com",
-    "bitstamp.net",
-    "crypto.com",
-    "klarna.com",
-    "n26.com",
-    "bunq.com",
-    "hsbc.com",
-    "hsbc.co.uk",
-    "barclays.co.uk",
-    "barclaycard.co.uk",
-    "natwest.com",
-    "nationwide.co.uk",
-    "halifax.co.uk",
-    "santander.co.uk",
-    "santander.de",
-    "santander.es",
-    "ing.com",
-    "ing.de",
-    "ing.nl",
-    "sparkasse.de",
-    "dkb.de",
-    "comdirect.de",
-    "postfinance.ch",
-    "ubs.com",
-    "nordea.com",
-    "nordea.dk",
-    "nordea.se",
-    "nordea.no",
-    "nordea.fi",
-    "nykredit.dk",
-    "lsb.dk",
-    "lunar.app",
-    "mobilepay.dk",
-    "vipps.no",
+/// Words a field's name has when it takes an amount of money, in `PAYMENT`'s languages.
+const AMOUNT: &[&str] = &[
+    "amount", "sum",     // Danish.
+    "beløb",   // German.
+    "betrag",  // French.
+    "montant", // Spanish.
+    "importe", "cantidad", // Dutch.
+    "bedrag",   // Swedish.
+    "belopp",
+];
+/// Words a field's name has when it says where money goes or comes from: an account, an IBAN, a
+/// card or a payee, in `PAYMENT`'s languages.
+const PAYEE: &[&str] = &[
+    "iban",
+    "bic",
+    "swift",
+    "account",
+    "account number",
+    "sort code",
+    "routing number",
+    "card number",
+    "payee",
+    "recipient",
+    "beneficiary",
+    // Danish.
+    "konto",
+    "kontonummer",
+    "reg.nr",
+    "registreringsnummer",
+    "modtager",
+    "kortnummer",
+    // German.
+    "kontonummer",
+    "empfänger",
+    "kartennummer",
+    // French.
+    "compte",
+    "bénéficiaire",
+    "destinataire",
+    // Spanish.
+    "cuenta",
+    "beneficiario",
+    "destinatario",
+    // Dutch.
+    "rekening",
+    "rekeningnummer",
+    "begunstigde",
+    "ontvanger",
+    // Swedish.
+    "mottagare",
+    "clearingnummer",
+    "bankgiro",
+    "plusgiro",
 ];
 
 /// Why acting on the element named `label` on `host` asks the user first, if it does: it looks
 /// like a payment or an order, or it sends a message or post, from a site that sends them or
 /// with a `message` in its form, or the page's for one in no form, for it to send, or it sends or
-/// moves money on a bank's or money site (GHSA-6qxg-jpw9-5jrr). Typing with submit and pressing
-/// Enter are "send".
-pub fn risk(host: &str, label: &str, message: bool) -> Option<&'static str> {
+/// moves money on a `sensitive` site (GHSA-6qxg-jpw9-5jrr, #4369). Typing with submit and
+/// pressing Enter are "send".
+pub fn risk(host: &str, label: &str, message: bool, sensitive: bool) -> Option<&'static str> {
     let label = label.to_lowercase();
     if PAYMENT.iter().any(|words| has_words(&label, words)) {
         return Some(ORDER);
     }
     let sends = SEND.iter().any(|words| has_words(&label, words));
     let moves = || MOVES.iter().any(|words| has_words(&label, words));
-    if (sends || moves()) && opening_risk(host).is_some() {
+    if (sends || moves()) && sensitive {
         return Some(ORDER);
     }
     if sends && (message || MESSAGING.iter().any(|site| on(host, site))) {
@@ -1374,6 +1407,7 @@ pub struct Pressing {
 /// control has no form or the outline doesn't say what has the keyboard (GHSA-hqw3-jp9p-3rhj).
 pub fn pressing_risk(
     host: &str,
+    sensitive: bool,
     outline: Option<&Outline>,
     key: &str,
     typed_in: Option<&Element>,
@@ -1384,7 +1418,10 @@ pub fn pressing_risk(
     let asks = |surely: bool| {
         move |element: &Element| {
             let message = outline.is_some_and(|outline| outline.sends_message(element.form));
-            let why = risk(host, &element.name, message)?;
+            let why = match moves_money(outline, element) {
+                true => ORDER,
+                false => risk(host, &element.name, message, sensitive)?,
+            };
             let control = element.clone();
             Some(Pressing {
                 why,
@@ -1410,6 +1447,15 @@ pub fn pressing_risk(
                 (true, _) => return asks(true)(control),
                 // Space in a field types a space.
                 (false, "Space") => return None,
+                // Enter in a form that moves money sends it, whichever its button.
+                (false, _) if outline.is_some_and(|outline| outline.moves_money(control.form)) => {
+                    let control = control.clone();
+                    return Some(Pressing {
+                        why: ORDER,
+                        control,
+                        surely: false,
+                    });
+                }
                 (false, _) => control.form,
             }
         }
@@ -1429,11 +1475,35 @@ pub const ORDER: &str = "It looks like a payment or an order.";
 /// Why sending a message or a post asks first, which the receipt counts as a message sent.
 pub const SENDS: &str = "It sends a message or a post.";
 
-/// Why opening a page on `host` asks the user first, if it does: it's a bank's.
-pub fn opening_risk(host: &str) -> Option<&'static str> {
-    let host = host.to_lowercase();
-    let bank = BANKS.iter().any(|bank| on(&host, bank)) || host.contains("bank");
-    bank.then_some("It's a bank's site.")
+/// Why opening a sensitive site asks the user first (sensitive.rs): the words table's SS4.
+pub const SENSITIVE: &str = "It's a sensitive site.";
+
+/// Whether acting on `control` sends a form that moves money: a button or link of a form whose
+/// fields do (`Outline::moves_money`), an order on any site (#4369).
+pub fn moves_money(outline: Option<&Outline>, control: &Element) -> bool {
+    matches!(control.role.as_str(), "button" | "link")
+        && outline.is_some_and(|outline| outline.moves_money(control.form))
+}
+
+/// The forms whose fields move money: an amount with an account, an IBAN, a card or a payee
+/// beside it, by the fields' names, or a card's number by its autofill kind (`Element::secret`).
+fn money_forms(elements: &[Element]) -> Vec<Option<i64>> {
+    let named = |element: &Element, words: &[&str]| {
+        let name = element.name.to_lowercase();
+        FIELDS.contains(&element.role.as_str()) && words.iter().any(|each| has_words(&name, each))
+    };
+    let mut forms: Vec<Option<i64>> = Vec::new();
+    for amount in elements.iter().filter(|each| named(each, AMOUNT)) {
+        let to = |each: &&Element| {
+            each.form == amount.form
+                && each.node != amount.node
+                && (named(each, PAYEE) || each.secret == Some(true))
+        };
+        if !forms.contains(&amount.form) && elements.iter().any(|each| to(&each)) {
+            forms.push(amount.form);
+        }
+    }
+    forms
 }
 
 /// Whether `host` is `site` or under it.
@@ -1567,6 +1637,48 @@ mod tests {
             "{outline}"
         );
         assert!(outline.contains("x…\")\n"), "{outline}");
+    }
+
+    /// What's typed into a field shows only where the core says both that the page marks it no
+    /// secret and that the browser didn't fill it: a core that doesn't say means no, and either
+    /// fact true means no. A password field, or one whose name says it's a secret, never shows it.
+    /// Neither fact reaches the outline.
+    #[test]
+    fn typed_text_shows_only_where_the_core_says_the_field_is_no_secret() {
+        let shows = |secret: Option<bool>, autofilled: Option<bool>, name: &str| {
+            let mut nodes = vec![
+                node("1", "RootWebArea", "Form", &["2"]),
+                node("2", "textbox", name, &[]),
+            ];
+            nodes[1]["backendDOMNodeId"] = json!(2);
+            if let Some(secret) = secret {
+                nodes[1]["secret"] = json!(secret);
+            }
+            if let Some(autofilled) = autofilled {
+                nodes[1]["autofilled"] = json!(autofilled);
+            }
+            let mut refs = Refs::default();
+            let outline = outline(&tab(), &nodes, &mut refs, None);
+            let text = outline.text();
+            assert!(
+                !text.contains("secret") && !text.contains("autofill"),
+                "{text}"
+            );
+            outline.elements[0].shows_typed()
+        };
+        assert!(!shows(None, None, "City"), "a core that doesn't say");
+        assert!(!shows(Some(false), None, "City"));
+        assert!(!shows(None, Some(false), "City"));
+        assert!(
+            !shows(Some(true), Some(false), "City"),
+            "a field the page marks secret"
+        );
+        assert!(
+            !shows(Some(false), Some(true), "City"),
+            "a field the browser filled"
+        );
+        assert!(shows(Some(false), Some(false), "City"));
+        assert!(!shows(Some(false), Some(false), "Passcode"));
     }
 
     /// The page's text inside a line's quotes, a name, a select's choices or what a field holds,
@@ -2181,7 +2293,7 @@ mod tests {
             text.ends_with("\n- listitem [e1]: \"Two shirts\" · button \"Pay now\" [e2]"),
             "{text}"
         );
-        let pressing = pressing_risk("shop.example", Some(&outline), "Enter", None).unwrap();
+        let pressing = pressing_risk("shop.example", false, Some(&outline), "Enter", None).unwrap();
         assert_eq!(
             (pressing.control.name.as_str(), pressing.surely),
             ("Pay now", true)
@@ -2214,7 +2326,7 @@ mod tests {
             text.contains("\n    - textbox \"Card number\" [e"),
             "{text}"
         );
-        let pressing = pressing_risk("shop.example", Some(&outline), "Enter", None).unwrap();
+        let pressing = pressing_risk("shop.example", false, Some(&outline), "Enter", None).unwrap();
         // Enter in a field submits its form, which may click this button: the outline can't say.
         assert_eq!(
             (
@@ -2318,32 +2430,29 @@ mod tests {
         assert!(has);
     }
 
-    /// Payments and orders ask first anywhere, sending on a site that sends messages, and opening
-    /// a bank's site; the words have to be words, not inside others.
+    /// Payments and orders ask first anywhere, and sending on a site that sends messages; the
+    /// words have to be words, not inside others.
     #[test]
     fn what_asks_the_user_first() {
-        assert!(risk("shop.example", "Place your order", false).is_some());
-        assert!(risk("shop.example", "Proceed to checkout", false).is_some());
-        assert!(risk("shop.example", "Pay now", false).is_some());
-        assert_eq!(risk("shop.example", "Payment methods", false), None);
-        assert_eq!(risk("butik.example", "Betalingsmetoder", false), None);
-        assert_eq!(risk("shop.example", "Send", false), None);
-        assert!(risk("shop.example", "Send", true).is_some());
-        assert!(risk("mail.google.com", "Send", false).is_some());
-        assert!(risk("old.reddit.com", "send", false).is_some());
-        assert_eq!(risk("notreddit.com", "send", false), None);
-        assert_eq!(risk("mail.google.com", "Sender", false), None);
-        assert!(opening_risk("www.chase.com").is_some());
-        assert!(opening_risk("netbank.nordea.dk").is_some());
-        assert_eq!(opening_risk("notnordea.dk"), None);
-        assert!(opening_risk("online.mybank.example").is_some());
-        assert_eq!(opening_risk("example.com"), None);
-        assert_eq!(opening_risk("notchase.com"), None);
+        assert!(risk("shop.example", "Place your order", false, false).is_some());
+        assert!(risk("shop.example", "Proceed to checkout", false, false).is_some());
+        assert!(risk("shop.example", "Pay now", false, false).is_some());
+        assert_eq!(risk("shop.example", "Payment methods", false, false), None);
+        assert_eq!(
+            risk("butik.example", "Betalingsmetoder", false, false),
+            None
+        );
+        assert_eq!(risk("shop.example", "Send", false, false), None);
+        assert!(risk("shop.example", "Send", true, false).is_some());
+        assert!(risk("mail.google.com", "Send", false, false).is_some());
+        assert!(risk("old.reddit.com", "send", false, false).is_some());
+        assert_eq!(risk("notreddit.com", "send", false, false), None);
+        assert_eq!(risk("mail.google.com", "Sender", false, false), None);
     }
 
     /// What asks first beyond the word and site lists, each named when it doesn't ask as it
     /// should: an order in other words and languages, a Send or Comment with a message to send on
-    /// a site off the list, opening a bank's site off the list, and moving money on one.
+    /// a site off the list, and sending or moving money on a sensitive site.
     #[test]
     fn what_asks_first_beyond_the_lists() {
         let mut missed = Vec::new();
@@ -2354,12 +2463,18 @@ mod tests {
             ("butik.example", "Køb nu"),
             ("laden.example", "Jetzt kaufen"),
             ("mail.proton.me", "Send"),
-            ("www.binance.com", "Withdraw"),
-            ("netbank.nordea.dk", "Overfør"),
-            ("netbank.nordea.dk", "Send"),
-            ("online.mybank.example", "Confirm"),
         ] {
-            if risk(host, label, false).is_none() {
+            if risk(host, label, false, false).is_none() {
+                missed.push(format!("{label} on {host} asks nothing"));
+            }
+        }
+        for (host, label) in [
+            ("exchange.example", "Withdraw"),
+            ("netbank.example", "Overfør"),
+            ("netbank.example", "Send"),
+            ("online.example", "Confirm"),
+        ] {
+            if risk(host, label, false, true) != Some(ORDER) {
                 missed.push(format!("{label} on {host} asks nothing"));
             }
         }
@@ -2370,23 +2485,76 @@ mod tests {
         ] {
             let (outline, control) = composed(label, true, Some("filled"));
             let message = outline.sends_message(control.form);
-            if risk(host, &control.name, message).is_none() {
+            if risk(host, &control.name, message, false).is_none() {
                 missed.push(format!("{label} on {host}, with a message, asks nothing"));
             }
         }
-        for host in [
-            "www.nordea.dk",
-            "n26.com",
-            "www.hsbc.co.uk",
-            "www.binance.com",
-            "bcol.barclaycard.co.uk",
+        if risk("shop.example", "Confirm", false, false).is_some() {
+            missed.push("Confirm off a sensitive site asks".into());
+        }
+        assert!(missed.is_empty(), "{}", missed.join("\n"));
+    }
+
+    /// A form of `fields` and a Continue button, as the core outlines it, and the button.
+    fn form_of(fields: &[&str]) -> (Outline, Element) {
+        let ids: Vec<String> = (0..fields.len())
+            .map(|each| (each + 10).to_string())
+            .collect();
+        let mut children: Vec<&str> = ids.iter().map(String::as_str).collect();
+        children.push("3");
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Transfer", &["2"]),
+            node("2", "form", "", &children),
+            node("3", "button", "Continue", &[]),
+        ];
+        for (id, field) in ids.iter().zip(fields) {
+            nodes.push(node(id, "textbox", field, &[]));
+        }
+        for each in &mut nodes {
+            let id: i64 = each["nodeId"].as_str().unwrap().parse().unwrap();
+            each["backendDOMNodeId"] = json!(id * 10);
+        }
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None);
+        let button = outline.elements.iter().find(|each| each.role == "button");
+        let button = button.cloned().unwrap();
+        (outline, button)
+    }
+
+    /// A form that moves money is an order on any site, whatever its button says, and Enter in
+    /// it too: an amount with an account, an IBAN, a card or a payee, in its languages. An amount
+    /// alone, a search, or a sign-in isn't (#4369).
+    #[test]
+    fn a_form_that_moves_money_is_an_order_anywhere() {
+        let mut missed = Vec::new();
+        for fields in [
+            &["Amount", "IBAN"][..],
+            &["Amount", "Payee"],
+            &["Beløb", "Kontonummer"],
+            &["Betrag", "Empfänger"],
+            &["Montant", "Bénéficiaire"],
+            &["Belopp", "Mottagare"],
+            &["Amount", "Card number"],
         ] {
-            if opening_risk(host).is_none() {
-                missed.push(format!("opening {host} asks nothing"));
+            let (outline, button) = form_of(fields);
+            if !moves_money(Some(&outline), &button) {
+                missed.push(format!("{fields:?} isn't money"));
+            }
+            let field = outline.elements.iter().find(|each| each.role == "textbox");
+            let pressed = pressing_risk("unknown.example", false, Some(&outline), "Enter", field);
+            if pressed.map(|pressing| pressing.why) != Some(ORDER) {
+                missed.push(format!("Enter in {fields:?} isn't an order"));
             }
         }
-        if risk("shop.example", "Confirm", false).is_some() {
-            missed.push("Confirm off the money sites asks".into());
+        for fields in [
+            &["Amount"][..],
+            &["Search"],
+            &["Email", "Password"],
+            &["Recipient", "Subject"],
+        ] {
+            let (outline, button) = form_of(fields);
+            if moves_money(Some(&outline), &button) {
+                missed.push(format!("{fields:?} is money"));
+            }
         }
         assert!(missed.is_empty(), "{}", missed.join("\n"));
     }
@@ -2442,7 +2610,7 @@ mod tests {
         for (rich, label) in [(false, "Comment"), (true, "Send")] {
             let (outline, control) = composed(label, rich, Some("filled"));
             assert!(outline.sends_message(control.form), "{label}");
-            assert_eq!(risk("site.example", label, true), Some(SENDS));
+            assert_eq!(risk("site.example", label, true, false), Some(SENDS));
             let (empty, control) = composed(label, rich, Some("empty"));
             assert!(
                 !empty.sends_message(control.form),
@@ -2484,7 +2652,7 @@ mod tests {
         let (chat, _) = composed("Send", true, Some("filled"));
         assert!(chat.is_editor(20));
         let editor = chat.elements.iter().find(|each| each.node == 20).unwrap();
-        let pressing = pressing_risk("chat.example", Some(&chat), "Enter", Some(editor));
+        let pressing = pressing_risk("chat.example", false, Some(&chat), "Enter", Some(editor));
         assert_eq!(
             pressing.map(|pressing| pressing.control.name),
             Some("Send".into())

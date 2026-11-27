@@ -15,9 +15,10 @@ use gpui::{
     size, svg,
 };
 
+use crate::dismissal::{By, Close, Why};
 use crate::elevation::Level;
 use crate::hover_card::Icon;
-use crate::palette::{self, Palette};
+use crate::palette::{self, Float, Palette};
 use crate::shell::KEY_CONTEXT;
 pub use crate::tokens::command_bar::{ABOVE_MIDDLE, RADIUS, WIDTH};
 use crate::tokens::command_bar::{
@@ -205,15 +206,26 @@ pub fn ask(ask: Ask, cx: &mut App) {
 /// The host hid the switcher as the user left it: a click outside it stays on the tab the walk
 /// started from, and leaving the app ends the walk as letting go of ⌃ does.
 pub fn dismissed(cx: &mut App) {
-    let left_app = cx.active_window().is_none();
+    let close = Close::left(cx.active_window().is_none());
     update(cx, |switcher, _, cx| {
         switcher.hovered = None;
         if let Some(show) = switcher.shown.take() {
             log!("browser: tab switcher dismissed");
             cx.notify();
-            (show.heard)(if left_app { Heard::LetGo } else { Heard::Stay }, cx);
+            (show.heard)(Heard::closed(close), cx);
         }
     });
+}
+
+impl Heard {
+    /// What the shell hears of a close: the walk ends where it started, unless the user left the
+    /// app, which ends it as letting go of ⌃ does.
+    fn closed(close: Close) -> Self {
+        match close.why {
+            Why::WindowLeft => Heard::LetGo,
+            _ => Heard::Stay,
+        }
+    }
 }
 
 impl TabSwitcher {
@@ -350,7 +362,9 @@ impl TabSwitcher {
             .rounded(px(PLATE_RADIUS))
             .text_color(title)
             .when(selected, |line| line.bg(accent))
-            .when(hovered, |line| line.bg(palette.plate(HOVERED)))
+            .when(hovered, |line| {
+                line.bg(palette.on_float(Float::TabSwitcher, palette.plate(HOVERED)))
+            })
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
             .on_hover(cx.listener(move |switcher, hovered: &bool, _, cx| {
                 let was = switcher.hovered;
@@ -474,10 +488,8 @@ impl Render for TabSwitcher {
         let scrolled = -f32::from(self.scroll.offset().y);
         let below = count as f32 * ROW_HEIGHT - shown_rows as f32 * ROW_HEIGHT - scrolled;
         let fade = |top: bool| {
-            let (from, to) = (
-                Hsla::from(palette.overlay),
-                Hsla::from(palette.overlay).opacity(0.),
-            );
+            let panel = Hsla::from(Float::TabSwitcher.fill(palette.tone));
+            let (from, to) = (panel, panel.opacity(0.));
             let (start, end) = if top { (from, to) } else { (to, from) };
             div()
                 .absolute()
@@ -530,15 +542,16 @@ impl Render for TabSwitcher {
                     .on_action(cx.listener(|switcher, _: &Back, _, cx| {
                         switcher.heard(Heard::Step(false), cx)
                     }))
-                    .on_action(
-                        cx.listener(|switcher, _: &Stay, _, cx| switcher.heard(Heard::Stay, cx)),
-                    )
+                    .on_action(cx.listener(|switcher, _: &Stay, _, cx| {
+                        let escape = Close::new(Why::Escape, By::Keyboard);
+                        switcher.heard(Heard::closed(escape), cx)
+                    }))
                     .relative()
                     .w(px(WIDTH))
                     .h(px(height(count)))
                     .overflow_hidden()
                     .rounded(px(RADIUS))
-                    .bg(palette.overlay)
+                    .bg(Float::TabSwitcher.fill(palette.tone))
                     .font_weight(FontWeight::MEDIUM)
                     .text_size(px(text::BODY))
                     .child(list)

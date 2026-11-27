@@ -34,6 +34,15 @@ impl Client {
     /// The clients under Apps that connect.
     pub const APPS: [Client; 3] = [Client::ClaudeCode, Client::Codex, Client::Other];
 
+    /// The CLI that is this client, which Your assistant's row looks for.
+    pub fn cli(self) -> Option<super::runner::Cli> {
+        match self {
+            Client::ClaudeCode => Some(super::runner::Cli::Claude),
+            Client::Codex => Some(super::runner::Cli::Codex),
+            Client::Other | Client::Command => None,
+        }
+    }
+
     /// The id of its agent, which its Space and the core know it by.
     pub fn id(self) -> &'static str {
         match self {
@@ -53,8 +62,8 @@ impl Client {
         match self {
             Client::ClaudeCode => "Claude Code",
             Client::Codex => "Codex",
-            Client::Other => "MCP client",
-            Client::Command => "ilo CLI",
+            Client::Other => "Another app",
+            Client::Command => concat!("The ", env!("PRODUCT_NAME"), " command"),
         }
     }
 
@@ -65,6 +74,13 @@ impl Client {
             Client::Codex => "~/.codex/config.toml",
             Client::Other | Client::Command => "",
         }
+    }
+
+    /// Settings › Other apps' line for an app the user set up (S31, draft): what the product
+    /// wrote and where, the same with the switch on or off, since it says nothing of whether the
+    /// app is connected now.
+    pub fn set_up_line(self) -> String {
+        format!("Set up in {}", self.config())
     }
 }
 
@@ -104,10 +120,39 @@ pub trait Clients: Send + Sync {
     fn searches(&self, _folder: &Path) -> bool {
         true
     }
+    /// The command's Add writes its skill for each of `programs` (agents::skill), and says what
+    /// to keep. No default, so no test's stand-in can reach this computer's home (first run's
+    /// floor 9).
+    fn add_skills(
+        &self,
+        programs: &[Client],
+        kept: &[super::skill::Kept],
+    ) -> Vec<super::skill::Kept>;
+    /// The command's Remove takes away each kept skill still byte for byte ours.
+    fn remove_skills(&self, kept: &[super::skill::Kept]) -> Vec<(Client, super::skill::Removed)>;
+    /// Where each kept skill's file is, by the remover's walk, read only.
+    fn look_skills(&self, kept: &[super::skill::Kept]) -> Vec<super::skill::Place>;
+    /// The file a kept skill's reveal shows, made at the click.
+    fn skill_at(&self, kept: &super::skill::Kept) -> Option<PathBuf>;
     /// Whether a CLI that runs agent tasks is on this computer and signed in, which runs it.
     fn look_for_task_cli(&self, cli: super::runner::Cli) -> super::ready::Found {
         super::ready::look(cli)
     }
+    /// Starts `cli`'s own sign-in, as `found` runs it, which tells `heard` what it hears. No
+    /// default, so no test's stand-in can fall through to this computer's CLIs (#4100).
+    fn start_sign_in(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+        heard: futures::channel::mpsc::UnboundedSender<super::sign_in::Heard>,
+    ) -> std::io::Result<Box<dyn super::sign_in::Session>>;
+    /// Signs `cli` out as its own command does, everywhere it's used, or says why it couldn't, in
+    /// its words where `sign_in::said` keeps them. Blocks: runs the CLI.
+    fn sign_out(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+    ) -> Result<(), Option<String>>;
 }
 
 /// The configs in the user's home.
@@ -167,6 +212,37 @@ impl Clients for System {
         }
     }
 
+    /// Into the user's home, as HOME names it. A Flatpak's sandbox can't reach either maker's
+    /// folder, so there it writes none.
+    fn add_skills(
+        &self,
+        programs: &[Client],
+        kept: &[super::skill::Kept],
+    ) -> Vec<super::skill::Kept> {
+        match (super::skill::real_home(), super::bridge::flatpak_id()) {
+            (Some(home), None) => super::skill::add(&home, programs, kept),
+            _ => kept.to_vec(),
+        }
+    }
+
+    fn remove_skills(&self, kept: &[super::skill::Kept]) -> Vec<(Client, super::skill::Removed)> {
+        match super::skill::real_home() {
+            Some(home) => super::skill::remove_all(&home, kept),
+            None => Vec::new(),
+        }
+    }
+
+    fn look_skills(&self, kept: &[super::skill::Kept]) -> Vec<super::skill::Place> {
+        match super::skill::real_home() {
+            Some(home) => super::skill::look_all(&home, kept),
+            None => vec![super::skill::Place::Missing; kept.len()],
+        }
+    }
+
+    fn skill_at(&self, kept: &super::skill::Kept) -> Option<PathBuf> {
+        super::skill::at(&super::skill::real_home()?, kept.program, &kept.name)
+    }
+
     #[cfg(not(windows))]
     fn searches(&self, folder: &Path) -> bool {
         shell_path().is_some_and(|path| super::cli::searched(&path, folder))
@@ -178,6 +254,25 @@ impl Clients for System {
             Ok(install) => install.on_path(&super::cli::Registry),
             Err(_) => true,
         }
+    }
+
+    fn start_sign_in(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+        heard: futures::channel::mpsc::UnboundedSender<super::sign_in::Heard>,
+    ) -> std::io::Result<Box<dyn super::sign_in::Session>> {
+        let program = (found.program.as_deref()).ok_or(std::io::ErrorKind::NotFound)?;
+        super::sign_in::start(cli, program, found.path.as_deref(), heard)
+    }
+
+    fn sign_out(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+    ) -> Result<(), Option<String>> {
+        let program = found.program.as_deref().ok_or(None)?;
+        super::sign_in::sign_out(cli, program, found.path.as_deref())
     }
 }
 
@@ -206,6 +301,7 @@ fn command_install(entry: &Entry) -> Result<super::cli::Install, String> {
         file,
         linked: super::bridge::flatpak_id().is_none(),
         store: false,
+        old: super::cli::OLD_LINK.into(),
     })
 }
 
@@ -622,6 +718,16 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A set-up app's line says where it was set up and never that it's connected (S31).
+    #[test]
+    fn a_set_up_apps_line_says_where_not_connected() {
+        for client in [Client::ClaudeCode, Client::Codex] {
+            let line = client.set_up_line();
+            assert!(line.contains(client.config()), "{line}");
+            assert!(!line.to_lowercase().contains("connected"), "{line}");
+        }
+    }
 
     fn entry() -> Entry {
         Entry {

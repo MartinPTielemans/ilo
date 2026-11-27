@@ -12,10 +12,10 @@ use gpui::{
 use super::commands::{ShellHandle, bar_commands};
 use super::header::nav_places;
 use super::{
-    Command, Folders, NAV_SIZE, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
+    CONTROLS_PLATE, Command, Folders, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
-use crate::tokens::shell::library::{COLUMN_WIDTH, SECTION_WIDTH, SECTION_X};
+use crate::tokens::shell::library::{COLUMN_WIDTH, SEARCH_HEIGHT, SEARCH_TOP, SEARCH_X};
 
 const WIDTH: f32 = 1000.;
 
@@ -112,7 +112,7 @@ fn the_header_is_in_bs_order_on_the_right(_: &mut TestAppContext) {
         let left = nav_places(240., full_screen, false);
         let right = nav_places(240., full_screen, true);
         let sidebar = left[0].unwrap();
-        assert_eq!(right[0], Some(240. - sidebar - NAV_SIZE));
+        assert_eq!(right[0], Some(240. - sidebar - CONTROLS_PLATE));
         let navs = |places: [Option<f32>; 4]| places[1..].iter().flatten().copied().collect();
         let (left_navs, right_navs): (Vec<f32>, Vec<f32>) = (navs(left), navs(right));
         assert_eq!(left_navs.len(), right_navs.len());
@@ -120,7 +120,7 @@ fn the_header_is_in_bs_order_on_the_right(_: &mut TestAppContext) {
         assert!(right_navs.windows(2).all(|pair| pair[0] < pair[1]));
         // As far from the page: the last one's right from the column's right edge on the left,
         // the first one's left from its left edge on the right.
-        let to_page = 240. - (left_navs.last().unwrap() + NAV_SIZE);
+        let to_page = 240. - (left_navs.last().unwrap() + CONTROLS_PLATE);
         assert_eq!(right_navs[0], to_page);
     }
 }
@@ -193,12 +193,12 @@ fn on_the_right_a_return_after_an_overshoot_reveals(cx: &mut TestAppContext) {
     };
     shell.update(cx, |shell, _| shell.sidebar_hidden = true);
     to(WIDTH - 400., cx);
-    to(WIDTH - 4., cx);
+    to(WIDTH - 2., cx);
     shell.update(cx, |shell, cx| {
         shell.pointer_over(point(px(-1.), px(-1.)), cx);
         shell.pointer_left(cx)
     });
-    to(WIDTH - 3., cx);
+    to(WIDTH - 1., cx);
     cx.executor().advance_clock(REVEAL_WAIT * 2);
     cx.run_until_parked();
     assert!(
@@ -300,6 +300,42 @@ fn in_full_screen_the_side_moves_the_edge(cx: &mut TestAppContext) {
     );
 }
 
+/// The Library's search field is over the list on either side, never over the column of sections:
+/// a press on the column at the field's height leaves the keyboard where it was, and one just inside
+/// the list's edge gives it to the field.
+#[gpui::test]
+fn the_search_field_is_over_the_list_on_either_side(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.section = Section::Downloads;
+        shell.set_library(true, cx);
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    });
+    draw(&shell, cx);
+    let keys = |x: f32, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.blur(cx));
+        let at = point(px(x), px(SEARCH_TOP + SEARCH_HEIGHT / 2.));
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| shell.read(cx).library_search_keys(window, cx))
+    };
+    assert!(
+        !keys(COLUMN_WIDTH - 16., &shell, cx),
+        "a press on the column of sections went to the search field"
+    );
+    assert!(
+        keys(COLUMN_WIDTH + SEARCH_X + 16., &shell, cx),
+        "a press just inside the list's edge didn't reach the search field"
+    );
+    side(true, &shell, cx);
+    let list = shell.read_with(cx, |shell, _| shell.library_x());
+    assert!(
+        keys(list + SEARCH_X + 16., &shell, cx),
+        "on the right, a press just inside the list's edge, at {list}, didn't reach the search field"
+    );
+}
+
 /// Open on the right, the Library takes the sidebar's side, list then sections, so the sections
 /// stay at the window's edge: the card's edge meets the list's, the empty list's line is drawn in
 /// the list, and a right-click on Archived Tabs is heard where the column says it drew the button,
@@ -343,7 +379,7 @@ fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
         titles.iter().any(|(title, _)| title == "Clear Archive")
     };
-    let middle = SECTION_X + SECTION_WIDTH / 2.;
+    let middle = COLUMN_WIDTH / 2.;
     let right = archive(&shell, cx);
     assert_eq!(
         right.x,

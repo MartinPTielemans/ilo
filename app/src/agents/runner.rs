@@ -6,15 +6,20 @@
 //! Claude Code runs in print mode with stream-json both ways, so a reply is one more line on its
 //! stdin. Codex runs as `codex app-server`, which speaks newline JSON-RPC (see codex.rs).
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
+
+use super::kept::Keep;
+use super::wall::{Wall, WallRefused, leftovers};
 
 /// A CLI that runs tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -26,6 +31,14 @@ pub enum Cli {
 impl Cli {
     pub const ALL: [Cli; 2] = [Cli::Claude, Cli::Codex];
 
+    /// Whether its program takes another model for a thread's next message. Codex's app-server
+    /// does: turn/start's model overrides it "for this turn and subsequent turns" (its
+    /// generate-json-schema). Claude's --help gives --model for the session alone, and a running
+    /// session reads only messages, so a thread keeps the model it started on.
+    pub fn switches_model(self) -> bool {
+        matches!(self, Cli::Codex)
+    }
+
     pub fn id(self) -> &'static str {
         match self {
             Cli::Claude => "claude",
@@ -35,6 +48,16 @@ impl Cli {
 
     pub fn from_id(id: &str) -> Option<Cli> {
         Cli::ALL.into_iter().find(|cli| cli.id() == id)
+    }
+
+    /// The effort levels its own program takes when ilo starts it, under the names its help gives
+    /// them, in order; none where it takes no effort setting (#4140). Claude Code's `--effort`
+    /// lists these; Codex's help names no effort option.
+    pub fn efforts(self) -> &'static [&'static str] {
+        match self {
+            Cli::Claude => &["low", "medium", "high", "xhigh", "max"],
+            Cli::Codex => &[],
+        }
     }
 
     /// What the user calls it, in text only: agents have no maker's logo or colour.
@@ -62,22 +85,6 @@ impl Cli {
         }
     }
 
-    /// The command that signs the user in, which ilo never runs itself.
-    pub fn sign_in(self) -> &'static str {
-        match self {
-            Cli::Claude => "claude auth login",
-            Cli::Codex => "codex login",
-        }
-    }
-
-    /// The command that installs it.
-    pub fn install(self) -> &'static str {
-        match self {
-            Cli::Claude => "npm install -g @anthropic-ai/claude-code",
-            Cli::Codex => "npm install -g @openai/codex",
-        }
-    }
-
     /// The models its Model pop-up offers after its own default while the CLI hasn't listed its
     /// own: Claude's aliases, which every Claude Code takes, for one too old to answer initialize
     /// with its list (ready::claude_models).
@@ -99,7 +106,7 @@ pub struct Server {
 }
 
 /// The name the CLI knows the server by, which its tools' names carry.
-pub const SERVER: &str = "ilo";
+pub const SERVER: &str = env!("PRODUCT_NAME");
 
 /// What a task's CLI starts with.
 #[derive(Clone, Debug)]
@@ -116,10 +123,18 @@ pub struct Launch {
     pub server: Server,
     /// The model, or None for the CLI's default.
     pub model: Option<String>,
+    /// The effort level the user picked for the thread, one of `cli.efforts()`, or None for the
+    /// CLI's own.
+    pub effort: Option<String>,
     /// What it's told about working in the browser, after its own system prompt.
     pub instructions: String,
     /// The tools it may call, as the server lists them.
     pub tools: Vec<String>,
+    /// The wall it starts inside (#4101), or None for a start that asked for none.
+    pub wall: Option<Arc<Wall>>,
+    /// What Codex's commands may read under its own sandbox (codex.rs): the folder the user
+    /// granted and ilo's copies of the files attached, which a task with pages alone has none of.
+    pub reads: Vec<PathBuf>,
 }
 
 /// What a task's CLI says, as the reader thread hands it to the UI thread.
@@ -138,6 +153,16 @@ pub enum Out {
     Ended(Option<Failure>),
     /// The process has gone: its output closed. What it last said on stderr.
     Gone(String),
+    /// A start inside a wall with files: the assistant is inside it, or nothing started and why.
+    /// Before anything else of the run's, and Gone follows a no.
+    Walled(Result<(), WallRefused>),
+    /// Claude Code started with a tool or a server that isn't the browser's, or called one: ilo
+    /// ended the run there, before anything else of it was handed on, and Gone follows. Why, in
+    /// the dev log's words alone.
+    Refused(String),
+    /// What the sweep after a walled run's end found: everything its assistant started was
+    /// ended, or not. The run has ended, so this is the last of it and never its task's next.
+    Swept(Result<leftovers::Swept, leftovers::SweepFailed>),
 }
 
 /// Why a turn or a run ended badly.
@@ -147,6 +172,11 @@ pub enum Failure {
     /// says.
     Limit(Option<u64>),
     SignedOut,
+    /// The assistant's program isn't on this computer, so no run started.
+    NotInstalled,
+    /// Its program is older than the browser runs, or didn't take the browser's limits, so no
+    /// thread started (AP27).
+    NeedsUpdate,
     /// The CLI said why, in its words.
     Other(String),
 }
@@ -154,29 +184,60 @@ pub enum Failure {
 /// A line of output, for the task it's from.
 pub struct Event {
     pub agent: String,
+    /// The run it's from, by its process. A task ilo started again hears its run under way
+    /// alone, so what the one before still had to say isn't taken for it.
+    pub run: u32,
     pub out: Out,
 }
 
 /// A task's running CLI.
 pub struct Process {
     cli: Cli,
-    child: Option<Child>,
+    /// Under a lock its output's thread takes too, which ends a run whose start ilo refuses: it's
+    /// taken from here only to be reaped, so while it's here its id is still its own.
+    child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     id: u32,
     /// Codex's thread and turn, once it has them.
     codex: Option<Arc<super::codex::State>>,
+    /// Whether it's still the wall's launcher, which reads nothing it's sent.
+    rising: Arc<AtomicBool>,
+    /// The wall of a walled start, whose group and leftovers its end ends.
+    walled: Option<Arc<Wall>>,
+    /// Where a walled start's sweep answers: its task, on the channel its lines go on.
+    answer: Option<(String, UnboundedSender<Event>)>,
 }
 
 impl Process {
-    /// Starts the CLI, which reads `first` as the user's first message.
+    /// Starts the CLI, which reads `first` as the user's first message, on a run that keeps
+    /// nothing of its conversation.
     pub fn start(
         launch: &Launch,
         agent: &str,
         first: &str,
         events: UnboundedSender<Event>,
     ) -> std::io::Result<Process> {
+        Self::start_kept(launch, &Keep::Nothing, agent, first, events)
+    }
+
+    /// Starts the CLI on a run that keeps what `keep` says (kept.rs decides), which reads `first`
+    /// as the user's first message, or as their next in a conversation it goes on with.
+    pub fn start_kept(
+        launch: &Launch,
+        keep: &Keep,
+        agent: &str,
+        first: &str,
+        events: UnboundedSender<Event>,
+    ) -> std::io::Result<Process> {
         std::fs::create_dir_all(&launch.dir)?;
-        let mut command = crate::child::command(&launch.program);
+        // A kept run's folder isn't beside its config, so the config's own is made too.
+        if let Some(folder) = launch.config.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        let mut command = match &launch.wall {
+            Some(wall) => wall.command(&launch.program),
+            None => crate::child::command(&launch.program),
+        };
         match launch.cli {
             Cli::Claude => {
                 super::clients::write_private(
@@ -187,7 +248,7 @@ impl Process {
                     &instructions_file(launch),
                     launch.instructions.as_bytes(),
                 )?;
-                command.args(claude_args(launch));
+                command.args(super::kept::claude_args(claude_args(launch), keep));
             }
             Cli::Codex => _ = command.arg("app-server"),
         }
@@ -196,25 +257,29 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(path) = &launch.path {
-            command.env("PATH", path);
-        }
-        // The token reaches the bridge through Codex's environment, and through Claude's config.
-        if launch.cli == Cli::Codex {
-            command.env(super::bridge::TOKEN, &launch.server.token);
-        }
-        let mut child = command.spawn()?;
+        environment(&mut command, launch);
+        let (mut child, rising) = match &launch.wall {
+            Some(wall) => wall.start(&mut command)?,
+            None => (command.spawn()?, None),
+        };
+        let walled = rising.is_some();
+        let wall = launch.wall.clone().filter(|_| walled);
+        let still_rising = Arc::new(AtomicBool::new(walled));
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let stdout = child.stdout.take().expect("piped");
         let stderr = child.stderr.take().expect("piped");
         let codex = (launch.cli == Cli::Codex).then(|| Arc::new(super::codex::State::default()));
         let id = child.id();
+        let child = Arc::new(Mutex::new(Some(child)));
         let process = Process {
             cli: launch.cli,
-            child: Some(child),
+            child: child.clone(),
             id,
             stdin: stdin.clone(),
             codex: codex.clone(),
+            rising: still_rising.clone(),
+            walled: wall.clone(),
+            answer: walled.then(|| (agent.to_string(), events.clone())),
         };
         let said = Arc::new(Mutex::new(String::new()));
         let err = std::thread::Builder::new()
@@ -225,10 +290,27 @@ impl Process {
             })?;
         let agent = agent.to_string();
         let codex_launch = launch.clone();
+        let mut turn = Turn::of(launch);
         std::thread::Builder::new()
             .name("task-output".into())
             .spawn(move || {
-                let mut turn = Turn::default();
+                // The one wait for the wall, here, as this thread may wait and the UI's may not.
+                if let Some(rising) = rising {
+                    let risen = rising.risen();
+                    // The control, before the program is taken to be inside: the system's word.
+                    let inside = |()| wall.as_ref().map_or(Ok(()), |wall| wall.control(id));
+                    let out = Out::Walled(risen.and_then(inside));
+                    still_rising.store(false, Ordering::Release);
+                    let agent = agent.clone();
+                    let event = Event {
+                        agent,
+                        run: id,
+                        out,
+                    };
+                    if events.unbounded_send(event).is_err() {
+                        return;
+                    }
+                }
                 for line in BufReader::new(stdout).lines() {
                     let Ok(line) = line else { break };
                     let Ok(message) = serde_json::from_str::<Value>(&line) else {
@@ -238,10 +320,15 @@ impl Process {
                         Some(state) => super::codex::read(&message, state, &stdin, &codex_launch),
                         None => claude_read(&message, &mut turn),
                     };
+                    // A start ilo refuses ends before anything else of it is handed on.
+                    if outs.iter().any(|out| matches!(out, Out::Refused(_))) {
+                        end(&child, walled, id);
+                    }
                     for out in outs {
                         if events
                             .unbounded_send(Event {
                                 agent: agent.clone(),
+                                run: id,
                                 out,
                             })
                             .is_err()
@@ -254,18 +341,30 @@ impl Process {
                 let said = std::mem::take(&mut *said.lock().unwrap());
                 _ = events.unbounded_send(Event {
                     agent,
+                    run: id,
                     out: Out::Gone(said),
                 });
             })?;
         let mut process = process;
-        match launch.cli {
-            Cli::Claude => process.say(first)?,
+        let began = match launch.cli {
+            Cli::Claude => process.say(first),
             Cli::Codex => {
                 let state = process.codex.as_ref().expect("Codex's");
-                super::codex::begin(&process.stdin, state, first)?
+                super::codex::begin(&process.stdin, state, first)
             }
+        };
+        // A launcher that ended has closed its input, and Walled says why: one account of it.
+        if !walled {
+            began?;
         }
         Ok(process)
+    }
+
+    /// The model its next turns run on, by id, where its program takes one per turn.
+    pub fn set_model(&mut self, model: &str) {
+        if let (Cli::Codex, Some(state)) = (self.cli, &self.codex) {
+            super::codex::set_model(state, model);
+        }
     }
 
     /// Sends the user's message, which the agent reads once its turn under way ends.
@@ -282,8 +381,30 @@ impl Process {
         }
     }
 
+    /// Which run it is, as each of its lines says.
+    pub fn run(&self) -> u32 {
+        self.id
+    }
+
+    /// Whether it started inside a wall, whose sweep answers after its end.
+    pub fn walled(&self) -> bool {
+        self.answer.is_some()
+    }
+
+    /// The name of its wall's place, for a walled start with one.
+    pub fn place(&self) -> Option<String> {
+        self.walled.as_deref().and_then(Wall::place_name)
+    }
+
     /// Stops the turn under way at once, leaving the process to take the next message.
     pub fn interrupt(&mut self) {
+        // Still the wall's launcher, which reads no line: Stop ends it, and the wait for it.
+        if self.rising.load(Ordering::Acquire) {
+            if let Some(child) = self.child.lock().unwrap().as_mut() {
+                _ = child.kill();
+            }
+            return;
+        }
         let sent = match (self.cli, &self.codex) {
             (Cli::Codex, Some(state)) => super::codex::interrupt(&self.stdin, state),
             _ => write_line(
@@ -306,12 +427,48 @@ impl Drop for Process {
     /// under way. A thread waits for it, so it leaves no zombie behind.
     fn drop(&mut self) {
         self.stdin.lock().unwrap().take();
-        if let Some(mut child) = self.child.take() {
+        let child = self.child.lock().unwrap().take();
+        if let Some(mut child) = child {
+            // A walled start's whole group first, while its leader isn't reaped and so no other
+            // process can have the group's id. What left the group is the sweep's, after.
+            let walled = self.walled.take();
+            if walled.is_some() {
+                leftovers::System::end_group(&leftovers::Os, self.id);
+            }
             _ = child.kill();
+            let (run, answer) = (self.id, self.answer.take());
             _ = std::thread::Builder::new()
                 .name("task-reap".into())
-                .spawn(move || child.wait());
+                .spawn(move || {
+                    _ = child.wait();
+                    reaped(walled.as_deref(), run, answer);
+                });
         }
+    }
+}
+
+/// Ends a run's process where it stands, while it's still held: a walled start's whole group
+/// first, as Drop ends it. Drop still reaps it.
+fn end(child: &Mutex<Option<Child>>, walled: bool, id: u32) {
+    let mut child = child.lock().unwrap();
+    let Some(child) = child.as_mut() else {
+        return;
+    };
+    if walled {
+        leftovers::System::end_group(&leftovers::Os, id);
+    }
+    _ = child.kill();
+}
+
+/// After a run's end and its reap: the sweep of what its wall still holds, answered to its task.
+/// A run with no wall has nothing to sweep and says nothing.
+fn reaped(walled: Option<&Wall>, run: u32, answer: Option<(String, UnboundedSender<Event>)>) {
+    let Some(swept) = walled.and_then(Wall::sweep_after) else {
+        return;
+    };
+    if let Some((agent, events)) = answer {
+        let out = Out::Swept(swept);
+        _ = events.unbounded_send(Event { agent, run, out });
     }
 }
 
@@ -350,6 +507,83 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
     }
 }
 
+/// What the CLI's process is started with beyond the browser's own environment, each set on the
+/// process, so ilo's value is the one it reads.
+fn environment(command: &mut std::process::Command, launch: &Launch) {
+    // Inside a wall the listener is the only proxy anything reads: nothing exempt from it, and
+    // no lower-case name of the browser's own naming another, which curl reads first. Cleared
+    // before the start's own are set, since on Windows a name in any case is the same variable.
+    if launch.wall.is_some() {
+        for name in PROXY_CLEARED {
+            command.env_remove(name);
+        }
+    }
+    command.envs(sets(launch));
+}
+
+/// Every variable a start of `launch` sets, with its value: the one account of them, which
+/// `environment` puts on the process. Each name is in `kept` for its CLI.
+pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
+    let mut sets: Vec<(&'static str, OsString)> = Vec::new();
+    if let Some(path) = &launch.path {
+        sets.push((PATH, path.into()));
+    }
+    // The token reaches the bridge through Codex's environment, and through Claude's config.
+    if launch.cli == Cli::Codex {
+        sets.push((super::bridge::TOKEN, (&launch.server.token).into()));
+    }
+    // Inside a wall Claude Code keeps nothing of its own in the user's folders, which the wall
+    // denies it: no history of what it was asked, no memory, no copies of the files it changes,
+    // no update of itself and no report of its use. Its temporary files go in the wall's folder
+    // for them.
+    if let (Cli::Claude, Some(wall)) = (launch.cli, &launch.wall) {
+        sets.extend(CLAUDE_WALLED.map(|name| (name, "1".into())));
+        if let Some(tmp) = wall.tmp() {
+            sets.push((CLAUDE_TMP, tmp.into()));
+        }
+    }
+    // Inside a wall either assistant reaches its own service through the wall's listener, the
+    // one port its network may reach (#4101).
+    if let Some(port) = (launch.wall.as_ref()).and_then(|wall| wall.port()) {
+        let proxy = format!("http://127.0.0.1:{port}");
+        sets.extend(PROXY.map(|name| (name, proxy.as_str().into())));
+    }
+    sets
+}
+
+const PATH: &str = "PATH";
+/// What a walled Claude Code is started with, each on.
+pub(crate) const CLAUDE_WALLED: [&str; 5] = [
+    "CLAUDE_CODE_SKIP_PROMPT_HISTORY",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",
+    "DISABLE_UPDATES",
+    "DISABLE_TELEMETRY",
+];
+/// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
+const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+/// What a walled start names its listener with, for either assistant.
+const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+/// What a walled start clears of the browser's own environment.
+const PROXY_CLEARED: [&str; 5] = [
+    "NO_PROXY",
+    "no_proxy",
+    "https_proxy",
+    "http_proxy",
+    "all_proxy",
+];
+
+/// Every name a start of `cli` may set on its process, walled or not: what a wall's launcher is
+/// told to keep of the runner's, beside the wall's own names. A wall drops every name it isn't
+/// told (wall/launch.rs), so one set and not listed here would never arrive, and nothing would
+/// say so: `sets` answers from these alone, which a test holds.
+pub fn kept(cli: Cli) -> Vec<&'static str> {
+    match cli {
+        Cli::Claude => [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &PROXY[..]].concat(),
+        Cli::Codex => [&[PATH, super::bridge::TOKEN][..], &PROXY[..]].concat(),
+    }
+}
+
 /// Where Claude reads what it's told about working in the browser, beside its MCP config: a file,
 /// as the text has paragraphs, and Windows starts no npm claude.cmd with a line break in an
 /// argument (#1676).
@@ -378,11 +612,7 @@ pub fn claude_config(server: &Server) -> String {
 /// init message then listed that tool alone, no slash commands or skills, and only its built-in
 /// plugins and agent types, which no tool could reach.
 pub fn claude_args(launch: &Launch) -> Vec<String> {
-    let allowed: Vec<String> = launch
-        .tools
-        .iter()
-        .map(|tool| format!("mcp__{SERVER}__{tool}"))
-        .collect();
+    let allowed: Vec<String> = Turn::of(launch).tools;
     let mut args: Vec<String> = [
         // Print mode, reading the user's messages as stream-json, so a reply is one more line.
         "-p",
@@ -393,15 +623,18 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--verbose",
         // Its text as it writes it, which the conversation shows as it comes.
         "--include-partial-messages",
-        // None of its own tools: no shell, files, web fetch or search.
+        // None of its own tools: no shell, files, web search, fetch or helper. It searches with
+        // the browser's own tool.
         "--tools",
         "",
-        // The browser's server alone, none of the user's.
-        "--strict-mcp-config",
-        "--mcp-config",
     ]
     .map(String::from)
     .into();
+    args.extend([
+        // The browser's server alone, none of the user's.
+        "--strict-mcp-config".into(),
+        "--mcp-config".into(),
+    ]);
     args.push(launch.config.to_string_lossy().into_owned());
     args.extend(
         [
@@ -425,16 +658,31 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     if let Some(model) = launch.model.as_ref().filter(|model| !model.is_empty()) {
         args.extend(["--model".into(), model.clone()]);
     }
+    if let Some(effort) = (launch.effort.as_deref()).filter(|e| Cli::Claude.efforts().contains(e)) {
+        args.extend(["--effort".into(), effort.to_string()]);
+    }
     args.extend([
         "--append-system-prompt-file".into(),
         instructions_file(launch).to_string_lossy().into_owned(),
     ]);
+    // Inside ilo's wall its own sandbox is off: the wall is what holds it. No settings file is
+    // read, so this is its only setting.
+    if launch.wall.is_some() {
+        args.extend(["--settings".into(), WALLED_SETTINGS.into()]);
+    }
     args
 }
 
-/// What a turn of Claude's has shown so far that its result needs: a limit it hit.
+/// A walled Claude Code's settings.
+const WALLED_SETTINGS: &str = r#"{"sandbox":{"enabled":false}}"#;
+
+/// What a run of Claude's has shown so far that its result needs: a limit it hit. And what it
+/// may call, by the names its init line and its calls give them.
 #[derive(Default)]
 pub struct Turn {
+    tools: Vec<String>,
+    /// ilo refused the run, so nothing more of it is read.
+    refused: bool,
     limit: Option<Option<u64>>,
     /// When the last whole line came, which a thought took since.
     heard: Option<Instant>,
@@ -442,12 +690,79 @@ pub struct Turn {
     writing: String,
 }
 
-/// What a line of Claude's stream-json output says to the user, if anything.
+impl Turn {
+    /// A run of `launch`, which may call the browser's tools it lists and nothing else.
+    pub fn of(launch: &Launch) -> Turn {
+        let tools = (launch.tools.iter())
+            .map(|tool| format!("mcp__{SERVER}__{tool}"))
+            .collect();
+        Turn {
+            tools,
+            ..Default::default()
+        }
+    }
+
+    /// Why ilo ends a run whose init line says it has `message`'s tools and servers, if it does:
+    /// anything but the browser's server and its tools, or a list it can't read. Its agent types
+    /// aren't read, as with no tool of Claude's own nothing reaches them.
+    fn refuses_init(&self, message: &Value) -> Option<String> {
+        let listed = |name| message.get(name).and_then(Value::as_array);
+        let (Some(tools), Some(servers)) = (listed("tools"), listed("mcp_servers")) else {
+            return Some("its init line lists no tools or servers".into());
+        };
+        let server = |each: &Value| each.get("name").and_then(Value::as_str) == Some(SERVER);
+        if servers.len() != 1 || !servers.iter().all(server) {
+            let count = servers.len();
+            return Some(format!(
+                "it started with {count} servers, not the browser's alone"
+            ));
+        }
+        if tools.is_empty() {
+            return Some("it started with no tools".into());
+        }
+        let ours = |name: &str| self.tools.iter().any(|tool| tool == name);
+        match tools.iter().find(|tool| !tool.as_str().is_some_and(ours)) {
+            Some(tool) => Some(format!("it started with the tool {tool}")),
+            None => None,
+        }
+    }
+
+    /// Why ilo ends a run that calls `block`'s tool, if it does: one not the browser's, which
+    /// its init line didn't list.
+    fn refuses_call(&self, block: &Value) -> Option<String> {
+        let name = block
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let ours = self.tools.iter().any(|tool| tool == name);
+        (!ours).then(|| format!("it called the tool {name:?}"))
+    }
+
+    /// Ends what's read of the run, for `why`.
+    fn refuse(&mut self, why: String) -> Vec<Out> {
+        self.refused = true;
+        vec![Out::Refused(why)]
+    }
+}
+
+/// What a line of Claude's stream-json output says to the user, if anything. A run whose init
+/// line lists a tool or a server that isn't the browser's is refused there, before its first
+/// answer, and so is one that calls such a tool all the same; nothing after says anything.
 pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
+    if turn.refused {
+        return Vec::new();
+    }
     let kind = message
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let init = message.get("subtype").and_then(Value::as_str) == Some("init");
+    if kind == "system" && init {
+        return match turn.refuses_init(message) {
+            Some(why) => turn.refuse(why),
+            None => Vec::new(),
+        };
+    }
     if kind == "stream_event" {
         return claude_piece(message.get("event").unwrap_or(&Value::Null), turn);
     }
@@ -462,6 +777,14 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
             let content = message
                 .pointer("/message/content")
                 .and_then(Value::as_array);
+            let call =
+                |block: &&Value| block.get("type").and_then(Value::as_str) == Some("tool_use");
+            let refused = (content.into_iter().flatten())
+                .filter(call)
+                .find_map(|block| turn.refuses_call(block));
+            if let Some(why) = refused {
+                return turn.refuse(why);
+            }
             (content.into_iter().flatten())
                 .filter_map(|block| {
                     let text = |name| block.get(name).and_then(Value::as_str).map(str::trim);
@@ -525,7 +848,15 @@ fn claude_piece(event: &Value, turn: &mut Turn) -> Vec<Out> {
         }
         "content_block_start" => match event.pointer("/content_block/type").and_then(Value::as_str)
         {
-            Some("tool_use") => vec![Out::Calling],
+            // A call of a tool not the browser's is refused as it starts, before its message
+            // comes whole.
+            Some("tool_use") => {
+                let block = event.get("content_block").unwrap_or(&Value::Null);
+                match turn.refuses_call(block) {
+                    Some(why) => turn.refuse(why),
+                    None => vec![Out::Calling],
+                }
+            }
             // Each text block comes whole as a message of its own, so the next starts afresh.
             Some("text") => {
                 turn.writing.clear();

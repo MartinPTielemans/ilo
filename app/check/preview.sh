@@ -369,20 +369,20 @@ for line in sys.stdin:
   done < "$out/preview-corners-$1.txt"
 }
 
-# Its look in a light and a dark Space theme: the theme picker's first swatch, then the sun, and
-# later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
-peek_look() { # <light|dark> <the appearance button's x> [swatch]
+# Its look in a light and a dark Space theme: the theme panel's first palette, then Light, and
+# later Dark, as cards.sh and little.sh pick them.
+peek_look() { # <light|dark> [palette]
   post rightclick 100 112
   expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors")" \
     "the Space's menu didn't offer its theme"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-  if [ -n "${3:-}" ]; then
-    send clickkey "$(swatch_x 0)" $swatch_y
-    expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
+  if [ -n "${2:-}" ]; then
+    send clickkey $(panel_at palette 1)
+    expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
   fi
-  send clickkey "$2" 49
+  send clickkey $(panel_at look "$1")
   expect "^browser: themed space [0-9]* .*appearance=$1" "the Space's theme didn't turn $1"
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
@@ -392,8 +392,8 @@ peek_look() { # <light|dark> <the appearance button's x> [swatch]
   send key escape
   expect "^browser: tab $p closed\$" "Esc didn't close the preview in a $1 Space"
 }
-peek_look light 191.3 swatch
-peek_look dark 231.7
+peek_look light palette
+peek_look dark
 
 # Resting on the keep button names it and its key under it, in the tooltip's window, which shows
 # over the preview's, so it lies over the card's page; the pointer leaving ends it.
@@ -448,7 +448,7 @@ none_since "^browser: title $a pressed" || fail "the click on the dim reached th
 open_preview "for Settings"
 # The preview's page takes no window's keys but its own, so Settings comes from the menu.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show Settings over the preview"
+expect '^browser: settings shown Overview$' "Settings… didn't show Settings over the preview"
 in_order "after Settings took the keyboard" '^browser: link preview released$' \
   '^browser: link preview closing (dismissed)$' "^browser: tab $p closed\$"
 send key w cmd
@@ -512,7 +512,7 @@ expect "^browser: tab $p closed\$" "Esc didn't close the preview ⇧⌘T reopene
 still_home "after reopening the preview"
 
 # A favorite's links open it too: the pinned tab's copy, which Duplicate Tab in its menu puts at the
-# top of Today, under the pinned row, the divider and "+ New Tab", dragged onto the Space's name.
+# top of Today, under the pinned row, the gap over Today and "+ New Tab", dragged onto the Space's name.
 away
 post rightclick $(home_row)
 expect "^browser: menu shown $(cased '.*Duplicate Tab')" "a right-click on the pinned row didn't show its menu"
@@ -522,7 +522,7 @@ expect "^browser: today [1-9][0-9]* $kept\$" "Duplicate Tab didn't put a copy at
 b=$(today | cut -d' ' -f1)
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" "Duplicate Tab didn't show the copy"
 expect "^browser: title $b ready\$" "the copy of the test page didn't draw"
-send press 100 $((90 + 44 + 41 + 15 + 41 + 20))
+send press 100 $((86 + 42 + 34 + 6 + 34 + 17))
 send dragto 100 200
 send dragto 114 112
 expect '^browser: drag shape tile$' "the copy's row dragged onto the Space's name didn't turn into a tile"
@@ -559,17 +559,17 @@ send click $(home_row)
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the pinned row didn't show its tab"
 link_to site
 
-# With the switch in Settings › Features off, the link goes in the pinned tab.
+# With the switch in Settings › General off, the link goes in the pinned tab.
 send click $page_point
 expect "^browser: title $a pressed [0-9]*\$" "a click on the test page's lower part didn't reach it"
 send key , cmd
-expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
+settings_on_general "⌘, didn't show Settings"
 # Settings takes no click until it has drawn, nor a tab's rows until the tab has (#1101, #1133).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(settings_at "toolbar Features")
-expect '^browser: settings tab Features$' "a click on Features didn't show its section"
-settings_drew Features
-send clickkey $(settings_at "switch link previews")
+# Peek is under General's own rows: in_sight scrolls it up, from this show's frame.
+in_sight "switch link previews" '^browser: settings drew General$' ||
+  fail "Settings didn't draw the link previews' switch"
+send clickkey $at
 expect '^browser: link previews off$' "a click on the link previews switch didn't turn them off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -616,9 +616,11 @@ send key 1 ctrl
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first Space again"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the first Space didn't show the pinned tab again"
 send key , cmd
-expect '^browser: settings shown Features$' "⌘, didn't show Settings on its Features section"
-expect '^browser: settings drew Features$' "Settings didn't draw Features"
-send clickkey $(settings_at "switch link previews")
+expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+expect '^browser: settings drew General$' "Settings didn't draw General"
+in_sight "switch link previews" '^browser: settings drew General$' ||
+  fail "Settings didn't draw the link previews' switch"
+send clickkey $at
 expect '^browser: link previews on$' "a click on the link previews switch didn't turn them on"
 send clickkey $(settings_at "toolbar Links")
 expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
@@ -630,7 +632,7 @@ expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the new ru
 send type preview-target
 post clickkey $(settings_at "link space 1")
 front=$(cased "The Space in Front")
-expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+expect "^browser: menu shown $front (checked), [^,]*, work, Little Window\$" \
   "the rule's Space pop-up didn't list the Space in front, the user's Spaces and Little ilo"
 send choose work
 expect '^browser: link rules drawn URL contains "meet.google.com" → [^,]*, URL contains "preview-target" → work; ' \

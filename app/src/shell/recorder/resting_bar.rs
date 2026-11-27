@@ -1,0 +1,192 @@
+//! The core, as the resting bar of a window with no page sees it (#4140): what it was asked, in
+//! order, which the tests read to see what reached the core and when.
+
+use std::{cell::RefCell, rc::Rc};
+
+use gpui::{App, SharedString};
+
+use crate::command_bar::{self, TaskAgent, TaskAgents};
+use crate::elevation::Level;
+use crate::shell;
+use crate::tooltip::{Anchor, Tip};
+
+/// A resting bar's host: Claude is ready and a search goes to a search, and each call is a line
+/// in `asked`.
+pub(in crate::shell) struct RestingBar {
+    pub(in crate::shell) asked: Rc<RefCell<Vec<String>>>,
+    /// A new profile's: no agent learned yet, as before the browser has looked for one.
+    pub(in crate::shell) unlearned: Rc<std::cell::Cell<bool>>,
+    /// Over a private window, which starts no thread.
+    pub(in crate::shell) private: Rc<std::cell::Cell<bool>>,
+    /// The system can wall a thread in with the user's files.
+    pub(in crate::shell) files: Rc<std::cell::Cell<bool>>,
+}
+
+impl RestingBar {
+    fn ask(&self, call: String) {
+        self.asked.borrow_mut().push(call);
+    }
+}
+
+impl command_bar::Host for RestingBar {
+    fn suggest(&self, _: Option<&str>, text: &str, _: bool) {
+        self.ask(format!("suggest {text}"));
+    }
+    fn remove_suggestion(&self, url: &str, _: &mut App) {
+        self.ask(format!("remove suggestion {url}"));
+    }
+    fn step_removal(&self, _: bool, _: &mut App) -> bool {
+        false
+    }
+    fn typed_url(&self, text: &str) -> Option<String> {
+        text.contains('.').then(|| format!("https://{text}/"))
+    }
+    fn search_url(&self, _: Option<&str>, text: &str) -> Option<String> {
+        Some(format!("https://search.example/?q={text}"))
+    }
+    fn page_favicon(&self, url: &str) {
+        self.ask(format!("favicon {url}"));
+    }
+    fn open_tab(&self, url: &str, _: &str, behind: bool) {
+        self.ask(format!("open tab {url} behind {behind}"));
+    }
+    fn open_window(&self, url: &str, _: &str, _: &mut App) {
+        self.ask(format!("open window {url}"));
+    }
+    fn navigate(&self, tab: u64, url: &str, _: &str) {
+        self.ask(format!("navigate {tab} {url}"));
+    }
+    fn reload(&self, tab: u64) {
+        self.ask(format!("reload {tab}"));
+    }
+    fn select(&self, tab: u64) {
+        self.ask(format!("select {tab}"));
+    }
+    fn tab_window(&self, _: u64) -> Option<u64> {
+        None
+    }
+    fn activate(&self, window: u64, tab: u64, _: &mut App) {
+        self.ask(format!("activate {window} {tab}"));
+    }
+    fn split(&self, tab: u64, with: u64, _: &mut App) {
+        self.ask(format!("split {tab} {with}"));
+    }
+    fn open_split(&self, url: &str, _: &str, with: u64, _: &mut App) {
+        self.ask(format!("open split {url} {with}"));
+    }
+    fn copy(&self, text: &str, _: &mut App) {
+        self.ask(format!("copy {text}"));
+    }
+    fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32, _: Level) {
+        self.ask("show".into());
+    }
+    fn set_height(&self, _: f32) {
+        self.ask("set height".into());
+    }
+    fn hide(&self) {
+        self.ask("hide".into());
+    }
+    fn focus_page(&self) {
+        self.ask("focus page".into());
+    }
+    fn agents_page(&self, _: &App) -> bool {
+        false
+    }
+    fn dismiss(&self) {
+        self.ask("dismiss".into());
+    }
+    fn take_keyboard(&self) {
+        self.ask("take keyboard".into());
+    }
+    fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
+        shell::bar_commands(text, cx)
+    }
+    fn task_agents(&self, _: &App) -> Option<TaskAgents> {
+        self.ask("task agents".into());
+        if self.unlearned.get() {
+            return Some(TaskAgents {
+                agents: Vec::new(),
+                known: false,
+                ..TaskAgents::default()
+            });
+        }
+        let claude = TaskAgent {
+            id: "claude".into(),
+            name: "Claude".into(),
+            glyph: "icons/terminal.svg",
+            model: Some("Opus".into()),
+            model_id: "opus".into(),
+            default_row: "Claude Code's default".into(),
+            default_model: Some("Sonnet".into()),
+            models: [("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .to_vec(),
+            resets: None,
+        };
+        Some(TaskAgents {
+            agents: vec![claude],
+            known: true,
+            ..Default::default()
+        })
+    }
+    fn over_private(&self) -> bool {
+        self.private.get()
+    }
+    fn look_for_agents(&self, _: &mut App) {
+        self.ask("look for agents".into());
+    }
+    fn asking(&self, shown: bool, _: &mut App) {
+        self.ask(format!("asking {shown}"));
+    }
+    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
+        None
+    }
+    fn run_task(
+        &self,
+        agent: &str,
+        text: &str,
+        _: Option<(SharedString, SharedString)>,
+        _: crate::agents::tier::Tier,
+        _: Option<String>,
+        _: Option<&'static str>,
+        _: crate::agents::files::Picked,
+        _: &mut App,
+    ) {
+        self.ask(format!("run task {agent} {text}"));
+    }
+    fn run_task_at_rest(
+        &self,
+        agent: &str,
+        text: &str,
+        tier: crate::agents::tier::Tier,
+        model: Option<String>,
+        effort: Option<&'static str>,
+        files: crate::agents::files::Picked,
+        _: &mut App,
+    ) {
+        let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
+        let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
+        // How many files and whether a folder, as the start is given them.
+        let files = match (files.files.len(), files.folder.is_some()) {
+            (0, false) => String::new(),
+            (count, folder) => format!(" files {count} folder {folder}"),
+        };
+        self.ask(format!(
+            "run task at rest {agent} {text} at {}{model}{effort}{files}",
+            tier.id()
+        ));
+    }
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
+    }
+    fn set_up_agents(&self, _: &mut App) {
+        self.ask("set up agents".into());
+    }
+    fn tooltip(&self, _: Option<(Tip, Anchor)>, _: &mut App) {}
+    fn archived(&self, _: &str, _: &App) -> Option<(u64, f64)> {
+        None
+    }
+    fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
+}

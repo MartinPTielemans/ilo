@@ -554,7 +554,7 @@ close_find_bar() {
 }
 if find_keys_refused; then
   echo "skip: escape and typing in the find bar, after ⌘F with the UI focused, a second ⌘F and" \
-    "⌘F with Prefer $app_name, known under #2904: on sway's Xwayland before wlroots 0.19" \
+    "⌘F with Prefer $product, known under #2904: on sway's Xwayland before wlroots 0.19" \
     "($(sway --version)) the find bar can't keep the X focus"
   send key f cmd
   expect '^browser: find bar drew ' "⌘F with the UI focused didn't open the find bar"
@@ -726,7 +726,7 @@ expect '^browser: page zoom 100% (default)$' "↑ and Return didn't choose the d
 send key escape
 expect '^browser: settings search cleared$' "⎋ didn't empty the search"
 # The command bar finds settings too (#1636), by what Settings' search reads: "peek" in ⌘T lists
-# Peek — Settings, and ↩ on it opens Settings › Features at the row, which flashes once.
+# Peek — Settings, and ↩ on it opens Settings › General at the row, which flashes once.
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send key t cmd
@@ -740,9 +740,9 @@ done
 logged '^browser: command bar selected Peek — Settings$' || fail "↓ didn't reach Peek — Settings"
 ../tools/window-screenshot.sh "$pid" "$out/command-bar-setting.png" || fail "no window to capture"
 send key return
-expect '^browser: command bar shows setting Features › Peek$' "↩ on Peek — Settings didn't open it"
-expect '^browser: settings found Features › Peek$' "Settings didn't show Features at Peek"
-settings_drew Features
+expect '^browser: command bar shows setting General › Peek$' "↩ on Peek — Settings didn't open it"
+expect '^browser: settings found General › Peek$' "Settings didn't show General at Peek"
+settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings-from-bar.png" || fail "no window to capture"
 grep -q '^browser: settings index [0-9]* rows in ' "$log" || fail "the bar didn't read Settings' index"
 send clickkey $(drawn "toolbar Shortcuts")
@@ -750,10 +750,10 @@ settings_drew Shortcuts
 send clickkey $(drawn "search")
 # It reads every section's rows: "archive" finds five in three sections, live under their names,
 # and the column dims the rest. Esc empties the field, ⌘F takes the keyboard back to it, and a
-# click on Features' name shows Features at its row.
+# click on General's name shows General at its row.
 send key a cmd
 send type archive
-found='Archive Today tabs after, Archive windows left unused after, Archive Tab, View Archive, Clear Archive'
+found='Archive windows left unused after, Archive Tab, View Archive, Clear Archive, Archive Today tabs after'
 expect "^browser: settings search \"archive\" finds $found\$" \
   "the search for archive didn't find its five rows: $(grep '"archive" finds' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/settings-search.png" || fail "no window to capture"
@@ -762,24 +762,36 @@ expect '^browser: settings search cleared$' "Esc didn't empty the search"
 send key f cmd
 send type archive
 expect "^browser: settings search \"archive\" finds $found\$" "⌘F didn't search again"
-click_in_sight "found Features Archive windows left unused after"
-expect '^browser: settings found Features › Archive windows left unused after$' \
-  "a click on Features' name didn't show its row"
-settings_drew Features
+click_in_sight "found General Archive windows left unused after"
+expect '^browser: settings found General › Archive windows left unused after$' \
+  "a click on General's name didn't show its row"
+settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings-found.png" || fail "no window to capture"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
-# Settings › Agents' Tasks from the command bar (#1636), under Let agents use the browser while
-# agents are on: on, ⇥ in ⌘T makes what's typed a task; off, it doesn't, and agents stay on.
-# Agents go off again after.
-send clickkey $(drawn "toolbar Agents")
-settings_drew Agents
-click_in_sight "switch agents"
-expect '^browser: agents on$' "a click on Let agents use the browser didn't turn agents on"
-tasks_switch=$(drawn "switch agent tasks") || fail "Tasks from the command bar didn't show with agents on"
+# Settings › Threads' first switch, the product's own threads (#1636, #4260): on, ⇥ in ⌘T makes
+# what's typed a task; off, it doesn't. It goes off again after.
+send clickkey $(drawn "toolbar Threads")
+settings_drew Threads
+# The search above drew this switch among its rows, far down the card, and a section's "drew"
+# line comes before its frame's places: only a place drawn since Threads drew is its own.
+click_in_sight "switch agents" clickkey '^browser: settings drew Threads$'
+expect '^browser: agents on$' "a click on Let agents use the browser didn't turn threads on"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
-send clickkey $tasks_switch
-expect '^browser: agent tasks off$' "a click on Tasks from the command bar didn't turn tasks off"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type summarise this
+send key tab
+expect '^browser: command bar asks an agent$' "⇥ didn't make a task with threads on"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
+send menu Settings…
+expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
+settings_drew Threads
+click_in_sight "switch agents"
+expect '^browser: agents off$' "a click on Let agents use the browser didn't turn threads off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-off.png" || fail "no window to capture"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -787,29 +799,12 @@ send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type summarise this
 send key tab
-none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with tasks off"
+none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with threads off"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send menu Settings…
-expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
-settings_drew Agents
-click_in_sight "switch agent tasks"
-expect '^browser: agent tasks on$' "a click on Tasks from the command bar didn't turn tasks on"
-send key w cmd
-expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type summarise this
-send key tab
-expect '^browser: command bar asks an agent$' "⇥ didn't make a task with tasks on"
-send key escape
-send key escape
-expect '^browser: command bar hidden$' "escape didn't close the command bar from the ask"
-send menu Settings…
-expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
-settings_drew Agents
-click_in_sight "switch agents"
-expect '^browser: agents off$' "a click on Let agents use the browser didn't turn agents off"
+expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
+settings_drew Threads
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
 click_in_sight "shortcut new-tab"
@@ -936,9 +931,13 @@ send clickkey $(drawn "search")
 send type sidebar
 expect '^browser: settings search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
-found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar'
-# Tabs & Sidebar's hidden sidebar row comes first, before the commands.
-grep -q "^browser: settings search \"sidebar\" finds \(.*, \)\{0,1\}$found\$" "$log" ||
+# The search finds every page's rows: Window's Sidebar position first, then the commands, then Tabs
+# & Spaces' rows for the hidden sidebar, with Restore an earlier sidebar once the core has backed the
+# sidebar up, which it does as it saves the Spaces.
+alone_key=⌥
+[ "$(uname)" = Darwin ] || alone_key=Alt
+found="Sidebar position, Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar, Show the hidden sidebar at the window's edge, Show the hidden sidebar when $alone_key is pressed alone"
+grep -q "^browser: settings search \"sidebar\" finds $found\(, Restore an earlier sidebar\)\{0,1\}\$" "$log" ||
   fail "the search didn't find the sidebar's commands: $(grep '"sidebar" finds' "$log" | tail -1)"
 send key a cmd
 send type pinned tabs
@@ -1084,7 +1083,7 @@ $(grep '^browser: menu shown' "$log" | tail -1)"
   send choose "$(cased "$3")"
   expect "^browser: shortcut find prefers $2\$" "$3 didn't take for Find"
 }
-prefer "Prefer Websites (checked), Prefer $app_name" ilo "Prefer $app_name"
+prefer "Prefer Websites (checked), Prefer $product" ilo "Prefer $product"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-prefer.png" || fail "no window to capture"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -1093,8 +1092,8 @@ send type y
 expect '^browser: title [0-9]* value .*y$' "the page didn't get the y typed before ⌘F"
 send key f cmd
 pressed=$step
-expect '^browser: command find via page$' "⌘F with Prefer $app_name didn't run Find at once"
-expect '^browser: find bar drew ' "⌘F with Prefer $app_name didn't open the find bar"
+expect '^browser: command find via page$' "⌘F with Prefer $product didn't run Find at once"
+expect '^browser: find bar drew ' "⌘F with Prefer $product didn't open the find bar"
 saw='^browser: title [0-9]* page saw cmd-f$'
 sed -n "/^browser: drive $pressed: /,\$p" "$log" | grep -q "$saw" &&
   fail "the page saw ⌘F with Prefer $app_name"
@@ -1104,7 +1103,7 @@ else
   send key escape
   expect '^browser: find bar hidden$' "escape didn't close the find bar"
 fi
-prefer "Prefer Websites, Prefer $app_name (checked)" websites "Prefer Websites"
+prefer "Prefer Websites, Prefer $product (checked)" websites "Prefer Websites"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
@@ -1408,8 +1407,7 @@ page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N didn't open a window for the page from its bar"
 new_window_bar
 send window "$(grep -c '^browser: window opened ' "$log")"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T in a window with no page didn't open the command bar"
+resting_key t "new window"
 send insert 'data:text/html,<title>first</title>'
 send key return
 expect '^browser: loaded [0-9]* data:text/html,<title>first</title>$' \
@@ -1470,14 +1468,14 @@ width=${content%x*}
 height=${content#*x}
 post key q cmd
 expect '^browser: command quit via page$' "⌘Q with the page focused didn't reach the UI"
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/quit.png" || fail "no window to capture"
 send key escape
 expect '^browser: dialog cancelled$' "escape didn't cancel quitting"
 expect '^browser: dialog hidden$' "the dialog asking to quit didn't go"
 post key q cmd
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask again after Cancel"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask again after Cancel"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle again"
 # It's the driver's last command: the app doesn't report it done.
 post click $((width / 2 - 225 + 29 + 40)) $((height / 2 - 86 + 1 + 38 + 22 + 46 + 18))

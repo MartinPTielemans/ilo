@@ -1,7 +1,7 @@
 # check.sh runs this at 300.
 # VoiceOver reads ilo's own tree: the sidebar's Space name is a heading, and the tab shown a
 # selected tab named by its page's title in the Today tab group, after New Tab. ⌘T's bar has the
-# keyboard in a text field called "Search or Enter URL", lists its suggestions with the first
+# keyboard in a text field called "Search or enter address", lists its suggestions with the first
 # selected, and ↓ selects the next; ⇧F10 opens its field's menu on the first item. A tab's menu is
 # the app's window in front and a menu of menu items and separators, whose Move to opens a submenu.
 # ⌘F's find bar names its buttons and reads its count as Matches, a status that says it politely.
@@ -129,7 +129,7 @@ else
     expect '^browser: command bar suggestions "docs"' "the command bar didn't suggest for \"docs\""
     bar="$out/access-bar.txt"
     read_tree '"Suggestions"' > "$bar"
-    grep -q " $field \"Search or Enter URL\" value=docs" "$bar" ||
+    grep -q " $field \"Search or enter address\" value=docs" "$bar" ||
       fail "the command bar's field isn't a text field with what was typed: $bar"
     rows=$(under '"Suggestions"' "$bar")
     [ "$(echo "$rows" | grep -c " $suggestion")" -ge 2 ] ||
@@ -215,17 +215,20 @@ else
       expect "^browser: find $a closed\$" "escape didn't close the find bar"
     fi
 
-    # Settings' column is a tab list of its sections, the one shown selected, and Chromium
-    # settings at its foot a button.
+    # Settings' column is a tab list of its sections, the one shown selected, then About, its foot
+    # row, a tab of its own after them, and Chromium settings a button.
     settings="$out/access-settings.txt"
     send menu Settings…
-    expect '^browser: settings shown General$' "Settings… didn't show Settings on General"
+    settings_on_general "Settings… didn't show Settings"
     settings_drew General
     read_tree '"Sections"' > "$settings"
     under "$tab_group \"Sections\"" "$settings" | grep -q " $tab \"General\" $shown" ||
       fail "Settings' General isn't the selected tab in its Sections: $settings"
-    under "$tab_group \"Sections\"" "$settings" | grep -q " $tab \"About\"" ||
-      fail "Settings' About isn't a tab in its Sections: $settings"
+    awk -v list="$tab_group \"Sections\"" -v about=" $tab \"About\"" '
+      !found && index($0, list) { found = 1; depth = $1; next }
+      found && $1 <= depth { ok = $1 == depth && index($0, about); exit }
+      END { exit !ok }' "$settings" ||
+      fail "Settings' About isn't a tab after its Sections, at their depth: $settings"
     grep -q " $button \"Chromium settings\"" "$settings" ||
       fail "Settings' Chromium settings isn't a button: $settings"
     # Its sub-views name their controls too (#1911), as far as this copy draws them: Links' + and
@@ -252,9 +255,9 @@ else
       rule_read=read
     fi
     sync="$out/access-settings-sync.txt"
-    send clickkey $(drawn "toolbar Sync")
-    expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
-    settings_drew Sync
+    send clickkey $(drawn "toolbar Sync & Import")
+    expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab"
+    settings_drew 'Sync & Import'
     await '^browser: settings sync \(sign-in\|sign-out\|cancel\) at ' ||
       fail "Sync drew none of Sign In, Sign Out and Cancel"
     if grep -q '^browser: settings sync sign-in at ' "$log"; then
@@ -267,10 +270,8 @@ else
       grep -q " $button \"Sign Out\"" "$sync" || fail "Sync's Sign Out isn't a button: $sync"
     fi
     import="$out/access-settings-import.txt"
-    send clickkey $(drawn "toolbar Import & Export")
-    expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-    settings_drew 'Import & Export'
-    expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+    # Import is on Sync & Import too, under Sync's rows, and draws its list as the page shows.
+    expect '^browser: import drawn list$' "Settings › Sync & Import didn't draw the import's list"
     read_tree '"Import a Bookmarks File…"' > "$import"
     for name in "Import a Bookmarks File…" "Import a Passwords File…"; do
       grep -q " $button \"$name\"" "$import" || fail "the import's $name isn't a button: $import"
@@ -322,9 +323,10 @@ else
   fi
 fi
 # A new profile's onboarding, read as the reader reads it (#3151): each step a dialog called by its
-# title, the intro by the app's name, with Continue and Skip buttons, and the colour step's
-# swatches a radio group called Colour, a radio button a colour, none picked until → picks the
-# first. Its import home is empty, so the import step is left out.
+# title, the first whichever the card lists first, with its main button where it has one, and Your
+# first Space (4) with Next and no Skip, its palettes a radio group called Palettes, the drawn one,
+# Dusk, picked until → picks the next: the step rests on Next and its arrows go along the palettes.
+# Its import home is empty, so the import step is left out.
 if ! grep -q '^accessibility: skipped' "$tree"; then
   log="$out/access-onboarding.log"
   step=0
@@ -343,41 +345,47 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
   pid=$!
   exec 3> "$out/drive"
   await '^browser: onboarding started$' || fail "the onboarding didn't start"
-  # The intro goes on by itself 1.4 s after it settles, sooner than the Mac's reader compiles, so
-  # the read starts with the flow and asks again until the intro is there.
-  intro="$out/access-intro.txt"
-  read_tree "$dialog \"$app_name\"" > "$intro" &
-  reading=$!
-  await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
-  wait "$reading"
-  grep -q " $dialog \"$app_name\"" "$intro" || fail "the intro isn't a dialog called $app_name: $intro"
-  # Esc goes on from each step to the colour's, each one settled before the next Esc.
-  for _ in 1 2 3 4; do
-    grep -q '^browser: onboarding step color settled$' "$log" && break
-    send key escape
-    expect '^browser: onboarding step [a-z-]* settled$' "Esc didn't go on to a step"
-  done
-  grep -q '^browser: onboarding step color settled$' "$log" || fail "Esc didn't come to the colour step"
+  first_step=$(onboarding_steps | cut -d' ' -f1)
+  step_settled "$first_step" "the onboarding's first step, $first_step, didn't draw"
+  # Each step's title, as the card's own words say it; the Welcome's is the product's name.
+  case $first_step in
+    1) title=$product main=Continue ;;
+    2) title="Your assistants" main= ;;
+    4) title="Your first Space" main=Next ;;
+    *) fail "the onboarding's first step was $first_step, which an empty home can't make" ;;
+  esac
+  intro="$out/access-first-step.txt"
+  read_tree "$dialog \"$title\"" > "$intro"
+  grep -q " $dialog \"$title\"" "$intro" ||
+    fail "the first step, $first_step, isn't a dialog called by its title, $title: $intro"
+  [ -z "$main" ] || grep -q " $button \"$main\"" "$intro" ||
+    fail "the first step's $main isn't a button: $intro"
+  # Not Now goes on from the Welcome, without signing in.
+  [ "$first_step" != 1 ] || grep -q " $button \"Not Now\"" "$intro" ||
+    fail "the Welcome's Not Now isn't a button: $intro"
+  walk_steps 4
   colour="$out/access-colour.txt"
-  read_tree "$radio_group \"Colour\"" > "$colour"
-  grep -q " $dialog \"Pick a colour for your first Space.\"" "$colour" ||
-    fail "the colour step isn't a dialog called by its title: $colour"
+  read_tree "$radio_group \"Palettes\"" > "$colour"
+  grep -q " $dialog \"Your first Space\"" "$colour" ||
+    fail "Your first Space isn't a dialog called by its title: $colour"
   [ "$(grep -c " $dialog \"" "$colour")" = 1 ] ||
     fail "the step it left is still a dialog: $colour"
-  grep -q " $button \"Continue\"" "$colour" || fail "Continue isn't a button: $colour"
-  grep -q " $button \"Skip\"" "$colour" || fail "Skip isn't a button: $colour"
-  swatches=$(under "$radio_group \"Colour\"" "$colour" | grep " $radio \"[^\"]")
-  [ "$(echo "$swatches" | wc -l)" -ge 2 ] || fail "the swatches aren't radio buttons in Colour: $colour"
-  ! echo "$swatches" | grep -q " $picked" || fail "a colour reads as picked before any is: $colour"
-  first=$(echo "$swatches" | head -1 | sed 's/^[^"]*"\([^"]*\)".*/\1/')
+  grep -q " $button \"Next\"" "$colour" || fail "Next isn't a button: $colour"
+  ! grep -q " $button \"Skip\"" "$colour" || fail "Your first Space has a Skip, which it never shows: $colour"
+  palettes=$(under "$radio_group \"Palettes\"" "$colour" | grep " $radio \"[^\"]" || true)
+  [ "$(echo "$palettes" | grep -c .)" -ge 2 ] || fail "the palettes aren't radio buttons in Palettes: $colour"
+  echo "$palettes" | grep -q " $radio \"Dusk\" $picked" ||
+    fail "the drawn palette, Dusk, isn't read as picked: $colour"
+  next=$(echo "$palettes" | grep -A1 " $radio \"Dusk\"" | sed -n '2s/^[^"]*"\([^"]*\)".*/\1/p')
+  [ -n "$next" ] || fail "no palette after Dusk: $colour"
   send key right
   picked_tree="$out/access-colour-picked.txt"
-  read_tree "$radio \"$first\" $picked" > "$picked_tree"
-  grep -q " $radio \"$first\" $picked" "$picked_tree" ||
-    fail "→ didn't read as picking the first colour, $first: $picked_tree"
+  read_tree "$radio \"$next\" $picked" > "$picked_tree"
+  grep -q " $radio \"$next\" $picked" "$picked_tree" ||
+    fail "→ didn't read as picking the palette after Dusk, $next: $picked_tree"
   exec 3>&-
   quit
-  echo "ok: $screen_reader reads the onboarding's intro as a dialog called $app_name, the colour step as a dialog called by its title with Continue and Skip buttons, and its $(echo "$swatches" | wc -l | tr -d ' ') swatches as radio buttons in Colour, $first picked by →. Trees: $intro, $colour, $picked_tree"
+  echo "ok: $screen_reader reads the onboarding's first step, $first_step, as a dialog called by its title, $title${main:+, with its $main button}, Your first Space as a dialog called by its title with Next and no Skip, and its $(echo "$palettes" | grep -c .) palettes as radio buttons in Palettes, $next picked by →. Trees: $intro, $colour, $picked_tree"
 fi
 # The run's buses go with it.
 [ -z "${buses:-}" ] || kill $buses 2> /dev/null || true

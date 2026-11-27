@@ -701,6 +701,48 @@ fn its_keys_open_the_command_bar_inside_it(cx: &mut TestAppContext) {
     );
 }
 
+/// With no page it keeps its own bar inside it, as before an empty Space rested on the bar
+/// (#4140): no bar is made for its card to rest on, and ⌘L and ⌘T open its bar inside it.
+#[gpui::test]
+fn with_no_page_its_keys_open_its_own_bar_inside_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            9,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    let resting = |shell: &Entity<Shell>, cx: &mut gpui::VisualTestContext| {
+        shell.read_with(cx, |shell, _| (shell.selected, shell.resting.is_some()))
+    };
+    assert_eq!(resting(&shell, cx), (0, false), "its card rests on a bar");
+    for command in [Command::EditUrl, Command::NewTab] {
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
+        assert!(
+            host.bars_in.borrow_mut().pop().is_some(),
+            "{command:?} opened no bar inside the window"
+        );
+        assert!(
+            host.command_bars.borrow().is_empty(),
+            "{command:?} opened the bar over the title"
+        );
+    }
+    cx.run_until_parked();
+    assert_eq!(
+        resting(&shell, cx),
+        (0, false),
+        "its card came to rest on a bar"
+    );
+}
+
 #[gpui::test]
 fn it_grows_in_from_its_first_frame_on_screen_once(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
@@ -1012,10 +1054,10 @@ fn off_nothing_offers_or_opens_a_little_window(cx: &mut TestAppContext) {
         assert!(!shell.offers(Command::NewLittleWindow));
         assert!(
             shell.menu_bar(cx).little_off,
-            "File still has New Little ilo Window"
+            "File still has New Little Window"
         );
         assert_eq!(
-            shell.bar_name("New Little ilo Window", Command::NewLittleWindow, cx),
+            shell.bar_name("New Little Window", Command::NewLittleWindow, cx),
             None
         );
     });

@@ -13,6 +13,7 @@ use crate::settings_rows::{frame, text as row_text};
 fn rows() -> Vec<Entry> {
     let row = |section, under: Option<&str>, name: &str, line: Option<&str>| Entry {
         section,
+        group: None,
         under: under.map(|under| SharedString::from(under.to_string())),
         name: name.to_string().into(),
         line: line.map(|line| SharedString::from(line.to_string())),
@@ -25,49 +26,61 @@ fn rows() -> Vec<Entry> {
     let little = concat!("Little ", env!("APP_NAME"));
     vec![
         row(
+            Section::Window,
+            None,
+            "Appearance",
+            Some("Light, dark, or as the system is."),
+        ),
+        row(
+            Section::Window,
+            None,
+            "Page zoom",
+            Some("Every page's size, until you zoom a site, which keeps its own."),
+        ),
+        row(
             Section::General,
             None,
             "Reopen your windows and tabs",
             Some("Off: ilo opens one empty window, and Today tabs go to the archive."),
         ),
         row(
-            Section::TabsAndSidebar,
+            Section::TabsAndSpaces,
             None,
             "Archive Today tabs after",
             Some("Tabs you haven't looked at go to the archive. ⇧⌘T brings one back."),
         ),
         row(
-            Section::TabsAndSidebar,
+            Section::TabsAndSpaces,
             None,
             "Unload tabs you haven't looked at",
             Some("After 2 hours out of sight a tab frees its memory."),
         ),
         row(
-            Section::TabsAndSidebar,
+            Section::Window,
             None,
             "Sidebar position",
             Some("The side of the window the sidebar and the window's buttons are on."),
         ),
         row(
-            Section::Features,
+            Section::General,
             None,
             little,
             Some("A small window for a quick look."),
         ),
         row(
-            Section::Features,
+            Section::General,
             Some(little),
             "Archive windows left unused after",
             Some("Counted from when you leave the window."),
         ),
         row(
-            Section::Features,
+            Section::General,
             None,
             "Peek",
             Some("Links open in a preview."),
         ),
         row(
-            Section::Features,
+            Section::General,
             None,
             "Mini Player",
             Some("A playing video or call floats over your work when you leave its tab."),
@@ -93,6 +106,24 @@ fn pip_finds_the_mini_player_by_another_name() {
     assert_eq!(names("pip"), ["Mini Player"]);
     assert_eq!(names("picture"), ["Mini Player"]);
     assert_eq!(names("link prev"), ["Peek"]);
+}
+
+/// The look's rows, on Window now as the owner drew no page of appearance settings, are each
+/// found by their names and other names, under Window alone.
+#[test]
+fn the_looks_rows_are_found_under_window() {
+    let rows = rows();
+    for (typed, name) in [
+        ("dark mode", "Appearance"),
+        ("zoom", "Page zoom"),
+        ("font size", "Page zoom"),
+        ("right sidebar", "Sidebar position"),
+    ] {
+        let found: Vec<&Entry> = find(typed, &rows).into_iter().map(|at| &rows[at]).collect();
+        let names: Vec<&str> = found.iter().map(|entry| entry.name.as_ref()).collect();
+        assert_eq!(names, [name], "{typed}");
+        assert_eq!(sections(&found), [Section::Window], "{typed}");
+    }
 }
 
 /// The drawings have no words to find, so the row's other names hold its sides: either side's
@@ -136,11 +167,7 @@ fn archive_finds_five_rows_in_three_sections() {
     );
     assert_eq!(
         sections(&found),
-        [
-            Section::TabsAndSidebar,
-            Section::Features,
-            Section::Shortcuts
-        ]
+        [Section::TabsAndSpaces, Section::General, Section::Shortcuts]
     );
 }
 
@@ -151,6 +178,27 @@ fn a_line_finds_its_row_when_no_name_does() {
     assert_eq!(names("work video"), ["Mini Player"]);
     assert!(names("zzz").is_empty());
     assert!(names("  ").is_empty());
+}
+
+/// A group's heading finds the rows under it when no row is named by its words, and a name still
+/// finds its row alone (spec-settings.md › S15: labels, second lines and group headings).
+#[test]
+fn a_heading_finds_its_groups_rows_when_no_name_does() {
+    let headed = |name: &str, group: &str| Entry {
+        section: Section::General,
+        group: Some(group.to_string().into()),
+        under: None,
+        name: name.to_string().into(),
+        line: None,
+        keys: None,
+    };
+    let rows = [
+        headed("Reopen your windows and tabs", "Opening and quitting"),
+        headed("Ask before quitting", "Opening and quitting"),
+        headed("Search engine", "Search and downloads"),
+    ];
+    assert_eq!(find("opening", &rows), [0, 1]);
+    assert_eq!(find("quitting", &rows), [1]);
 }
 
 /// Settings in small: the column's field, and under it either the section's page or what the
@@ -216,7 +264,9 @@ impl Render for Searched {
                 window.focus(&view.input.read(cx).focus_handle(cx), cx)
             }))
             .on_action(cx.listener(|view, _: &EndSearch, window, cx| {
-                end(&view.input, window, cx);
+                if crate::dismissal::Close::escape_from([&view.input.clone()], cx).is_some() {
+                    end(&view.input, window, cx);
+                }
                 cx.notify();
             }))
             .size_full()
@@ -300,7 +350,7 @@ fn a_search_that_finds_nothing_says_so(cx: &mut TestAppContext) {
     assert!(!drew(&view, "page", cx));
 }
 
-/// "archive" shows its rows under Tabs & Sidebar, Features › Little ilo and Shortcuts, and a click
+/// "archive" shows its rows under Tabs & Spaces, General › Little ilo and Shortcuts, and a click
 /// on Features shows that section at its row.
 #[gpui::test]
 fn a_click_on_a_section_name_shows_the_section_at_the_row(cx: &mut TestAppContext) {
@@ -311,8 +361,8 @@ fn a_click_on_a_section_name_shows_the_section_at_the_row(cx: &mut TestAppContex
     assert_eq!(
         labels,
         [
-            "found Tabs & Sidebar Archive Today tabs after",
-            "found Features Archive windows left unused after",
+            "found Tabs & Spaces Archive Today tabs after",
+            "found General Archive windows left unused after",
             "found Shortcuts Archive Tab"
         ]
     );
@@ -322,7 +372,7 @@ fn a_click_on_a_section_name_shows_the_section_at_the_row(cx: &mut TestAppContex
     assert_eq!(
         clicked,
         [(
-            Section::Features,
+            Section::General,
             "Archive windows left unused after".to_string()
         )]
     );
@@ -358,7 +408,7 @@ fn a_composition_finds_nothing_until_it_commits(cx: &mut TestAppContext) {
     assert!(
         names
             .iter()
-            .any(|(what, _)| what == "found Features Mini Player")
+            .any(|(what, _)| what == "found General Mini Player")
     );
     compose("あ", cx);
     cx.simulate_keystrokes("escape");
@@ -368,5 +418,22 @@ fn a_composition_finds_nothing_until_it_commits(cx: &mut TestAppContext) {
         "pipあ",
         "Esc ended the search while composing"
     );
+    assert!(
+        input.read_with(cx, |input, _| input.composing()),
+        "Esc ended the composition"
+    );
     assert!(!drew(&view, "page", cx));
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        field_text(&view, cx),
+        "",
+        "the next Esc didn't end the search"
+    );
 }

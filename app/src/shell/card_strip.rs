@@ -202,8 +202,12 @@ mod tests {
     use super::card_band;
     use crate::shell::{Section, Shell, recorder::Recorder};
 
+    /// The cards' room to scroll: Arc's measured 1284, and as much more as the drawn column is
+    /// wider than Arc's 112, as the cards start that much further along.
+    const ROOM: f32 = 1284. + super::COLUMN_WIDTH - 112.;
+
     /// Arc's measured window: 8 Spaces, 1100 wide, the Library open on them at rest, so the
-    /// Library is 1044 and its cards, 2328 across, have 1284 to scroll.
+    /// Library is 1044 and its cards have `ROOM` to scroll.
     fn eight_spaces(
         cx: &mut TestAppContext,
     ) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
@@ -238,7 +242,7 @@ mod tests {
         let widths = read(&shell, cx, |shell| {
             (shell.library_width(), shell.cards_room())
         });
-        assert_eq!(widths, (1044., 1284.));
+        assert_eq!(widths, (1044., ROOM));
         (shell, cx, host)
     }
 
@@ -363,7 +367,7 @@ mod tests {
         fingers(cx, 600., &[-100., -3000.], false);
         let (at, out) = read(&shell, cx, |shell| (shell.cards_at(), shell.library_out()));
         assert!(
-            at > 1284. && at < 1284. + 80.,
+            at > ROOM && at < ROOM + 80.,
             "pushed past the end, the cards are at {at}"
         );
         assert_eq!(out, 1., "the Library moved");
@@ -387,15 +391,15 @@ mod tests {
         lift(cx, 600.);
         shell.update(cx, |shell, _| shell.library_motion = None);
 
-        fingers(cx, 600., &[-1284.], true);
-        assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 1284.);
+        fingers(cx, 600., &[-ROOM], true);
+        assert_eq!(read(&shell, cx, |shell| shell.cards_at()), ROOM);
         fingers(cx, 600., &[-200.], false);
         let out = read(&shell, cx, |shell| shell.library_out());
         assert!(
             out < 1.,
             "fingers past the last card didn't take the Library out: {out}"
         );
-        assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 1284.);
+        assert_eq!(read(&shell, cx, |shell| shell.cards_at()), ROOM);
         fingers(cx, 600., &[-1200.], false);
         lift(cx, 600.);
         assert!(
@@ -426,7 +430,7 @@ mod tests {
         for _ in 0..20 {
             wheel(cx, 600., -10.);
         }
-        assert_eq!(read(&shell, cx, |shell| shell.cards_at()), 1284.);
+        assert_eq!(read(&shell, cx, |shell| shell.cards_at()), ROOM);
         wheel(cx, 600., -1.);
         assert!(
             read(&shell, cx, |shell| shell.library_open),

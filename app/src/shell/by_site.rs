@@ -10,7 +10,7 @@ use crate::sort_by_site::{moves, sorted};
 impl Shell {
     /// The Today rows of `space`, each a split's first tab or a tab alone, with how many tabs it
     /// has, top to bottom.
-    fn today_rows(&self, space: u64) -> Vec<(u64, usize)> {
+    pub(super) fn today_rows(&self, space: u64) -> Vec<(u64, usize)> {
         let Some(entry) = self.spaces.iter().find(|entry| entry.id == space) else {
             return Vec::new();
         };

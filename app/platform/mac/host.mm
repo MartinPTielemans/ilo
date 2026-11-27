@@ -198,43 +198,6 @@ static NSPasteboardType const kTabDragType = @"dev.ilo.browser.tab";
 }
 @end
 
-namespace {
-
-// Takes the tint and the extra saturation off |layer| and the layers in it, leaving the blur, as
-// GPUI's blurred window background does (crates/gpui_macos/src/window.rs).
-void StripTint(CALayer* layer) {
-  layer.backgroundColor = nil;
-  if ([layer.className isEqualToString:@"CAChameleonLayer"]) {
-    layer.hidden = YES;
-    return;
-  }
-  NSPredicate* saturating = [NSPredicate predicateWithBlock:^BOOL(id filter, NSDictionary*) {
-    return ![[filter description] containsString:@"Saturat"];
-  }];
-  if (layer.filters) {
-    layer.filters = [layer.filters filteredArrayUsingPredicate:saturating];
-  }
-  for (CALayer* sublayer in layer.sublayers) {
-    StripTint(sublayer);
-  }
-}
-
-}  // namespace
-
-// What's behind the window, blurred, without the material's tint, for the command bar's fill to
-// tint (docs/ux-spec.md › Command bar). With Reduce Transparency, AppKit's opaque fill stays.
-@interface HostBlurView : NSVisualEffectView
-@end
-
-@implementation HostBlurView
-- (void)updateLayer {
-  [super updateLayer];
-  if (!NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency) {
-    StripTint(self.layer);
-  }
-}
-@end
-
 // An overlay's shadow, round it by the shadow's reach. Near the browser window's top that reaches
 // past the screen's, and AppKit would keep it below the menu bar, away from the overlay, its
 // cut-out showing the page under the overlay's bottom edge (#2075). It goes where the host puts it,
@@ -334,6 +297,9 @@ struct Browser {
   CATransform3D opening_small = CATransform3DIdentity;
   BOOL opening_opaque = YES;
   BOOL opening_shadow = YES;
+
+  // Kept off screen while first run shows (host_hold_window), until host_show_window.
+  bool held = false;
 };
 
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
@@ -416,7 +382,7 @@ struct Overlay {
   const char* name;
   NSWindow* window = nil;
   NSView* view = nil;
-  HostBlurView* blur = nil;
+  NSVisualEffectView* blur = nil;
   // The browser it shows over.
   Browser* over = nullptr;
   // The window of Chromium's over the page that had the keyboard as it showed, such as a tab's
@@ -464,8 +430,8 @@ struct Overlay {
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
-                        Overlay("folder preview"), Overlay("boost editor"), Overlay("tab switcher"),
-                        Overlay("agent request")};
+                        Overlay("folder preview"), Overlay("boost editor"),
+                        Overlay("tab switcher")};
 
 // The Site Controls: an overlay for its blur and shadow alone, outside g_overlays, so the tooltip
 // shows over it.
@@ -989,6 +955,17 @@ NSWindow* KeyWindowAfter(Overlay& overlay, Browser* browser) {
   return back.visible && back.parentWindow == browser->window ? back : KeyWindowOver(browser);
 }
 
+// Gives the keyboard back as |overlay| over |browser| is put away, hidden or folded. Not when
+// another browser window has the keyboard: the user went there, and taking it back would leave
+// that window main with the keys going to this one.
+void GiveKeyboardBackAfter(Overlay& overlay, Browser* browser) {
+  NSWindow* back = KeyWindowAfter(overlay, browser);
+  Browser* key_browser = BrowserOf(NSApp.keyWindow);
+  if (!key_browser || key_browser == browser) {
+    [back makeKeyWindow];
+  }
+}
+
 // The dialog's frame over |browser|'s window, by its insets.
 NSRect DialogFrame(Browser* browser) {
   NSWindow* window = browser->window;
@@ -1215,16 +1192,19 @@ void PlaceOverlayShadow(Overlay& overlay) {
   CGPathRelease(shape);
 }
 
-// Puts the blur under the overlay's view and makes its shadow's window.
+// Puts the window's material under the overlay's view and makes its shadow's window.
 void AddBlurAndShadow(Overlay& overlay) {
   // The UI draws the overlay's shape, translucent, over the blur, and the shadow is its own
   // window. A titled window would draw its edge at the window's full size.
   overlay.window.styleMask = NSWindowStyleMaskBorderless;
   overlay.window.hasShadow = NO;
-  overlay.blur = [[HostBlurView alloc] initWithFrame:overlay.view.frame];
+  // One glass with the window (#4090): the HUD window's material, its tint kept, under the UI's
+  // fill at the transparency level. AppKit makes it opaque with Reduce Transparency or Increase
+  // Contrast, as it does the window's.
+  overlay.blur = [[NSVisualEffectView alloc] initWithFrame:overlay.view.frame];
   overlay.blur.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   overlay.blur.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  overlay.blur.material = NSVisualEffectMaterialUnderWindowBackground;
+  overlay.blur.material = NSVisualEffectMaterialHUDWindow;
   overlay.blur.state = NSVisualEffectStateActive;
   MaskOverlayBlur(overlay);
   [overlay.view.superview addSubview:overlay.blur
@@ -1260,6 +1240,14 @@ void AddBlurAndShadow(Overlay& overlay) {
   overlay.outline_layer.shadowOffset = CGSizeZero;
   [holder addSublayer:overlay.outline_layer];
   [shadow_view.layer addSublayer:holder];
+}
+
+// Gives the overlay's material the look of the window it shows over, dark or light, which the UI's
+// fill over it is drawn for.
+void MatchWindowLook(Overlay& overlay, Browser* browser) {
+  if (overlay.blur && browser && browser->material) {
+    overlay.blur.appearance = browser->material.appearance;
+  }
 }
 
 // Puts the overlays showing over |browser| above |window|, one of its child windows.
@@ -1474,21 +1462,53 @@ void WatchHeldEscape() {
 
 namespace {
 
-// Dia's window material (docs/ux-spec.md › Window material): what's behind the window, blurred,
-// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the window
-// is inactive, and with Reduce Transparency or Increase Contrast.
+// The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
+// under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the app
+// isn't the active one, and with Reduce Transparency or Increase Contrast.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
-  // Dia's dark material is one AppKit doesn't name; its light one is the HUD window's.
-  material.material = light ? NSVisualEffectMaterialHUDWindow : (NSVisualEffectMaterial)29;
+  // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
+  // AppKit names, and the one the transparency levels' tints are reckoned against.
+  material.material = NSVisualEffectMaterialHUDWindow;
   material.appearance =
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
 
+// From the first browser window, every browser window's material follows the app: active while
+// the app is the active one, AppKit's inactive fill once another app is in front. Following the
+// window's own key state instead gives a window the inactive fill behind its own command bar, a
+// menu or Settings, each a window that takes the keyboard from it.
+void WatchAppActiveForMaterial() {
+  static bool watching = false;
+  if (watching) {
+    return;
+  }
+  watching = true;
+  void (^follow)(NSVisualEffectState) = ^(NSVisualEffectState state) {
+    for (auto& browser : g_browsers) {
+      browser->material.state = state;
+    }
+  };
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  [center addObserverForName:NSApplicationDidBecomeActiveNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    follow(NSVisualEffectStateActive);
+                  }];
+  [center addObserverForName:NSApplicationDidResignActiveNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    follow(NSVisualEffectStateInactive);
+                  }];
+}
+
 NSVisualEffectView* WindowMaterial(NSRect frame, bool light) {
+  WatchAppActiveForMaterial();
   NSVisualEffectView* material = [[NSVisualEffectView alloc] initWithFrame:frame];
   material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  material.state = NSVisualEffectStateFollowsWindowActiveState;
+  material.state = NSApp.active ? NSVisualEffectStateActive : NSVisualEffectStateInactive;
   material.emphasized = YES;
   SetWindowMaterialLight(material, light);
   return material;
@@ -2040,25 +2060,135 @@ static void WatchLittleOrderingOut(NSWindow* window) {
   }
 }
 
-static void PlaceTitlebarSide(Browser* browser);
+// NativeWidgetMacNSWindow's own, which a window not held goes on to, by selector.
+static IMP g_order_front;
+static IMP g_make_key_and_order_front;
+static IMP g_order_front_regardless;
+static IMP g_order_window;
 
-void host_show_window(void* ui_view) {
-  host_show_window_behind(ui_view, nullptr);
+// A held window stays off screen whatever orders it in: Chromium shows a browser window as it makes
+// it, and again as it adds a tab, a link from another app's included, and a reopen from the Dock
+// or a second launch comes here too. Ordering out still goes through.
+static bool StaysHeld(NSWindow* window) {
+  Browser* browser = BrowserOf(window);
+  return browser && browser->held;
 }
 
-void host_show_window_behind(void* ui_view, void* above_ui_view) {
+static void OrderHeldFront(NSWindow* self, SEL selector, id sender) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL, id))g_order_front)(self, selector, sender);
+  }
+}
+
+static void MakeHeldKeyAndOrderFront(NSWindow* self, SEL selector, id sender) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL, id))g_make_key_and_order_front)(self, selector, sender);
+  }
+}
+
+static void OrderHeldFrontRegardless(NSWindow* self, SEL selector) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL))g_order_front_regardless)(self, selector);
+  }
+}
+
+static void OrderHeldWindow(NSWindow* self,
+                            SEL selector,
+                            NSWindowOrderingMode mode,
+                            NSInteger relative_to) {
+  if (mode == NSWindowOut || !StaysHeld(self)) {
+    ((void (*)(id, SEL, NSWindowOrderingMode, NSInteger))g_order_window)(self, selector, mode,
+                                                                        relative_to);
+  }
+}
+
+// Puts |replacement| in for |selector| on |kind|, keeping what it had in |original|. Chromium's
+// browser windows all share the class, so it's done once, and the others pass through.
+static void Replace(Class kind, SEL selector, IMP replacement, IMP* original) {
+  if (class_getMethodImplementation(kind, selector) == replacement) {
+    return;
+  }
+  Method inherited = class_getInstanceMethod(kind, selector);
+  *original = method_getImplementation(inherited);
+  if (!class_addMethod(kind, selector, replacement, method_getTypeEncoding(inherited))) {
+    *original = method_setImplementation(class_getInstanceMethod(kind, selector), replacement);
+  }
+}
+
+void host_hold_window(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {
     return;
   }
+  NSWindow* window = browser->ui_view.window;
+  browser->window = window;
+  browser->held = true;
+  Class kind = window.class;
+  Replace(kind, @selector(orderFront:), (IMP)OrderHeldFront, &g_order_front);
+  Replace(kind, @selector(makeKeyAndOrderFront:), (IMP)MakeHeldKeyAndOrderFront,
+          &g_make_key_and_order_front);
+  Replace(kind, @selector(orderFrontRegardless), (IMP)OrderHeldFrontRegardless,
+          &g_order_front_regardless);
+  Replace(kind, @selector(orderWindow:relativeTo:), (IMP)OrderHeldWindow, &g_order_window);
+  // The core put it on screen as it made it, clear until its first frame.
+  [window orderOut:nil];
+  // check.sh reads this line.
+  if (Checked()) {
+    fprintf(stderr, "browser: window held off screen\n");
+  }
+}
+
+static void PlaceTitlebarSide(Browser* browser);
+
+static void ShowWindow(void* ui_view, NSWindow* above, bool unseen);
+
+void host_show_window(void* ui_view) {
+  ShowWindow(ui_view, nil, false);
+}
+
+void host_show_window_behind(void* ui_view, void* above_ui_view) {
   Browser* above = above_ui_view ? BrowserWithView(above_ui_view) : nullptr;
+  ShowWindow(ui_view, above ? above->window : nil, false);
+}
+
+// Whether the window first run held is on, in the place of first run's (host_close_first_run).
+static bool g_took_first_runs_place;
+
+// The browser window a grow put under first run's, unseen until the card gives way to it
+// (host_set_first_run_reveal), until it comes to the front.
+static __weak NSWindow* g_under_first_run;
+
+// Its opacity while unseen: not none, as a window with none counts as hidden, and then GPUI
+// doesn't draw it nor Chromium its pages; and too little to see over any desktop.
+constexpr CGFloat kUnseen = 0.01;
+
+// Shows the window of |ui_view| in front with the keyboard, or right behind |above|, neither key
+// nor activating the app, and there all but transparent where |unseen|.
+static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser) {
+    return;
+  }
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
-  browser->window = window;
-  // As the sidebar's side was told before there was a window (host_set_sidebar_right).
-  if (browser->sidebar_right) {
-    PlaceTitlebarSide(browser);
+  // Shown already under first run's, drawn there through the grow: whole, and in front.
+  if (window && window == g_under_first_run && !above) {
+    g_under_first_run = nil;
+    window.alphaValue = 1;
+    [window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    return;
   }
+  browser->window = window;
+  // The window first run held comes on at its frame whole, with none of AppKit's motion for a
+  // window ordered in: first run's card has just grown to that frame, or faded where it stood.
+  if (browser->held) {
+    window.animationBehavior = NSWindowAnimationBehaviorNone;
+    g_took_first_runs_place = true;
+  }
+  browser->held = false;
+  // As the sidebar's side was told before there was a window (host_set_sidebar_right).
+  PlaceTitlebarSide(browser);
   if (browser->little) {
     ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
@@ -2075,7 +2205,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   [view addSubview:browser->material positioned:NSWindowBelow relativeTo:nil];
   // Views keeps a new window clear until its compositor's first frame, which waits for the GPU
   // process to start, though the UI's and the pages' views cover all of that compositor.
-  window.alphaValue = 1;
+  window.alphaValue = unseen ? kUnseen : 1;
   if (g_launch_window && !above) {
     // It takes the launch window's place, and its picture stays over the UI until the UI has
     // drawn. The launch window itself can't stay over it: Chromium counts a covered window's
@@ -2096,8 +2226,8 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
     TellMain(shown, NSApp.active && shown.isMainWindow);
   });
   WatchHeldEscape();
-  if (above && above->window) {
-    [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
+  if (above) {
+    [window orderWindow:NSWindowBelow relativeTo:above.windowNumber];
   } else {
     // Before it's on screen, so its first frame is already the small one.
     if (browser->grows) {
@@ -2389,7 +2519,19 @@ void host_set_window_light(void* ui_view, bool light) {
   Browser* browser = BrowserWithView(ui_view);
   if (browser && browser->material) {
     SetWindowMaterialLight(browser->material, light);
+    for (Overlay& overlay : g_overlays) {
+      if (overlay.shown && overlay.over == browser) {
+        MatchWindowLook(overlay, browser);
+      }
+    }
+    if (g_site_controls_shown && g_site_controls_over == browser) {
+      MatchWindowLook(g_site_controls_overlay, browser);
+    }
   }
+}
+
+bool host_has_window_material(void) {
+  return true;
 }
 
 void host_set_app_appearance(int appearance) {
@@ -3207,6 +3349,7 @@ void host_show_overlay(int index,
     host_hide_overlay(index);
     overlay->shown = true;
     overlay->over = browser;
+    MatchWindowLook(*overlay, browser);
     NSWindow* key = NSApp.keyWindow;
     overlay->keyboard_from = IsTabDialogOf(key, browser) ? key : nil;
     HoldKeys(overlay->window);
@@ -3326,13 +3469,7 @@ void host_hide_overlay(int index) {
     [overlay->window orderOut:nil];
     TakeOffShadow(*overlay);
   }
-  // Not when another browser window has the keyboard: the user went there, and taking it back
-  // would leave that window main with the keys going to this one.
-  NSWindow* back = KeyWindowAfter(*overlay, browser);
-  Browser* key_browser = BrowserOf(NSApp.keyWindow);
-  if (!key_browser || key_browser == browser) {
-    [back makeKeyWindow];
-  }
+  GiveKeyboardBackAfter(*overlay, browser);
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   if (overlay->key_at_hide) {
     overlay->key_at_hide = false;
@@ -3500,7 +3637,7 @@ bool host_fold_overlay(int index,
         window.alphaValue = 1;
         window.ignoresMouseEvents = NO;
       }];
-  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
+  GiveKeyboardBackAfter(*overlay, browser);
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   return true;
 }
@@ -4005,6 +4142,7 @@ void host_show_site_controls(void* ui_view, double left, double top, double widt
     }
     NSWindow* window = browser->window;
     Overlay& overlay = g_site_controls_overlay;
+    MatchWindowLook(overlay, browser);
     [g_site_controls setFrame:NSMakeRect(0, 0, width, height) display:NO];
     PlaceSiteControls();
     [g_site_controls_view.layer setNeedsDisplay];
@@ -5160,13 +5298,17 @@ void host_show_window_buttons(void* ui_view, bool shown) {
 // puts zoom, minimize and close at the window's right, close at the corner, and the core's inset
 // for them from that edge. AppKit's windowTitlebarLayoutDirection is read-only, so the windows'
 // class answers it for each window, and the rest of the window keeps its direction: the title,
-// which is hidden, and the Window menu and Mission Control, which read the title, not this.
+// which is hidden, and the Window menu and Mission Control, which read the title, not this. A
+// window with its sidebar on the left answers left to right under an Arabic or Hebrew system too:
+// its buttons sit in the sidebar's header row, and the core reads the direction as the sidebar's
+// side, for the strip at its edge (core/platform/mac/window_views.mm).
 static char kSidebarRight;
 static IMP g_titlebar_direction;
 
 static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL selector) {
-  if ([objc_getAssociatedObject(self, &kSidebarRight) boolValue]) {
-    return NSUserInterfaceLayoutDirectionRightToLeft;
+  if (NSNumber* right = objc_getAssociatedObject(self, &kSidebarRight)) {
+    return right.boolValue ? NSUserInterfaceLayoutDirectionRightToLeft
+                           : NSUserInterfaceLayoutDirectionLeftToRight;
   }
   return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
 }
@@ -5195,8 +5337,13 @@ static void PlaceTitlebarSide(Browser* browser) {
     fprintf(stderr, "browser: the title bar's direction can't be answered\n");
     return;
   }
-  objc_setAssociatedObject(window, &kSidebarRight, browser->sidebar_right ? @YES : nil,
+  const NSUserInterfaceLayoutDirection was = window.windowTitlebarLayoutDirection;
+  objc_setAssociatedObject(window, &kSidebarRight, @(browser->sidebar_right),
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // Only a change moves the buttons, so a window on the system's own side costs nothing more.
+  if (window.windowTitlebarLayoutDirection == was) {
+    return;
+  }
   // AppKit places the buttons as the window's frame view changes size, and not when its layout is
   // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
   // 42943383202), so the frame view grows by a point and back. The window's frame stays as it is.
@@ -6079,6 +6226,243 @@ void host_hide_settings(void) {
   [g_settings orderOut:nil];
 }
 
+// First run's window, while it's open.
+static NSWindow* g_first_run;
+static NSView* g_first_run_view;
+
+void* host_first_run_window(void) {
+  return g_first_run.visible ? (__bridge void*)g_first_run : nullptr;
+}
+
+// Chromium's AppController's, which a reopen goes on to while first run doesn't show.
+static BOOL (*g_engine_reopen)(id, SEL, NSApplication*, BOOL);
+
+// A reopen, as a click on the Dock's icon or a second launch sends, brings first run's window to
+// the front while it shows and makes nothing: Chromium's own would make a browser window of its
+// own, as the browser's is held off screen and it finds none on screen.
+static BOOL ReopenToFirstRun(id self, SEL selector, NSApplication* app, BOOL visible) {
+  if (!g_first_run) {
+    return g_engine_reopen ? g_engine_reopen(self, selector, app, visible) : YES;
+  }
+  if (g_first_run.visible) {
+    [g_first_run makeKeyAndOrderFront:nil];
+  }
+  // check.sh reads this line.
+  if (Checked()) {
+    fprintf(stderr, "browser: reopen brought first run to the front\n");
+  }
+  return NO;
+}
+
+void host_add_first_run(void* first_run_view) {
+  g_first_run_view = (__bridge NSView*)first_run_view;
+  g_first_run = g_first_run_view.window;
+  static bool once = false;
+  if (!once) {
+    once = true;
+    const SEL selector = @selector(applicationShouldHandleReopen:hasVisibleWindows:);
+    Class kind = object_getClass(NSApp.delegate);
+    if (Method method = kind ? class_getInstanceMethod(kind, selector) : nullptr) {
+      g_engine_reopen = (BOOL (*)(id, SEL, NSApplication*, BOOL))method_setImplementation(
+          method, (IMP)ReopenToFirstRun);
+    } else if (kind) {
+      class_addMethod(kind, selector, (IMP)ReopenToFirstRun,
+                      protocol_getMethodDescription(@protocol(NSApplicationDelegate), selector, NO,
+                                                    YES)
+                          .types);
+    }
+    // A window over first run's that closes, such as a Little window a link from another app
+    // opened, gives the keyboard back to first run's, not to none, as the browser's is held.
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:NSWindowWillCloseNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (!g_first_run || notification.object == g_first_run) {
+                    return;
+                  }
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                    NSWindow* key = NSApp.keyWindow;
+                    if (g_first_run.visible && (!key || !key.visible)) {
+                      [g_first_run makeKeyAndOrderFront:nil];
+                    }
+                  });
+                }];
+  }
+  // The card is the window: no title bar, buttons or frame of the system's, whose rim and corners
+  // would show round the card's own, and its shadow the card's shape (host_set_first_run_frame).
+  // A borderless window takes the keyboard as GPUI's window says it can.
+  g_first_run.styleMask = NSWindowStyleMaskBorderless | NSWindowStyleMaskFullSizeContentView;
+  g_first_run.hasShadow = YES;
+  g_first_run.tabbingMode = NSWindowTabbingModeDisallowed;
+}
+
+// A mask for the glass with corners of |radius|, stretched to any size between them.
+static NSImage* FirstRunMask(double radius) {
+  const CGFloat edge = radius * 2 + 1;
+  NSImage* mask = [NSImage imageWithSize:NSMakeSize(edge, edge)
+                                 flipped:NO
+                          drawingHandler:^BOOL(NSRect rect) {
+                            [NSColor.blackColor setFill];
+                            [[NSBezierPath bezierPathWithRoundedRect:rect
+                                                             xRadius:radius
+                                                             yRadius:radius] fill];
+                            return YES;
+                          }];
+  mask.capInsets = NSEdgeInsetsMake(radius, radius, radius, radius);
+  mask.resizingMode = NSImageResizingModeStretch;
+  return mask;
+}
+
+// The card as the UI shaped it last, none before the first: a window that grows places its glass
+// by it again, as the UI gives a shape only when it changes.
+static NSSize g_first_run_card;
+static double g_first_run_radius;
+
+// Keeps the glass and the shadow to the card as last shaped, centred in first run's window.
+static void PlaceFirstRunGlass() {
+  NSView* content = g_first_run.contentView;
+  const NSRect bounds = content.bounds;
+  const NSRect card = NSMakeRect(round(NSMidX(bounds) - g_first_run_card.width / 2),
+                                 round(NSMidY(bounds) - g_first_run_card.height / 2),
+                                 g_first_run_card.width, g_first_run_card.height);
+  // GPUI's glass fills the window; it's kept to the card, which the UI draws over it.
+  for (NSView* view in content.subviews) {
+    if ([view isKindOfClass:NSVisualEffectView.class]) {
+      NSVisualEffectView* glass = (NSVisualEffectView*)view;
+      glass.autoresizingMask = NSViewNotSizable;
+      glass.frame = card;
+      glass.maskImage = FirstRunMask(g_first_run_radius);
+    }
+  }
+  // The shadow is the window's drawn shape, read once this frame is on screen.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [g_first_run invalidateShadow];
+  });
+}
+
+void host_set_first_run_frame(double width, double height, double radius) {
+  if (!g_first_run) {
+    return;
+  }
+  g_first_run_card = NSMakeSize(width, height);
+  g_first_run_radius = radius;
+  PlaceFirstRunGlass();
+}
+
+// Whether Stage Manager, which places the windows on its stage itself, is on, read from the setting
+// its switch writes as the system has no documented call for it: a wrong read means the cross-fade
+// or a grow nobody tried, never a prompt.
+static bool StageManagerOn() {
+  return [[[NSUserDefaults alloc] initWithSuiteName:@"com.apple.WindowManager"]
+      boolForKey:@"GloballyEnabled"];
+}
+
+bool host_grow_first_run(void) {
+  if (!g_first_run.visible || g_first_run_card.width <= 0 || StageManagerOn()) {
+    return false;
+  }
+  // The window first run ends on: the one held, and with none or more than one there's no saying.
+  NSWindow* held = nil;
+  NSView* held_view = nil;
+  for (auto& browser : g_browsers) {
+    if (!browser->held) {
+      continue;
+    }
+    if (held) {
+      return false;
+    }
+    held = browser->window;
+    held_view = browser->ui_view;
+  }
+  if (!held || held.miniaturized || (held.styleMask & NSWindowStyleMaskFullScreen)) {
+    return false;
+  }
+  // The card stays where it is as its window grows round it, so the held window's frame must hold
+  // first run's with the same centre, as it does unless either was moved, and be whole on its
+  // display.
+  const NSRect from = g_first_run.frame;
+  const NSRect to = held.frame;
+  NSScreen* screen = g_first_run.screen;
+  if (!screen || !NSContainsRect(screen.frame, to) || !NSContainsRect(to, from) ||
+      fabs(NSMidX(to) - NSMidX(from)) > 1 || fabs(NSMidY(to) - NSMidY(from)) > 1) {
+    return false;
+  }
+  // On the next turn, not here: the ask comes while the UI handles the press, and GPUI can neither
+  // hear of the new size nor draw at it until that's over. The frame, the glass in its place in it
+  // and the UI's picture at the new size then reach the screen as one. Where either window isn't
+  // by then the one this answered for, nothing changes, and the card grows to the window as it is.
+  NSWindow* first_run = g_first_run;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (g_first_run != first_run || !first_run.visible || !StaysHeld(held) ||
+        !NSEqualRects(held.frame, to) || !NSEqualRects(first_run.frame, from)) {
+      return;
+    }
+    [g_first_run setFrame:to display:NO];
+    PlaceFirstRunGlass();
+    [g_first_run_view.layer setNeedsDisplay];
+    [g_first_run_view.layer displayIfNeeded];
+    // Under the card from the grow's start, unseen, so the UI and its pages draw it on their own
+    // frames while the card grows, and the reveal only changes opacities: drawn at the reveal or
+    // at the exit's end, as before, it took frames from the card's motion or left the grown card
+    // blank until it came.
+    ShowWindow((__bridge void*)held_view, first_run, true);
+    g_under_first_run = held;
+  });
+  return true;
+}
+
+void host_set_first_run_reveal(double window, double glass) {
+  if (!g_first_run || !g_under_first_run) {
+    return;
+  }
+  g_under_first_run.alphaValue = MAX(window, kUnseen);
+  for (NSView* view in g_first_run.contentView.subviews) {
+    if ([view isKindOfClass:NSVisualEffectView.class]) {
+      view.alphaValue = glass;
+    }
+  }
+}
+
+void host_show_first_run(void) {
+  if (!g_first_run) {
+    return;
+  }
+  // On screen once the UI has drawn it, as Settings comes, and centred on the screen the browser
+  // window opens on, as it opens before any.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!g_first_run) {
+      return;
+    }
+    NSRect visible = WindowScreen().visibleFrame;
+    NSSize size = g_first_run.frame.size;
+    [g_first_run setFrameOrigin:NSMakePoint(round(NSMidX(visible) - size.width / 2),
+                                            round(NSMidY(visible) - size.height / 2))];
+    [g_first_run_view.layer setNeedsDisplay];
+    [g_first_run_view.layer displayIfNeeded];
+    [g_first_run makeKeyAndOrderFront:nil];
+    host_close_launch_window();
+    // check.sh waits for this line.
+    fprintf(stderr, "browser: first run shown\n");
+  });
+}
+
+void host_close_first_run(void) {
+  // With the window it held on in its place, it goes whole on this turn, with none of AppKit's
+  // fade for a window ordered out: what fades behind that window shows through its material.
+  if (g_took_first_runs_place) {
+    g_took_first_runs_place = false;
+    g_first_run.animationBehavior = NSWindowAnimationBehaviorNone;
+  }
+  // A window still under it, as on a quit mid-exit, isn't left unseen.
+  g_under_first_run.alphaValue = 1;
+  g_under_first_run = nil;
+  [g_first_run orderOut:nil];
+  g_first_run = nil;
+  g_first_run_view = nil;
+  g_first_run_card = NSZeroSize;
+}
+
 bool host_close_other_window(void) {
   NSWindow* key = NSApp.keyWindow;
   // The browser window, the windows over it and Settings take ⌘W themselves.
@@ -6086,7 +6470,11 @@ bool host_close_other_window(void) {
       !(key.styleMask & NSWindowStyleMaskClosable)) {
     return false;
   }
-  [key performClose:nil];
+  // Closed after the menu's action returns: a GPUI window closing inside it finds the app borrowed
+  // and aborts.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [key performClose:nil];
+  });
   return true;
 }
 

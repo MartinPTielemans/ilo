@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    Modifiers, MouseButton, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext,
+    Modifiers, MouseButton, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext, TouchPhase,
     VisualTestContext, point, px,
 };
 
@@ -308,6 +308,47 @@ fn a_picker_closes_the_card(cx: &mut TestAppContext) {
     assert!(rests(cx, 4), "the icon picker closed");
 }
 
+/// A colour typed in the theme picker's value field and left there is kept as a swipe across the
+/// sidebar takes the picker away, as a press outside would keep it.
+#[gpui::test]
+fn a_swipe_keeps_the_colour_typed_in_the_theme_picker(cx: &mut TestAppContext) {
+    cx.update(|cx| theme_picker::open(Rc::new(NoWhere), cx));
+    let (shell, cx, host) = with_tabs(cx);
+    shell.update(cx, |shell, cx| {
+        let space = (
+            1,
+            "Work".into(),
+            Some(0x5fa9e8),
+            1,
+            "".into(),
+            "".into(),
+            "".into(),
+        );
+        shell.set_spaces(vec![space], cx);
+        let at = theme_picker::At::Row(point(200., 100.));
+        shell.show_theme_picker(1, at, false, cx);
+    });
+    cx.run_until_parked();
+    theme_picker::type_value_for_test("e5605f", &mut cx.cx);
+    host.take_edits();
+    let across = |touch_phase, x: f32| ScrollEvent {
+        position: point(px(60.), px(300.)),
+        delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+        touch_phase,
+        ..Default::default()
+    };
+    cx.simulate_event(across(TouchPhase::Started, 0.));
+    cx.simulate_event(across(TouchPhase::Moved, 40.));
+    cx.run_until_parked();
+    let open = cx.update(|_, cx| theme_picker::open_for(cx));
+    assert_eq!(open, None, "the swipe left the picker open");
+    let edits = host.take_edits();
+    let kept = format!("color 1 Some({})", 0xe5605f);
+    assert!(edits.contains(&kept), "{edits:?}");
+    cx.simulate_event(across(TouchPhase::Ended, 0.));
+    cx.run_until_parked();
+}
+
 /// Each button makes the call the row's menu makes, or for Split, the one its drag onto the page
 /// makes, beside the tab shown.
 #[gpui::test]
@@ -401,7 +442,7 @@ fn hidden_tabs_are_pictured_once_the_switches_are_quiet(cx: &mut TestAppContext)
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
     assert!(pictured(&host).is_empty(), "another switch puts it off");
-    // Asked once the last switch has been quiet for the Dock dot's 400 ms, while the core may
+    // Asked once the last switch has been quiet for 400 ms, while the core may
     // still keep the page it left on screen, which it holds for the picture (#1658).
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
@@ -867,4 +908,55 @@ fn no_card_asks_in_an_agents_space_or_a_private_window(cx: &mut TestAppContext) 
     host.take();
     assert!(asked_on_show(&shell, cx, &host, 20).is_empty());
     assert_eq!(host.card.borrow().clone().unwrap().card.recent, None);
+}
+
+/// No card rests while a row's menu is up, the pointer on that row or another, and once the menu
+/// closes with the pointer still on the row, its card rests again with no move, to show after its
+/// wait (#4108; a menu opened by a real click in the overlays run).
+#[gpui::test]
+fn a_rows_card_rests_again_once_its_menu_closes_under_the_pointer(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    let frame = shell.read_with(cx, |shell, _| shell.tip_frames.borrow()[&3]);
+    cx.simulate_mouse_move(frame.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    let rests = |host: &Recorder| {
+        (host.take().into_iter())
+            .filter(|call| call.starts_with("card rest"))
+            .count()
+    };
+    assert_eq!(rests(&host), 1, "the pointer on the row rests for its card");
+    shell.update(cx, |shell, cx| shell.tab_menu(3, frame.center(), cx));
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| shell.hover_card(Row::Tab(3), true, cx));
+    assert_eq!(rests(&host), 0, "a card rested under the row's open menu");
+    cx.update(|_, cx| host.dismiss(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        rests(&host),
+        1,
+        "the row's card didn't rest again as its menu closed"
+    );
+}
+
+/// A pick in a row's menu under the pointer rests no card for it: Archive Tab's row is going, and a
+/// renamed row holds its field; the next move does, as for any row.
+#[gpui::test]
+fn a_pick_in_a_rows_menu_rests_no_card_for_it(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_tabs(cx);
+    let frame = shell.read_with(cx, |shell, _| shell.tip_frames.borrow()[&3]);
+    cx.simulate_mouse_move(frame.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    for pick in ["Archive Tab", "Rename…"] {
+        host.take();
+        shell.update(cx, |shell, cx| shell.tab_menu(3, frame.center(), cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| host.choose(pick, cx));
+        cx.run_until_parked();
+        let asked = host.take();
+        assert!(
+            !asked.iter().any(|call| call.starts_with("card rest")),
+            "{pick} rested a card for its row: {asked:?}"
+        );
+        shell.update(cx, |shell, cx| shell.renaming = None);
+    }
 }

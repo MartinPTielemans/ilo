@@ -7,7 +7,7 @@
 # profile's settings and any action agents don't have, whatever the tab, with why in the activity
 # log, and none starts a session. A task's Space, an agent's whose id starts with task-, is never
 # listed either. After a quit, neither comes back as a Space of the user's.
-# Settings › Agents' Connect finds Claude Code's claude where a terminal would, though the browser's
+# Settings › Other apps' Connect finds Claude Code's claude where a terminal would, though the browser's
 # PATH doesn't have it: on Windows where its own installer, winget or npm put it (#1420), on the Mac
 # in ~/.local/bin, which only ~/.zshrc puts on PATH (#1441), run with that PATH, as npm's claude
 # needs it to find node. It gives claude the browser's server whole, which runs and reaches the
@@ -135,7 +135,7 @@ await '^browser: library shown$' || fail "the Library didn't settle open on Agen
 grep -q 'check-new' "$history_file" || fail "the hour-old past task went: $(cat "$history_file")"
 grep -q 'check-old' "$history_file" && fail "the 30-day-old past task stayed: $(cat "$history_file")"
 # A click on its row opens its page: its site, where Claude Code may always act, with Revoke, and its
-# steps. Revoke there takes the answer, as Settings › Agents' does, and Back goes to the list.
+# steps. Revoke there takes the answer, as Settings › Other apps' does, and Back goes to the list.
 session_page=
 if [ "$driven" = 1 ]; then
   at=$(drawn 'library past check-new') || fail "the past task's row wasn't drawn"
@@ -265,7 +265,7 @@ fi
 commanded=
 if windows || [ -n "$mac" ]; then
   socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
-  name="$(echo "$app_name" | tr '[:upper:]' '[:lower:]')-dev"
+  name="$(echo "$product" | tr '[:upper:]' '[:lower:]')-dev"
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
@@ -278,7 +278,7 @@ if windows || [ -n "$mac" ]; then
     expect "^browser: settings tab $1\$" "a click on $1 didn't show its tab"
     settings_drew "$1"
   }
-  settings_tab Agents
+  settings_tab 'Other apps'
   # Waits up to 30 s for the calls file $1 to have $2 lines.
   calls_reach() {
     for _ in $(seq 300); do
@@ -330,7 +330,7 @@ PY
     [ "$(grep -c '^browser: agent claude-code hello from check$' "$log")" -gt "$hellos" ] ||
       fail "the server Claude Code got didn't take its token as Claude Code's"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     ../tools/window-screenshot.sh "$pid" "$out/connected-$2.png" all || fail "no window to capture"
     click_in_sight "disconnect claude-code"
     expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
@@ -338,7 +338,7 @@ PY
     [ "$(tail -1 "$calls")" = "[\"mcp\",\"remove\",\"--scope\",\"user\",\"$name\"]" ] ||
       fail "Disconnect ran claude with $(tail -1 "$calls")"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
   }
   if windows; then installs="native winget npm"; else installs=native; fi
   for kind in $installs; do
@@ -361,18 +361,18 @@ PY
   expect_late '^browser: agent claude-code connected$' "Connect with $(basename "$standin") didn't connect"
   rm -rf "$native"
   settings_tab General
-  settings_tab Agents
+  settings_tab 'Other apps'
   click_in_sight "disconnect claude-code"
   expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
   expect_late "^browser: agent claude-code config kept: Claude Code's claude command isn't installed\.\$" \
     "Disconnect with claude gone didn't say it isn't installed"
   settings_tab General
-  settings_tab Agents
+  settings_tab 'Other apps'
   click_in_sight "connect claude-code"
   expect_late "^browser: agent claude-code couldn't connect: Claude Code's claude command isn't installed\.\$" \
     "Connect with no claude didn't say it isn't installed"
   settings_tab General
-  settings_tab Agents
+  settings_tab 'Other apps'
   ../tools/window-screenshot.sh "$pid" "$out/not-installed.png" all || fail "no window to capture"
   # The ilo command (#3667), on the Mac: Add links ilo in the run's ~/.local/bin to the program
   # beside the browser's and writes its agent file, only the user's to read, in the profile; ilo
@@ -390,33 +390,33 @@ PY
     expect_late '^browser: agent ilo-command \(connected\|couldn.t connect: .*\)$' "Add didn't finish"
     logged '^browser: agent ilo-command connected$' ||
       fail "Add failed: $(sed -n 's/^browser: agent ilo-command couldn.t connect: //p' "$log" | tail -1)"
-    [ "$(readlink "$bin/ilo")" = "$program" ] ||
-      fail "Add linked ~/.local/bin/ilo to '$(readlink "$bin/ilo")', not $program"
-    [ "$(stat -f %Lp "$profile/ilo-command")" = 600 ] ||
-      fail "the agent file is mode $(stat -f %Lp "$profile/ilo-command"), not 600"
-    tabs=$(ilo "$bin/ilo" tabs --as Checker 2>&1) || fail "ilo tabs failed ($?): $tabs"
+    [ "$(readlink "$bin/$product")" = "$program" ] ||
+      fail "Add linked ~/.local/bin/$product to '$(readlink "$bin/$product")', not $program"
+    [ "$(stat -f %Lp "$profile/$product-command")" = 600 ] ||
+      fail "the agent file is mode $(stat -f %Lp "$profile/$product-command"), not 600"
+    tabs=$(ilo "$bin/$product" tabs --as Checker 2>&1) || fail "ilo tabs failed ($?): $tabs"
     expect '^browser: agent ilo-command hello from Checker$' "ilo tabs didn't reach the browser as the ilo command"
-    help=$(ilo "$bin/ilo" help 2>&1) || fail "ilo help failed ($?): $help"
-    case $help in *"ilo click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
+    help=$(ilo "$bin/$product" help 2>&1) || fail "ilo help failed ($?): $help"
+    case $help in *"$product click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
     ../tools/window-screenshot.sh "$pid" "$out/command-added.png" all || fail "no window to capture"
     # The shell no longer puts the folder on PATH: the row gives the line to paste.
     echo 'export PATH="$HOME/.node/bin:$PATH"' > "$home/.zshrc"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     in_sight "ilo-command copy line" || fail "with ~/.local/bin off PATH the row drew no Copy Line"
     ../tools/window-screenshot.sh "$pid" "$out/command-unsearched.png" all ||
       fail "no window to capture"
     click_in_sight "ilo-command remove"
     expect '^browser: agent ilo-command disconnected$' "a click on Remove didn't remove the ilo command"
     for _ in $(seq 100); do
-      [ -e "$bin/ilo" ] || [ -L "$bin/ilo" ] || [ -e "$profile/ilo-command" ] || break
+      [ -e "$bin/$product" ] || [ -L "$bin/$product" ] || [ -e "$profile/$product-command" ] || break
       sleep 0.1
     done
-    [ ! -L "$bin/ilo" ] || fail "Remove left the link"
-    [ ! -e "$profile/ilo-command" ] || fail "Remove left the agent file"
+    [ ! -L "$bin/$product" ] || fail "Remove left the link"
+    [ ! -e "$profile/$product-command" ] || fail "Remove left the agent file"
     [ "$(ls "$bin")" = tool ] && [ "$(cat "$bin/tool")" = kept ] ||
       fail "Remove didn't leave ~/.local/bin as it was: $(ls -l "$bin")"
     code=0
@@ -425,7 +425,7 @@ PY
     commanded="; Add links ilo in ~/.local/bin, which reaches the browser as its own agent with help from its tools, the row gives the line to paste once the folder is off PATH, and Remove leaves the folder as it was"
   elif windows; then
     # The ilo command (#3667), on Windows: Add puts bin, beside chrome.exe, on the user's PATH in
-    # the registry, last, and writes its agent file in the profile; bin\ilo.exe then reaches the
+    # the registry, last, and writes its agent file in the profile; bin\<product>.exe then reaches the
     # browser as its own agent, and help lists the server's tools. Remove takes back that entry,
     # leaving the runner's PATH as it was, and the agent file. The runner's PATH is saved first and
     # put back as the run ends, however it ends.
@@ -466,18 +466,18 @@ EOF
       fail "Add failed: $(sed -n 's/^browser: agent ilo-command couldn.t connect: //p' "$log" | tail -1)"
     last=$(python3 -I "$out/user-path.py" last "$out/user-path.json" | tr -d '\r')
     [ "$last" = "$entry" ] || fail "Add didn't put $entry last on the user's PATH: its last entry is '$last'"
-    [ -s "$profile/ilo-command" ] || fail "Add wrote no agent file in $profile"
-    ilo() { BROWSER_PROFILE_DIR=$(cygpath -w "$profile") "$app/bin/ilo.exe" "$@"; }
+    [ -s "$profile/$product-command" ] || fail "Add wrote no agent file in $profile"
+    ilo() { BROWSER_PROFILE_DIR=$(cygpath -w "$profile") "$app/bin/$product.exe" "$@"; }
     tabs=$(ilo tabs --as Checker 2>&1) || fail "ilo tabs failed ($?): $tabs"
     expect '^browser: agent ilo-command hello from Checker$' "ilo tabs didn't reach the browser as the ilo command"
     help=$(ilo help 2>&1) || fail "ilo help failed ($?): $help"
-    case $help in *"ilo click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
+    case $help in *"$product click <ref>"*) ;; *) fail "ilo help listed no click: $help" ;; esac
     # An uninstall takes Add's entry off the PATH and leaves the profile, so after a reinstall the
     # agent file still records it (#3783). With the entry taken off as the uninstaller does, the
     # row says the command isn't added, and Add puts the entry back.
     python3 -I "$out/user-path.py" restore "$out/user-path.json" || fail "couldn't take the entry off the PATH"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     expect '^browser: agent ilo-command looked: not found$' \
       "with Add's entry taken off the PATH, the row didn't look for it and find it gone: it still says the command is added"
     in_sight "ilo-command add" || fail "with Add's entry taken off the PATH, the row drew no Add"
@@ -491,23 +491,23 @@ EOF
     last=$(python3 -I "$out/user-path.py" last "$out/user-path.json" | tr -d '\r')
     [ "$last" = "$entry" ] || fail "Add again didn't put $entry back last on the user's PATH: its last entry is '$last'"
     settings_tab General
-    settings_tab Agents
+    settings_tab 'Other apps'
     expect '^browser: agent ilo-command looked: found$' "with the entry back on the PATH, the row didn't find it"
     in_sight "ilo-command remove" || fail "the added row drew no Remove"
     ../tools/window-screenshot.sh "$pid" "$out/command-added.png" all || fail "no window to capture"
     click_in_sight "ilo-command remove"
     expect '^browser: agent ilo-command disconnected$' "a click on Remove didn't remove the ilo command"
     for _ in $(seq 100); do
-      [ -e "$profile/ilo-command" ] || break
+      [ -e "$profile/$product-command" ] || break
       sleep 0.1
     done
-    [ ! -e "$profile/ilo-command" ] || fail "Remove left the agent file"
+    [ ! -e "$profile/$product-command" ] || fail "Remove left the agent file"
     changed=$(python3 -I "$out/user-path.py" same "$out/user-path.json" | tr -d '\r')
     [ -z "$changed" ] || fail "Remove didn't leave the user's PATH as it was: it's $changed"
     code=0
     gone=$(ilo tabs 2>&1) || code=$?
     [ "$code" = 4 ] || fail "ilo after Remove ended $code, not 4: $gone"
-    commanded="; Add puts bin\\ilo.exe's folder last on the user's PATH, which reaches the browser as its own agent with help from its tools, with the entry taken off as an uninstall does the row is Add again and Add puts it back, and Remove leaves the PATH as it was"
+    commanded="; Add puts bin\\$product.exe's folder last on the user's PATH, which reaches the browser as its own agent with help from its tools, with the entry taken off as an uninstall does the row is Add again and Add puts it back, and Remove leaves the PATH as it was"
   fi
   quit
   rm -f "$agents_file"
@@ -529,7 +529,7 @@ if windows; then
   rm -rf "$home"
   python=$(python3 -I -c 'import sys; print(sys.executable)')
   # What a stand-in answers, as the CLI named first, which is the kind of program it is second:
-  # claude's and codex's status, codex's app-server's model list, with a model named for the kind,
+  # claude's status, codex's app-server's account and model list, with a model named for the kind,
   # and a task on either, whose instructions and first message it writes beside itself, as
   # task-<cli>.json, before it answers and ends its turn.
   cat > "$out/task-cli.py" << 'EOF'
@@ -543,8 +543,6 @@ def say(message):
     print(json.dumps(message), flush=True)
 if cli == "claude" and args == ["auth", "status", "--json"]:
     say({"loggedIn": True, "authMethod": "check"})
-elif cli == "codex" and args == ["login", "status"]:
-    print("Logged in using ChatGPT")
 elif cli == "claude" and "-p" in args:
     at = args.index("--append-system-prompt-file") + 1
     with open(args[at], encoding="utf-8") as file:
@@ -562,6 +560,8 @@ elif cli == "codex" and args == ["app-server"]:
         method, id = message.get("method"), message.get("id")
         if method == "initialize":
             say({"id": id, "result": {}})
+        elif method == "account/read":
+            say({"id": id, "result": {"account": {"type": "chatgpt", "planType": "plus"}, "requiresOpenaiAuth": True}})
         elif method == "model/list":
             say({"id": id, "result": {"data": [{"id": f"check-{kind}", "displayName": f"Check {kind}"}]}})
         elif method == "thread/start":
@@ -693,8 +693,8 @@ EOF
     send menu Settings…
     expect '^browser: settings shown ' "Settings… didn't show Settings"
     settings_drew
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its tab"
+    send clickkey $(drawn "toolbar Models")
+    expect '^browser: settings tab Models$' "a click on Models didn't show its tab"
     for cli in "$1" "$2"; do
       task_cli=$(basename "$cli"); task_cli=${task_cli%.*}
       line="browser: task agent $task_cli is SignedIn at $(cygpath -w "$cli")"
@@ -714,17 +714,30 @@ EOF
       fail "no window to capture"
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-    # A task from ⌘T on each, Claude first, as the agent listed first, then Codex, below it.
+    # A task from ⌘T on each: Claude first, as the agent listed first, which the composer starts
+    # on; then Codex, once Settings' mark runs tasks with it, which puts it first.
+    agents="Claude, Codex"
     for cli in "$1" "$2"; do
       task_cli=$(basename "$cli"); task_cli=${task_cli%.*}
       asked="Find a flight on $task_cli"
+      if [ "$task_cli" = codex ]; then
+        send menu Settings…
+        expect '^browser: settings shown ' "Settings… didn't show Settings again"
+        settings_drew
+        # Settings kept its Agents tab while hidden, where it last logged Codex's mark.
+        at=$(drawn "assistant mark codex") || fail "Settings › Agents logged no mark for Codex"
+        send clickkey $at
+        expect '^browser: tasks run on codex$' "a click on Codex's mark didn't run tasks with it"
+        send key w cmd
+        expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+        agents="Codex, Claude"
+      fi
       send key t cmd
       expect '^browser: command bar shown$' "⌘T didn't open the command bar"
       send type "$asked"
       send key tab
       expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a task"
-      expect '^browser: command bar agents: Claude, Codex$' "⇥ didn't list Claude and Codex, signed in"
-      [ "$task_cli" = codex ] && send key down
+      expect "^browser: command bar agents: $agents\$" "⇥ didn't list $agents, signed in, in that order"
       send key return
       expect "^browser: command bar runs a task on $task_cli\$" "↩ didn't run the task on $task_cli"
       expect_late "^browser: task task-[0-9]* on $task_cli asked from space " "the task on $task_cli didn't start"

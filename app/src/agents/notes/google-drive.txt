@@ -1,0 +1,13 @@
+source: https://support.google.com/drive/answer/2563044
+checked: 2026-11-27
+holds: shortcuts
+---
+Keys beat clicks
+⌘+/ on a Mac, Ctrl+/ elsewhere, lists every key, and / puts the cursor in search.
+Shift+Space selects an item or clears it. Selected, Enter opens items, F2 renames them, ⌘+Option+M moves them to a folder, ⌘+Option+A shares them and ⌘+Option+P previews them, with Ctrl+Alt for ⌘+Option elsewhere.
+Control+C then f, t or s makes a folder, a document or a spreadsheet on a Mac, and Alt+C then the letter elsewhere.
+Option+V then l switches the items between a grid and a list, and Option+V then d shows the details; Alt+V elsewhere.
+Option+G then f, i, c or d moves to the folders, the items, the page's content or the details; Alt+G elsewhere.
+
+Know before you start
+Some keys differ on keyboards set to other languages.

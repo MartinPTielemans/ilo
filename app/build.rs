@@ -1,5 +1,20 @@
 use std::path::{Path, PathBuf};
 
+/// The files wall's launcher (#4101), built for the tests that start it by the script build.sh
+/// builds the app's with: one C file and the system's compiler, on the Mac alone.
+fn wall_launcher(root: &Path) {
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wall-launcher");
+    let built = std::process::Command::new("bash")
+        .arg(root.join("platform/mac/wall_launcher.sh"))
+        .arg(&out)
+        .status();
+    assert!(
+        built.is_ok_and(|status| status.success()),
+        "the files wall's launcher didn't compile: platform/mac/wall_launcher.sh needs cc"
+    );
+    println!("cargo:rustc-env=WALL_LAUNCHER={}", out.display());
+}
+
 fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let header = root.join("../core/public/browser_core.h");
@@ -7,6 +22,9 @@ fn main() {
 
     println!("cargo::rustc-check-cfg=cfg(engine_header_mismatch)");
     native(&root, &header, &os);
+    if os == "macos" {
+        wall_launcher(&root);
+    }
 
     // The core's API, read from its header, so the two can't drift.
     bindgen::Builder::default()
@@ -26,6 +44,17 @@ fn main() {
     let name_text = std::fs::read_to_string(&name).expect("no branding/name");
     println!("cargo:rustc-env=APP_NAME={}", name_text.trim());
     println!("cargo:rerun-if-changed={}", name.display());
+    // The product's name as the app's own strings say it (src/product.rs), which a fork changes
+    // as it does the name above; the bundle, its file and data folder keep branding/name.
+    let product = root.join("branding/product");
+    let product_text = std::fs::read_to_string(&product).expect("no branding/product");
+    println!("cargo:rustc-env=PRODUCT_NAME={}", product_text.trim());
+    // The variable that names the command's agent, from the command's name (agents::command).
+    println!(
+        "cargo:rustc-env=PRODUCT_AS={}_AS",
+        product_text.trim().to_uppercase()
+    );
+    println!("cargo:rerun-if-changed={}", product.display());
     // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
     // where a new issue is filed (src/build_info.rs).
     for (file, variable) in [
@@ -90,8 +119,8 @@ fn native(root: &Path, header: &Path, os: &str) {
             host.file("platform/mac/host.mm")
                 .file("platform/mac/drive.mm")
                 .file("platform/mac/menu_window.mm")
+                .file("platform/mac/glass.mm")
                 .file("platform/mac/emoji.mm")
-                .file("platform/mac/dock.mm")
                 .file("platform/mac/needs_you.mm")
                 .file("platform/mac/updates.mm")
                 .file("platform/mac/scripting.mm")
@@ -419,12 +448,20 @@ fn tokens_rs(toml: &str) -> String {
             }
             name.replace('-', "_")
         };
+        // A word is quoted letters, digits and spaces, so it needs no escapes and holds no `,` or
+        // `#` the lines here split on.
         let number = |value: &str| match value.strip_prefix("0x") {
             Some(hex) if hex.chars().all(|c| c.is_ascii_hexdigit() || c == '_') => "u32",
             Some(_) => fail(n, line, "not a hex number"),
             None if value.chars().all(|c| c.is_ascii_digit() || c == '_') => "u32",
             None if value.replace('_', "").parse::<f64>().is_ok() => "f32",
-            None => fail(n, line, "not a number"),
+            None => match value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+            {
+                Some(word) if word.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ') => "&str",
+                _ => fail(n, line, "not a number or a word"),
+            },
         };
         if line.is_empty() {
             docs.clear();

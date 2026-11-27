@@ -39,6 +39,35 @@ fn shown_as(
     (input, cx.clone())
 }
 
+/// What the field below takes its placeholder from, as an owner's look is.
+struct Look(Hsla);
+
+impl gpui::Global for Look {}
+
+// A field stays as its window goes from dark to light, so it has no colours from its making: it
+// asks for them each time it draws.
+#[gpui::test]
+fn a_field_draws_in_the_colours_its_owner_has_now(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_global(Look(gpui::black())));
+    let (shows, cx) = cx.add_window_view(|_, cx| {
+        Shows(cx.new(|cx| {
+            TextInput::new("Search", cx).follows(|cx| Colors::placeholder(cx.global::<Look>().0))
+        }))
+    });
+    let input = cx.read(|cx| shows.read(cx).0.clone());
+    cx.run_until_parked();
+    let made_in = input.read_with(cx, |input, _| input.colors());
+    assert_eq!(made_in, Colors::placeholder(gpui::black()));
+
+    cx.update(|window, cx| {
+        cx.set_global(Look(gpui::white()));
+        window.refresh();
+    });
+    cx.run_until_parked();
+    let drawn = input.read_with(cx, |input, _| input.colors());
+    assert_eq!(drawn, Colors::placeholder(gpui::white()));
+}
+
 fn caret(
     input: &Entity<TextInput>,
     at: usize,
@@ -477,4 +506,21 @@ fn korean_backspace_takes_a_syllable_apart(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("left");
     compose(&input, korean::HANGEUL, &mut cx);
     assert_eq!(shows(&input, &mut cx), ("a한글b".into(), 7..7, true));
+}
+
+/// A field draws the caret and the selection its owner gives. One whose owner gives none wears no
+/// colour of its own: its caret is the colour its text is drawn in and its selection that colour
+/// at the token's share, each on its own, whatever the Space.
+#[test]
+fn a_field_with_no_caret_of_its_owners_draws_it_in_its_texts_colour() {
+    let (text, given, behind) = (gpui::white(), gpui::red(), gpui::blue());
+    let faint = text.opacity(NO_THEME_SELECTION);
+    assert_eq!(Colors::default().caret, None);
+    assert_eq!(Colors::default().selection, None);
+    assert_eq!(own_or_texts(None, None, text), (text, faint));
+    assert_eq!(own_or_texts(Some(given), None, text), (given, faint));
+    assert_eq!(
+        own_or_texts(Some(given), Some(behind), text),
+        (given, behind)
+    );
 }

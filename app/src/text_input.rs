@@ -18,7 +18,7 @@ use std::{
 
 use crate::menu::Closed;
 use crate::shell::MenuEntry;
-use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
+use crate::tokens::palette::NO_THEME_SELECTION;
 use crate::tokens::text_input::PLACEHOLDER;
 use gpui::{
     Action, App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId,
@@ -27,7 +27,7 @@ use gpui::{
     MouseUpEvent, PaintQuad, Pixels, Point, Role, ShapedLine, SharedString, Style, Subscription,
     TextRun, UTF16Selection, UnderlineStyle, WeakEntity, WeakFocusHandle, Window, WindowId,
     accesskit, actions, div, fill, hsla, linear_color_stop, linear_gradient, point, prelude::*, px,
-    relative, rgb, size,
+    relative, size,
 };
 use unicode_segmentation::*;
 
@@ -100,8 +100,8 @@ pub fn on_leave<T: 'static>(
 }
 
 /// The user went away from the field with the keyboard still in it: a press outside it, which
-/// moves the keyboard only where it lands on something that takes it, or its own menu closed by a
-/// press away from both or by the user going to another window or app.
+/// moves the keyboard only where it lands on something that takes it, or its own menu closed by
+/// the user going to another window or app. A press that only closes that menu isn't one.
 pub struct Away;
 
 impl EventEmitter<Away> for TextInput {}
@@ -339,13 +339,54 @@ pub fn bind_keys_for(keys: Keys, cx: &mut App) {
     ]);
 }
 
+/// What a field draws its placeholder, its caret and its selection in. A caret its owner gives
+/// none is the colour the field's text is drawn in, and a selection that colour, faint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Colors {
+    pub placeholder: Hsla,
+    pub caret: Option<Hsla>,
+    pub selection: Option<Hsla>,
+}
+
+impl Default for Colors {
+    fn default() -> Self {
+        Colors {
+            placeholder: hsla(0., 0., 0., PLACEHOLDER),
+            caret: None,
+            selection: None,
+        }
+    }
+}
+
+/// The caret and the selection a field draws: its owner's, or for either its owner gives none,
+/// the colour its text is drawn in and that colour faint, since text lies on its selection.
+fn own_or_texts(caret: Option<Hsla>, selection: Option<Hsla>, text: Hsla) -> (Hsla, Hsla) {
+    (
+        caret.unwrap_or(text),
+        selection.unwrap_or_else(|| text.opacity(NO_THEME_SELECTION)),
+    )
+}
+
+impl Colors {
+    /// A field whose owner gives its placeholder alone.
+    pub fn placeholder(placeholder: impl Into<Hsla>) -> Colors {
+        Colors {
+            placeholder: placeholder.into(),
+            ..Colors::default()
+        }
+    }
+}
+
 pub struct TextInput {
     focus_handle: FocusHandle,
     content: SharedString,
     placeholder: SharedString,
     placeholder_color: Hsla,
-    caret_color: Hsla,
-    selection_color: Hsla,
+    caret_color: Option<Hsla>,
+    selection_color: Option<Hsla>,
+    /// Where its colours come from as it draws, for a field that doesn't get them from its owner
+    /// each frame.
+    follows: Option<Box<dyn Fn(&App) -> Colors>>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -370,17 +411,26 @@ pub struct TextInput {
     spoken: Option<SharedString>,
     /// The frame last drawn gave its window the field's input handler, which text needs to get in.
     keyboard_drawn: bool,
+    /// The placeholder starts past the caret, which would otherwise stand on its first letter.
+    after_caret: bool,
+    /// ⌘Z and ⇧⌘Z go on to the window while the field has nothing of its own to undo
+    /// (`passes_undo`).
+    undo_passes: bool,
+    /// The user has changed its text since its owner last set it.
+    edited: bool,
 }
 
 impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
+        let colors = Colors::default();
         Self {
             focus_handle: cx.focus_handle(),
             content: "".into(),
             placeholder: placeholder.into(),
-            placeholder_color: hsla(0., 0., 0., PLACEHOLDER),
-            caret_color: rgb(NO_THEME_ACCENT).into(),
-            selection_color: Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION),
+            placeholder_color: colors.placeholder,
+            caret_color: colors.caret,
+            selection_color: colors.selection,
+            follows: None,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -397,6 +447,9 @@ impl TextInput {
             menu_shown: false,
             spoken: None,
             keyboard_drawn: false,
+            after_caret: false,
+            undo_passes: false,
+            edited: false,
         }
     }
 
@@ -468,34 +521,59 @@ impl TextInput {
         self
     }
 
-    /// The placeholder's colour, for a field on a dark background.
-    pub fn placeholder_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.placeholder_color = color.into();
+    /// ⌘Z and ⇧⌘Z go on to the window while the field holds no text, the user hasn't changed it
+    /// and no input method composes in it, as for a field that takes the keyboard by itself:
+    /// the user didn't come to it, so the keys are for what they did last.
+    pub fn passes_undo(mut self, passes: bool) -> Self {
+        self.undo_passes = passes;
         self
     }
 
-    /// The placeholder's colour as the ground under the field changes, such as with the appearance.
-    pub fn set_placeholder_color(&mut self, color: impl Into<Hsla>, cx: &mut Context<Self>) {
-        let color = color.into();
-        if color != self.placeholder_color {
-            self.placeholder_color = color;
-            cx.notify();
-        }
+    /// Whether ⌘Z and ⇧⌘Z go on to the window now.
+    fn undo_passes_now(&self) -> bool {
+        self.undo_passes && self.content.is_empty() && !self.edited && self.marked_range.is_none()
     }
 
-    /// The placeholder's colour now.
+    /// Its colours are what `colors` says each time it draws. A field has no colours of its own
+    /// to be made with: it outlives a change of its window's look, light to dark or to a Space of
+    /// another colour, and the gray of the look it was made in is close to the other look's
+    /// ground. So `colors` reads the look where its owner keeps it, and holds none.
+    pub fn follows(mut self, colors: impl Fn(&App) -> Colors + 'static) -> Self {
+        self.follows = Some(Box::new(colors));
+        self
+    }
+
+    /// The placeholder's colour as it was last drawn or given.
     pub fn placeholder_hsla(&self) -> Hsla {
         self.placeholder_color
     }
 
-    /// The placeholder's, caret's and selection's colours, for an input whose ground and accent
-    /// change with the Space.
+    /// Its colours as they were last drawn or given.
+    pub fn colors(&self) -> Colors {
+        Colors {
+            placeholder: self.placeholder_color,
+            caret: self.caret_color,
+            selection: self.selection_color,
+        }
+    }
+
+    /// The placeholder's, caret's and selection's colours from an owner that gives them each time
+    /// it draws, before the field does, as the command bar does on its way to every frame.
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
+        self.wear(Colors {
+            placeholder,
+            caret: Some(caret),
+            selection: Some(selection),
+        });
+    }
+
+    /// As `set_colors`, from an owner that may give no caret or no selection of its own.
+    pub fn wear(&mut self, colors: Colors) {
         (
             self.placeholder_color,
             self.caret_color,
             self.selection_color,
-        ) = (placeholder, caret, selection);
+        ) = (colors.placeholder, colors.caret, colors.selection);
     }
 
     /// Fades an edge with more text past it over `width` into `ground`, the opaque fill under the
@@ -504,14 +582,19 @@ impl TextInput {
         self.fade = Some((width, ground));
     }
 
-    pub fn caret_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.caret_color = color.into();
+    /// The placeholder starts past the caret, where a field with no other mark of its start, as a
+    /// reply field in a conversation, would show the caret on the placeholder's first letter.
+    pub fn placeholder_after_caret(mut self) -> Self {
+        self.after_caret = true;
         self
     }
 
-    pub fn selection_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.selection_color = color.into();
-        self
+    /// How far in from the field's start its placeholder is drawn, while it shows.
+    pub fn placeholder_inset(&self) -> Pixels {
+        match self.after_caret && self.content.is_empty() {
+            true => CARET + CARET_GAP,
+            false => px(0.),
+        }
     }
 
     /// Starts with `text` in the field, all selected.
@@ -916,11 +999,9 @@ impl TextInput {
         let chosen: Chosen = Box::new(move |closed, window, cx| {
             let away = field.update(cx, |field, _| {
                 field.menu_shown = false;
-                match closed {
-                    Closed::PressedAt(at) => !field.last_bounds.is_some_and(|it| it.contains(&at)),
-                    Closed::Left => true,
-                    Closed::Chose(_) | Closed::Otherwise => false,
-                }
+                // A press that closed the menu was spent on it, wherever it was, so the field goes
+                // on as it was: only the user leaving the window takes them away from it.
+                closed == Closed::Left
             });
             if let Some(action) = closed
                 .chosen()
@@ -1145,6 +1226,7 @@ impl TextInput {
         self.scroll = px(0.);
         self.is_selecting = false;
         self.word_drag = None;
+        self.edited = false;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -1161,6 +1243,7 @@ impl TextInput {
         self.selection_reversed = false;
         self.undirected = false;
         self.content = text;
+        self.edited = false;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -1275,6 +1358,7 @@ impl EntityInputHandler for TextInput {
         self.selection_reversed = false;
         self.marked_range.take();
         self.pasted = false;
+        self.edited = true;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -1302,6 +1386,7 @@ impl EntityInputHandler for TextInput {
             self.marked_range = None;
         }
         self.pasted = false;
+        self.edited = true;
         let insertion_start_utf16 = self.offset_to_utf16(range.start);
         let inserted_length_utf16 = new_text.encode_utf16().count();
         self.selected_range = new_selected_range_utf16
@@ -1393,7 +1478,9 @@ struct PrepaintState {
 }
 
 /// The caret's width.
-const CARET: Pixels = px(2.);
+pub(crate) const CARET: Pixels = px(2.);
+/// The room between the caret and a placeholder that starts past it.
+const CARET_GAP: Pixels = px(2.);
 
 /// Where a fade is the ground at full, from its inner side: its outer third is solid, so a glyph
 /// the field's edge cuts doesn't show a sliver.
@@ -1535,7 +1622,7 @@ impl Element for TextElement {
                         point(left + cursor_pos, bounds.top()),
                         size(CARET, bounds.bottom() - bounds.top()),
                     ),
-                    input.caret_color,
+                    own_or_texts(input.caret_color, None, style.color).0,
                 )),
             )
         } else {
@@ -1545,7 +1632,7 @@ impl Element for TextElement {
                         point(left + line.x_for_index(selected_range.start), bounds.top()),
                         point(left + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
-                    input.selection_color,
+                    own_or_texts(None, input.selection_color, style.color).1,
                 )),
                 None,
             )
@@ -1610,7 +1697,8 @@ impl Element for TextElement {
             if let Some(selection) = prepaint.selection.take() {
                 window.paint_quad(selection)
             }
-            let origin = point(bounds.left() - prepaint.scroll, bounds.top());
+            let inset = self.input.read(cx).placeholder_inset();
+            let origin = point(bounds.left() - prepaint.scroll + inset, bounds.top());
             line.paint(origin, tall, gpui::TextAlign::Left, None, window, cx)
                 .unwrap();
             for fade in prepaint.fades.drain(..) {
@@ -1644,6 +1732,10 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Asked each frame, as its owner's look may have changed since the last.
+        if let Some(colors) = self.follows.as_ref().map(|colors| colors(cx)) {
+            self.wear(colors);
+        }
         div()
             .id("text-input")
             // A text field called what its placeholder asks for, saying what's typed in it, while
@@ -1723,9 +1815,18 @@ impl Render for TextInput {
             }))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
-            // A field has no undo yet. Its ⌘Z stops here, so it doesn't undo a Clear.
-            .on_action(|_: &Undo, _, _| {})
-            .on_action(|_: &Redo, _, _| {})
+            // A field has no undo yet. Its ⌘Z stops here, so it doesn't undo a Clear, unless it
+            // passes it on (`passes_undo`).
+            .on_action(cx.listener(|field, _: &Undo, _, cx| {
+                if field.undo_passes_now() {
+                    cx.propagate()
+                }
+            }))
+            .on_action(cx.listener(|field, _: &Redo, _, cx| {
+                if field.undo_passes_now() {
+                    cx.propagate()
+                }
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))

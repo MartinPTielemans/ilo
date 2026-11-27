@@ -8,15 +8,16 @@ use std::rc::Rc;
 use chrono::{Local, NaiveDate, TimeZone};
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
-use super::history_list::history_text_end;
 use super::{
-    ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_RIGHT, Archived, COLUMN_WIDTH,
-    FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, LIBRARY_WIDTH,
-    Pointed, SEARCH_HEIGHT, SEARCH_TOP, Visited, history_when,
+    ARCHIVE_TOP, ARCHIVE_WIDTH, Archived, COLUMN_WIDTH, FILTER_CHEVRON, FILTER_PAD_RIGHT,
+    HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, LIBRARY_WIDTH, Pointed, SEARCH_HEIGHT,
+    SEARCH_RIGHT, SEARCH_TOP, Visited, history_when,
 };
 use crate::agent_history::{self, Past};
+use crate::product::PRODUCT;
 use crate::shell::{Command, Folders, Section, Shell, recorder::Recorder};
-use crate::tokens::shell::{CLOSE_RIGHT, CLOSE_SIZE};
+use crate::tokens::shell::CLOSE_SIZE;
+use crate::tokens::shell::library::{HISTORY_GAP, HISTORY_PITCH, HISTORY_POINTED_RIGHT, SEARCH_X};
 
 /// The profile of the window's Space.
 const PROFILE: u64 = 7;
@@ -141,6 +142,7 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
         let library = shell.library.as_ref().unwrap();
         let named = library.items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Tab(index) => format!("closed {}", shell.archive[*index].title),
             Item::Visit(index) => {
                 let visit = &library.history.pages[*index];
@@ -159,14 +161,14 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
 fn row(row: usize) -> gpui::Point<gpui::Pixels> {
     let top = ARCHIVE_TOP + HEADING_TOP + HEADING_HEIGHT + HEADING_BOTTOM;
     point(
-        px(COLUMN_WIDTH + ARCHIVED_LEFT + 60.),
-        px(top + ARCHIVED_PITCH * (row as f32 + 0.5)),
+        px(COLUMN_WIDTH + SEARCH_X + 60.),
+        px(top + HISTORY_PITCH * (row as f32 + 0.5)),
     )
 }
 
 fn filter(host: &Recorder, choice: &str, cx: &mut VisualTestContext) {
     let filter = point(
-        px(FILTER_X + FILTER_WIDTH / 2.),
+        px(COLUMN_WIDTH + ARCHIVE_WIDTH - SEARCH_RIGHT - FILTER_PAD_RIGHT - FILTER_CHEVRON / 2.),
         px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
     );
     cx.simulate_click(filter, Modifiers::none());
@@ -379,9 +381,230 @@ fn task() -> crate::agents::task::ArchivedTask {
         title: "Lisbon museum hours".into(),
         asked: "Which museums in Lisbon open on Monday?".into(),
         dot: crate::agents::task::Dot::Done,
-        about: "Claude · Done 13:31 · 1 page".into(),
-        left: at(9, 13),
+        about: format!("{PRODUCT} · Done").into(),
+        ended: at(9, 13),
+        pages: "1 page".into(),
     }
+}
+
+/// After a quit and a launch, the composer's Latest tasks lists the task that run left (#4105), in
+/// the Spaces of its own profile and no other's, with no card at the sidebar's foot. A click on
+/// it opens its conversation, which has ilo's one line and the reply field, and from then it's a
+/// card at the foot as any task opened in this run. The click is made by the card's own call:
+/// the composer keeps no record of where a card is drawn.
+#[cfg(unix)]
+#[gpui::test]
+fn latest_tasks_lists_a_task_a_run_before_left(cx: &mut TestAppContext) {
+    use crate::agents::task::{Line, TaskAction};
+    use crate::agents::tests::kept::past::after_a_quit;
+
+    let (agents, past) = after_a_quit("Lisbon seats", cx);
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.update(|window, _| window.activate_window());
+    // No tab is shown in either Space, so each shows the composer.
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(vec![space(1, PROFILE), space(2, 8)], cx);
+        shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(2, Vec::new(), vec![20], Vec::new(), Folders::default(), cx);
+        shell.set_space(1, cx);
+    });
+    cx.run_until_parked();
+    let give = |cx: &mut VisualTestContext| {
+        let (status, cards, archived, kept) = agents.read_with(cx, |agents, cx| {
+            (
+                agents.status(),
+                agents.shown_cards(cx),
+                agents.archived_tasks(cx),
+                agents.kept_cards(cx),
+            )
+        });
+        let conversation = |agent: &str, cx: &gpui::App| agents.read(cx).conversation(agent, cx);
+        let shells = [shell.downgrade()];
+        cx.update(|_, cx| {
+            crate::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx)
+        });
+        cx.run_until_parked();
+    };
+    // What the composer lists, by the tasks' ids.
+    let listed = |cx: &mut VisualTestContext| {
+        let cards = shell.read_with(cx, |shell, _| shell.latest_tasks(3));
+        (cards.into_iter().map(|card| card.agent)).collect::<Vec<_>>()
+    };
+    // The composer draws without it, and its card comes in as the agents send it.
+    assert!(listed(cx).is_empty());
+    give(cx);
+    assert_eq!(listed(cx), [past.as_str()]);
+    assert!(shell.read_with(cx, |shell, _| shell.task_cards.is_empty()));
+    // Another profile's Space lists none of it.
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    cx.run_until_parked();
+    assert!(listed(cx).is_empty());
+    shell.update(cx, |shell, cx| shell.set_space(1, cx));
+    cx.run_until_parked();
+    assert_eq!(listed(cx), [past.as_str()]);
+
+    // The card's click.
+    made(&host);
+    let agent: gpui::SharedString = past.clone().into();
+    shell.update(cx, |shell, cx| shell.open_latest(agent, cx));
+    let asked = made(&host);
+    assert!(asked.contains(&format!("task {past} Restore")), "{asked:?}");
+    agents.update(cx, |agents, cx| {
+        _ = agents.task_action(&past, TaskAction::Restore, cx)
+    });
+    give(cx);
+    let shown = shell.read_with(cx, |shell, _| shell.talk_agent());
+    assert_eq!(shown.as_deref(), Some(past.as_str()));
+    // The window asked for its conversation, which the agents send as they send the rest.
+    give(cx);
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(shell.read_with(cx, |shell, cx| shell.reply_drawn(cx).is_some()));
+    let talk = agents.read_with(cx, |agents, cx| agents.conversation(&past, cx).unwrap());
+    assert!(
+        matches!(&talk.lines[..], [Line::Ilo(_)]),
+        "{:?}",
+        talk.lines
+    );
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.kept_cards.is_empty());
+        assert_eq!(shell.task_cards.len(), 1);
+    });
+}
+
+/// A task that ended in a run before is there to reply to after a quit (#4105), on the agents as
+/// they are after that quit and the launch (`after_a_quit`), the test doing the app's part between
+/// them and the window. Its row is in History; a click on it brings its card back to the Space of
+/// its own profile and no other, with its conversation open and the reply field in it, though it
+/// has no Space of its own. A reply is its task's, and once its run opens a page the area is the
+/// Space made for it, and goes with that Space.
+#[cfg(unix)]
+#[gpui::test]
+fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
+    use crate::agents::task::TaskAction;
+    use crate::agents::tests::kept::past::{after_a_quit, opens_a_page};
+
+    let (agents, past) = after_a_quit("Lisbon seats", cx);
+    cx.update(|cx| {
+        crate::shell::commands::bind_keys(cx);
+        crate::text_input::bind_keys(cx);
+    });
+    let (shell, host, cx) = history(Vec::new(), cx);
+    // What the app sends its windows as the agents change, by the way it sends it.
+    let give = |cx: &mut VisualTestContext| {
+        let (status, cards, archived, kept) = agents.read_with(cx, |agents, cx| {
+            (
+                agents.status(),
+                agents.shown_cards(cx),
+                agents.archived_tasks(cx),
+                agents.kept_cards(cx),
+            )
+        });
+        assert!(
+            cards.iter().all(|card| card.home == 1),
+            "a card outside its profile's Space"
+        );
+        let conversation = |agent: &str, cx: &gpui::App| agents.read(cx).conversation(agent, cx);
+        let shells = [shell.downgrade()];
+        cx.update(|_, cx| {
+            crate::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx)
+        });
+        cx.run_until_parked();
+    };
+    give(cx);
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, Vec::new(), false, cx);
+    assert_eq!(items(&shell, cx).len(), 2, "today's heading and the task");
+    let shown = |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.talk_agent());
+    assert_eq!(shown(cx), None);
+
+    made(&host);
+    cx.simulate_click(row(0), Modifiers::none());
+    let asked = made(&host);
+    assert!(asked.contains(&format!("task {past} Restore")), "{asked:?}");
+    assert!(!library_open(&shell, cx));
+    let (_, back) = agents.update(cx, |agents, cx| {
+        agents.task_action(&past, TaskAction::Restore, cx)
+    });
+    assert_eq!(back.as_deref(), Some(past.as_str()));
+    let own = agents.read_with(cx, |agents, _| agents.task(&past).unwrap().space);
+    assert_eq!(own, 0);
+    give(cx);
+    assert_eq!(shown(cx).as_deref(), Some(past.as_str()));
+    assert!(made(&host).contains(&format!("show task {past}")));
+    // The window asked for its conversation, which the agents send as they send the rest.
+    give(cx);
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let reply = shell.read_with(cx, |shell, cx| shell.reply_drawn(cx));
+    assert!(reply.is_some(), "no reply field");
+
+    cx.simulate_input("And for Sunday?");
+    cx.simulate_keystrokes("enter");
+    let said = format!(r#"task {past} Reply("And for Sunday?")"#);
+    assert!(made(&host).contains(&said));
+    let reply = TaskAction::Reply("And for Sunday?".into());
+    agents.update(cx, |agents, cx| _ = agents.task_action(&past, reply, cx));
+    let own = opens_a_page(&agents, &past, cx);
+    assert_ne!(own, 0);
+    // The cards come before the core tells of the Space, and the conversation stays where it is.
+    give(cx);
+    assert_eq!(shown(cx).as_deref(), Some(past.as_str()));
+    let spaces = |own: Option<u64>, cx: &mut VisualTestContext| {
+        let mut spaces = vec![space(1, PROFILE), space(2, 8)];
+        if let Some(own) = own {
+            host.space_agents
+                .borrow_mut()
+                .insert(own, past.clone().into());
+            let mut entry = space(own, PROFILE);
+            entry.5 = "Claude".into();
+            spaces.push(entry);
+        } else {
+            host.space_agents.borrow_mut().clear();
+        }
+        shell.update(cx, |shell, cx| shell.set_spaces(spaces, cx));
+        cx.run_until_parked();
+    };
+    spaces(Some(own), cx);
+    assert_eq!(shown(cx).as_deref(), Some(past.as_str()));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_open()), Some(own));
+    // The Space gone, as when the task goes for good, its area goes with it.
+    spaces(None, cx);
+    assert_eq!(shown(cx), None);
+}
+
+/// The search field's "Search history" follows a switch between light and dark while the Library
+/// stays open, in the placeholder gray of the palette it's drawn in: a field that kept the gray of
+/// the look it opened in drew Paper on a light window's field, almost the field's own colour.
+#[gpui::test]
+fn the_search_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
+    use crate::shell::Appearance;
+    use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
+    let (shell, _, cx) = history(Vec::new(), cx);
+    let mut colours = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        let (drawn, meant) = shell.read_with(cx, |shell, cx| {
+            let field = shell.library.as_ref().expect("the Library").search.read(cx);
+            (
+                field.placeholder_hsla(),
+                shell.palette.gray(SEARCH_PLACEHOLDER),
+            )
+        });
+        assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
+        colours.push(drawn);
+    }
+    assert_ne!(
+        colours[0], colours[1],
+        "light and dark drew the same placeholder"
+    );
+    assert_eq!(colours[0], colours[2]);
 }
 
 /// A search asks the browser for the pages with its words. Until it answers, the pages listed are
@@ -437,6 +660,8 @@ fn past(agent: &str, started: u64, ended: u64, pages: &[&str]) -> Past {
         messages: 0,
         steps: Vec::new(),
         answers: String::new(),
+        end: None,
+        sorted: None,
     }
 }
 
@@ -585,17 +810,16 @@ fn a_click_on_a_visited_page_opens_it_in_peek(cx: &mut TestAppContext) {
     assert!(!library_open(&shell, cx));
 }
 
-/// Where a History row's trash is, at the end of the list's `row`th row, as the sidebar's ✕ is
-/// at the end of a tab's.
+/// Where a History row's trash is, at the end of the list's `row`th row under the pointer.
 fn trash(
     shell: &Entity<Shell>,
     row: usize,
     cx: &mut VisualTestContext,
 ) -> gpui::Point<gpui::Pixels> {
     let end = shell.read_with(cx, |shell, _| {
-        shell.library_x() + LIBRARY_WIDTH - ARCHIVED_RIGHT
+        shell.library_x() + LIBRARY_WIDTH - SEARCH_RIGHT - HISTORY_POINTED_RIGHT
     });
-    point(px(end - CLOSE_RIGHT - CLOSE_SIZE / 2.), self::row(row).y)
+    point(px(end - CLOSE_SIZE / 2.), self::row(row).y)
 }
 
 fn pointed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Pointed> {
@@ -643,22 +867,26 @@ fn a_closed_tabs_trash_shows_under_the_pointer(cx: &mut TestAppContext) {
     assert!(library_open(&shell, cx));
 }
 
-/// A long title has the row's whole width at rest, running over the trash's place, and truncates 4
-/// before the trash only while the trash shows, as a tab row's title does before its ✕ (the
-/// orchestrator's call 2 on #2337, 11-14).
-#[test]
-fn a_title_has_the_trashs_room_until_the_trash_shows() {
-    let trash_start = CLOSE_RIGHT + CLOSE_SIZE;
-    let at_rest = history_text_end(false);
-    assert!(
-        at_rest < trash_start,
-        "at rest a title ends {at_rest} from the row's end, short of the trash's place, which starts {trash_start} from it"
-    );
-    assert_eq!(
-        history_text_end(true),
-        trash_start + 4.,
-        "while the trash shows, a title ends 4 before it"
-    );
+/// A closed tab under the pointer has Reopen in its time's place, before its trash, as drawn,
+/// which restores it as Open as Tab does and closes the Library.
+#[gpui::test]
+fn a_closed_tab_under_the_pointer_reopens(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, Vec::new(), false, cx);
+    cx.simulate_mouse_move(row(0), None, Modifiers::none());
+    next_frame(cx);
+    assert_eq!(pointed(&shell, cx), Some(Pointed::Closed(5)));
+    // Just inside Reopen's end, which is the gap before the trash.
+    let trash = trash(&shell, 0, cx);
+    let reopen = point(trash.x - px(CLOSE_SIZE / 2. + HISTORY_GAP + 4.), trash.y);
+    cx.simulate_mouse_move(reopen, None, Modifiers::none());
+    next_frame(cx);
+    made(&host);
+    cx.simulate_click(reopen, Modifiers::none());
+    assert_eq!(made(&host), ["restore archived 5"]);
+    assert!(!library_open(&shell, cx));
 }
 
 /// A visited page's trash removes its visits that day, and its row goes at once.
@@ -753,6 +981,41 @@ fn row_times_follow_the_systems_clock() {
     assert_eq!(history_when(week, starts, true), "Tue 9:05 PM");
     assert_eq!(history_when(week, starts, false), "Tue 21:05");
     assert_eq!(history_when(at(1, 14), starts, true), "1 Nov");
+}
+
+/// A task is listed under the day it ended, whenever it left the foot, so the time its row says
+/// is its heading's day's, as the pages' rows around it: last night's task is under Yesterday
+/// with its time alone, though the user dismissed it this morning.
+#[gpui::test]
+fn a_task_is_listed_under_the_day_it_ended(cx: &mut TestAppContext) {
+    let minute = 5. * 60. * 1000.;
+    let (shell, host, cx) = history(vec![closed(5, "news", at(13, 9), false)], cx);
+    host.day_starts
+        .set([at(13, 0), at(12, 0), at(9, 0), at(2, 0)]);
+    let last_night = super::ArchivedTask {
+        ended: at(12, 23) + minute,
+        ..task()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_archived_tasks(vec![last_night], cx)
+    });
+    cx.run_until_parked();
+    let listed = shell.read_with(cx, |shell, _| {
+        let library = shell.library.as_ref().unwrap();
+        let named = library.items.iter().map(|item| match item {
+            Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
+            Item::Task(index) => shell.archived_task_about(&shell.archived_tasks[*index]),
+            _ => "a tab".to_string(),
+        });
+        named.collect::<Vec<_>>()
+    });
+    let time = match crate::clock::twelve_hour() {
+        true => "11:05 PM",
+        false => "23:05",
+    };
+    let row = format!("{PRODUCT} · Done {time} · 1 page");
+    assert_eq!(listed, ["Today", "a tab", "Yesterday", row.as_str()]);
 }
 
 /// What the Library's row ring is on, as `items` names it.
@@ -893,4 +1156,26 @@ fn a_section_stop_leaves_the_windows_shortcuts_as_they_are(cx: &mut TestAppConte
         "Tab left the field"
     );
     assert_eq!(calls(with), calls(without));
+}
+
+/// A ringed row removed by code, here a closed tab reopened elsewhere, gives the ring to the row
+/// that took its place, as one the user closes does (#4108).
+#[gpui::test]
+fn a_ringed_row_removed_gives_the_ring_to_the_row_in_its_place(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    cx.update(|_, cx| crate::shell::commands::bind_keys(cx));
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    let pages = vec![page("mail", at(9, 14)), page("docs", at(8, 10))];
+    answer(&shell, first, pages, false, cx);
+    let search = shell.read_with(cx, |shell, cx| {
+        gpui::Focusable::focus_handle(&*shell.library.as_ref().unwrap().search.read(cx), cx)
+    });
+    cx.update(|window, cx| window.focus(&search, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down");
+    assert_eq!(ringed(&shell, cx).as_deref(), Some("closed news"));
+    shell.update(cx, |shell, cx| shell.set_archive(Vec::new(), cx));
+    cx.run_until_parked();
+    assert_eq!(ringed(&shell, cx).as_deref(), Some("visited mail"));
 }

@@ -21,7 +21,8 @@
 # sidebar below the rows opens a new tab. ⌘S, with the page or the UI focused, and the sidebar
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
 # ⌘S brings them back, and the core hears the page moves for each motion and is still after it, or
-# the page goes to its place in one step when the motion is over by its first frame. The
+# the page goes to its place in one step when the motion is over by its first frame. On the Mac a
+# press in the strip at the hidden sidebar's edge leaves the page the keyboard. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't, from
 # the right edge too with the sidebar put on the right. A tab opened with the sidebar hidden says
 # so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's
@@ -29,10 +30,10 @@
 # narrowest it hides the sidebar, keeping its width; a double-click on it puts the width back. A
 # page that hasn't drawn yet shows black, or white with View › Appearance on Light, and with
 # the window widened, the space a page hasn't drawn at its new size shows the page's own
-# background. In a check VM, the sidebar over grey backdrops is Dia's composite,
-# dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
-# and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
-# in Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
+# background. In a check VM, the sidebar over grey backdrops is the window ilo reckons from its
+# material's and tints' tokens at the user's transparency level, Standard here, on whatever desktop
+# picture is behind it, dark and then light with the Mac's appearance, and View › Appearance turns
+# the light window dark and back.
 # On a hosted Windows runner, at Windows' Text size 110 % the page view keeps its margins.
 
 # A long page that times its frames while it scrolls and puts the numbers in its title.
@@ -139,6 +140,7 @@ else
   selfie_launch "$url" "$out/window-selfie.log"
   echo "window: uBlock Origin wrote its selfie $selfie_at s into a launch before the run's"
 fi
+launched=$(date +%s)
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -875,21 +877,29 @@ drag() {
   moves=$count
 }
 drag 115 24 moves "the header"
-drag 138 24 stays "the back button"
+drag 158 24 stays "the back button"
 drag 110 64 stays "the URL field"
 drag 110 112 stays "the Space's name"
 drag 110 195 stays "a tab's row"
 drag 110 400 moves "the empty sidebar"
 # On Windows the frame keeps the top 8 points, Windows' resize border (platform/windows/host.cc's
-# FrameHit), as Windows' windows resize by theirs, and the card's margin under it moves the window:
-# design/tokens.toml's card-inset is 10.
+# FrameHit), as Windows' windows resize by theirs. The card starts where that ends, as
+# design/tokens.toml's card-inset is 8, so no margin over the card is left to move the window by
+# there.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
+else
+  # Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the
+  # screen's top, its quick-maximize zone, as it does under a hand.
+  drag 600 6 moves "the card's top margin"
 fi
-# Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the screen's
-# top, its quick-maximize zone, as it does under a hand.
-drag 600 9 moves "the card's top margin"
-drag $((width - 8)) 300 moves "the card's right margin"
+# Down the margin, not across it: the press is 4 from the window's edge and a move starts 4 from
+# its press (DRAG_START), so 5 to the right would end past the edge, where the Mac's driver posts
+# nothing (#4076).
+send drag $((width - 4)) 300 $((width - 4)) 305
+count=$(grep -c '^browser: window move$' "$log" || true)
+[ "$count" -gt "$moves" ] || fail "a drag on the card's right margin didn't move the window"
+moves=$count
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
 # its windows tile or float, so there's no zoom to see.
@@ -919,7 +929,7 @@ expect '^browser: command bar shown$' "a double-click on the empty sidebar didn'
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
-# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 10 in from
+# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 8 in from
 # every side, as the window's buttons go. ⌘S and the sidebar button bring both back.
 # toggle <from> <hidden|shown> <what>: waits for the sidebar to finish moving after the command.
 toggle() {
@@ -977,6 +987,15 @@ expect '^browser: \(page moving 1\|sidebar hidden\)$' "⌘S with the page focuse
 moved "⌘S with the page focused" hidden
 toggle page hidden "⌘S with the page focused"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-hidden.png" || fail "no window to capture"
+# A press in the strip at the hidden sidebar's edge isn't a press in the UI: the strip brings the
+# sidebar out on hover alone, so the page keeps the keyboard. The Mac's driver names the page's
+# view; on Linux the strip is also the band that resizes the window.
+if [ "$(uname)" = Darwin ]; then
+  send click 1 400
+  send warp
+  send state
+  in_browser RenderWidgetHostViewCocoa "a press in the strip at the hidden sidebar's edge"
+fi
 send key s cmd
 moved "⌘S again with the page focused" shown
 toggle page shown "⌘S again with the page focused"
@@ -1064,10 +1083,15 @@ overshoot() {
   # A hand's moves on their way to the edge, heard twice in the strip: on Linux and Windows the
   # pointer over the page is Chromium's, and one heard once there may have jumped onto the page.
   # Recorded, for a look at the sidebar coming out (overshoot.mp4).
+  # The strip is the card's inset wide, where the page starts with the sidebar hidden.
+  send layout
+  strip_x=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed -n 's/.*, WebContentsViewCocoa \([0-9]*\),.*/\1/p')
+  [ -n "$strip_x" ] || fail "the layout named no page with the sidebar hidden"
   record overshoot 3
   send move 400 300
-  send move 8 300
-  send move 4 300
+  send move $((strip_x - 1)) 300
+  send move $((strip_x / 2)) 300
   from=$((step + 1))
   send move -20 300
   expect '^browser: reveal left across the edge$' \
@@ -1084,8 +1108,8 @@ overshoot() {
   expect '^browser: reveal hidden$' "the pointer past the sidebar out after an overshoot didn't send it away"
   send move 400 300
   from=$((step + 1))
-  send move 8 300
-  send move 4 300
+  send move $((strip_x - 1)) 300
+  send move $((strip_x / 2)) 300
   send move -20 300
   sleep 1.2 # past the second a return counts in
   send move 3 300
@@ -1190,7 +1214,7 @@ reveal_at_edge "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
 check_reveal "with the sidebar docked by ⌘S"
-# Settings › Tabs & Sidebar's edge switch off (#1636): the pointer moving along the edge of the
+# Settings › Tabs & Spaces' edge switch off (#1636): the pointer moving along the edge of the
 # window with its sidebar hidden brings nothing out, and ⌘S still shows it. On again after.
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
@@ -1200,8 +1224,8 @@ send clickkey $(drawn "toolbar General")
 send clickkey $(drawn "toolbar About")
 settings_drew About
 ../tools/window-screenshot.sh "$pid" "$out/settings-about.png" || fail "no window to capture"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-settings_drew "Tabs & Sidebar"
+send clickkey $(drawn "toolbar Tabs & Spaces")
+settings_drew "Tabs & Spaces"
 ../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
 in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
 send clickkey $at
@@ -1222,13 +1246,17 @@ sleep 1
 send key s cmd
 toggle ui shown "⌘S with the edge off"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
-settings_drew "Tabs & Sidebar"
+expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't show Tabs & Spaces again"
+settings_drew "Tabs & Spaces"
 in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
 send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 # The sidebar on the right, picked in Settings as a user does, comes out from the window's last
 # column, where on Linux the band at the right edge is the UI's too (#3219). Back on the left after.
+# Sidebar position is Window's (#4092).
+send clickkey $(drawn "toolbar Window")
+expect '^browser: settings tab Window$' "a click on Window didn't show its section"
+settings_drew Window
 in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
 send clickkey $at
 expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
@@ -1247,8 +1275,8 @@ expect '^browser: reveal shown$' "the pointer at the window's right edge didn't 
 send key s cmd
 expect '^browser: sidebar shown$' "⌘S with the sidebar out on the right didn't dock it"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
-settings_drew "Tabs & Sidebar"
+expect '^browser: settings shown Window$' "Settings… didn't show Window again"
+settings_drew Window
 in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
 send clickkey $at
 expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"
@@ -1454,6 +1482,65 @@ rest_cpu() {
       for (i = 1; i <= n; i++) if (kinds[i] in to)
         printf "%s%s %.2f s", (said++ ? ", " : ""), names[i], to[kinds[i]] - from[kinds[i]] }')
 }
+# uBlock Origin's own work after launch, which a rest would take for the sidebar's (#4198): its list
+# updater starts a set time after launch, and each list it changes re-arms its selfie, written a set
+# time after the last change, or by an alarm 17 s after that. Each writes its stores, through the
+# browser's pool. ublock_settled waits, polling, until it has nothing left to do: past the updater's
+# start, its stores unwritten for longer than the selfie's delay and its alarm, and its process flat
+# over 2 s within the rest's own 0.02 s. Both rests come after it, so they read the same uBlock
+# Origin. The delays are the ones the app bundles. $ublock_written is its stores' last write.
+if [ -d "$app/ublock" ]; then
+  ublock_bundle="$app/ublock"
+else
+  ublock_bundle="$(echo "$app"/Contents/Frameworks/*Framework.framework)/Resources/ublock"
+fi
+# ublock_delay <name>: $delay, the seconds the bundled uBlock Origin's hidden setting <name> holds.
+ublock_delay() {
+  delay=$(grep -o "$1: [0-9]*" "$ublock_bundle/js/background.js" 2> /dev/null | head -1 | cut -d' ' -f2)
+  [ -n "$delay" ] ||
+    fail "the bundled uBlock Origin's js/background.js in $ublock_bundle no longer names $1, which the rests wait out (#4198)"
+}
+ublock_written() {
+  ublock_written=$(ublock_stores_written) ||
+    fail "uBlock Origin's stores in $profile_dir couldn't be read for when they were last written"
+  # The launch before the run's left them, so none means the wait would watch nothing.
+  [ "$ublock_written" != 0 ] ||
+    fail "uBlock Origin has no stores in $profile_dir for the rests to wait on (#4198)"
+}
+ublock_stores_written() {
+  local ublock=oghkpboejbohceocapipmnjifoklonij
+  python3 -I -c 'import os, sys
+print(int(max([os.path.getmtime(os.path.join(r, f)) for d in sys.argv[1:] for r, _, fs in os.walk(d) for f in fs] or [0])))' \
+    "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" \
+    "$profile_dir/Default/Local Extension Settings/$ublock"
+}
+ublock_cpu() {
+  renderer_cpu | awk '$3 == "extension" { t += $2 } END { printf "%.2f", t }'
+}
+ublock_settled() {
+  local update selfie up quiet from to waited=0
+  ublock_delay autoUpdateDelayAfterLaunch
+  update=$delay
+  ublock_delay selfieDelayInSeconds
+  selfie=$((delay + 17))
+  while :; do
+    up=$(($(date +%s) - launched))
+    ublock_written
+    quiet=$(($(date +%s) - ublock_written))
+    if [ "$up" -gt "$update" ] && [ "$quiet" -gt "$selfie" ]; then
+      from=$(ublock_cpu)
+      sleep 2 # the window uBlock Origin's process is read flat over
+      to=$(ublock_cpu)
+      awk -v from="$from" -v to="$to" 'BEGIN { exit !(to - from <= 0.02) }' && break
+    fi
+    waited=$((waited + 1))
+    [ "$waited" -lt 300 ] ||
+      fail "uBlock Origin didn't settle in 300 s for the rests: the browser up $up s, past its updater's start at $update s; its stores last written $quiet s ago, against its selfie's $selfie s; its process took $(ublock_cpu) s in all (#4198)"
+    sleep 1 # polls the stores and the clock
+  done
+  echo "window: uBlock Origin settled $up s into the launch, its stores unwritten for $quiet s and its process flat"
+}
+ublock_settled
 # The sampling adds nothing the rest reads: sampled, docked read 0.00 s on the Mac (#2632).
 rest_cpu docked
 docked_cpu=$rest docked_kinds=$rest_kinds docked_renderers=$rest_renderers
@@ -1463,8 +1550,11 @@ send move 400 300
 reveal_at_edge "the pointer at the edge didn't bring the sidebar out after ⌘S from the page"
 hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
+ublock_written
+written_before=$ublock_written
 rest_cpu out
 out_cpu=$rest
+ublock_written
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU" \
   "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)." \
   "Renderers docked: $docked_renderers; out: $rest_renderers"
@@ -1472,8 +1562,11 @@ if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 
   # Its age, for work that comes at a time after launch, as uBlock Origin's selfie did (#2502).
   up=$(ps -o etime= -p "$pid" | tr -d ' ')
   sampled=
+  # Whether uBlock Origin wrote its stores in the rest after all, which would make it the work.
+  [ "$ublock_written" = "$written_before" ] ||
+    sampled=", uBlock Origin's stores written in the rest"
   [ ! -s "$out/window-rest-out-sample.txt" ] ||
-    sampled=", the browser's stacks over the rest in window-rest-out-sample.txt"
+    sampled="$sampled, the browser's stacks over the rest in window-rest-out-sample.txt"
   [ ! -s "$out/window-rest-out-renderer-sample.txt" ] ||
     sampled="$sampled, the busiest renderer's in window-rest-out-renderer-sample.txt"
   fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds; renderers $rest_renderers), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
@@ -1644,22 +1737,35 @@ expect '^browser: sidebar width 228$' "a double-click on the sidebar's edge didn
 none_since '^browser: command new-tab' || fail "a double-click on the sidebar's edge opened a tab"
 check_layout "after a double-click on the sidebar's edge"
 
-# The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is Dia's composite
-# within 3 levels (docs/ux-spec.md › Window material), in the Mac's dark appearance and then its
-# light one: Dia's dark material reads 24 / 32 / 45 / 104 there, under its tint of black 0.4, and
-# its light one 137 / 146 / 165 / 243, under white 0.8, with the gradient over that. The blur comes
-# from the window server, which a capture of the window alone leaves out, so this captures the
-# screen, and only a check VM's screen, and its appearance, are the check's to change: check.sh
-# runs it dark, and this turns it light for the light pass and back after.
-# Colours the Space black from the theme picker's field, which is black at its middle.
+# The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is the window ilo
+# reckons (docs/ux-spec.md › Window material), in the Mac's dark appearance and then its light one.
+# The app logs what its palette makes there from the material's tokens, measured over a window of
+# black, grey 128 and white on a black desktop with the Mac's desktop tinting on, its default,
+# under the tint of the transparency level, Standard in a fresh profile, with the black Space's
+# glow over that, which leaves the window's glass as it is. The desktop picture comes through the
+# backdrop window too and lifts all of it by about as much, and the check sets no picture, as
+# check.sh runs on the owner's Mac too.
+# So it holds what a picture can't move, each grey's rise over black, within 3 levels of the
+# reckoned rise, and the sidebar over black between the black desktop's and the most a picture
+# lifts it (the material's lift token), 3 either side. With desktop tinting off nothing lifts it,
+# and the material reads inside that range in both looks. The blur comes from the window server,
+# which a capture of the window alone leaves out, so this captures the screen, and only a check
+# VM's screen, and its appearance, are the check's to change: check.sh runs it dark, and this
+# turns it light for the light pass and back after.
+# Colours the Space black from the theme panel's value field, which is there once the Space has a
+# colour: the first palette, then 000000 typed into it and return.
 black_space() {
   post rightclick 100 112
   expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-  send clickkey 191.5 178.5
-  expect '^browser: colored space [0-9]* 000000$' "the field's middle didn't colour the Space black"
+  send clickkey $(panel_at palette 1)
+  expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
+  send clickkey $(panel_at value)
+  send type 000000
+  send key return
+  expect '^browser: colored space [0-9]* 000000$' "000000 in the value field didn't colour the Space black"
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   send move $page_point
@@ -1726,17 +1832,17 @@ elif windows; then
 elif [ "$(sysctl -n kern.hv_vmm_present)" != 1 ]; then
   material="not measured outside a check VM"
 else
-  # Black is neutral, so the field's gradient is faint and known: stops at 0.06 in dark and 0.09
-  # in light, from black at the top to 0.25 · 255 at the bottom.
+  # Black is neutral, so its glow is faint, and the app reckons it with the rest.
   black_space
   [ "$active" = 1 ] || fail "the app isn't active, so the window shows AppKit's inactive fill"
   srgb="/System/Library/ColorSync/Profiles/sRGB Profile.icc"
   material=
   off=
   opaque=
-  # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
-  for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
+  # Each pass: its appearance, then each backdrop's grey.
+  for pass in "dark 0 20 60 255" "light 0 20 60 255"; do
     tone=${pass%% *}
+    read_black=
     if [ "$tone" = light ]; then
       light_shots=", $out/light.png, $out/light-menu.png, $out/appearance-dark.png"
       appearance false || fail "System Events didn't turn the Mac light"
@@ -1750,8 +1856,7 @@ else
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
       send move $page_point
     fi
-    for pair in ${pass#* }; do
-      level=${pair%:*}
+    for level in ${pass#* }; do
       send backdrop "$level"
       expect "^browser: backdrop $level drawn" "the backdrop in grey $level didn't draw"
       # The window's frame and its screen's size, in points from the screen's top left.
@@ -1765,33 +1870,35 @@ else
       sidebar=$(pixel "$shot" $(echo "$place" | awk '{ print ($1 + 60) / $5, ($2 + 450) / $6 }'))
       backdrop=$(pixel "$shot" $(echo "$place" |
         awk '{ x = $1 >= 50 ? $1 - 50 : $1 + $3 + 50; print x / $5, ($2 + 450) / $6 }'))
-      # Dia's composite there, 450 pt down: in dark 0.94 of its material under black 0.4, then 0.06
-      # of the gradient; in light 0.91 of it under white 0.8, then 0.09. The material alone is ours
-      # under our tint, black 0.25 or white 0.8, to tune the tint by.
-      line=$(echo "${pair#*:} $place $sidebar $backdrop" | awk -v level="$level" -v tone="$tone" '{
-        ours = ($8 + $9 + $10) / 3
-        seen = ($11 + $12 + $13) / 3
-        if (tone == "dark") {
-          gradient = 0.06 * 63.75 * 450 / $5
-          dia = 0.94 * 0.6 * $1 + gradient
-          alone = (ours - gradient) / (0.94 * 0.749)
+      # What the app reckons the window there from its tokens, over black, grey 128 and white on
+      # a black desktop and over black at the most a picture lifts it, last logged while this
+      # appearance is the window's; a grey between two of them reads as far between theirs, as
+      # everything over the material lies over it evenly.
+      reckons=$(sed -n 's/^browser: window reckons \([0-9]*\) \([0-9]*\) \([0-9]*\) lifted \([0-9]*\) at 60,450 in .*/\1 \2 \3 \4/p' "$log" | tail -1)
+      [ "$(echo "$reckons" | wc -w)" -eq 4 ] || fail "the app didn't say what it reckons the window over grey"
+      [ "$level" = 0 ] || [ -n "$read_black" ] || fail "the sidebar wasn't read over black first"
+      line=$(echo "$reckons $place $sidebar $backdrop" | awk -v level="$level" -v black="${read_black:-0}" '{
+        ours = ($11 + $12 + $13) / 3
+        seen = ($14 + $15 + $16) / 3
+        if (level <= 128) reckoned = $1 + ($2 - $1) * level / 128
+        else reckoned = $2 + ($3 - $2) * (level - 128) / 127
+        if (level == 0) {
+          printf "%.0f (reckoned %.0f to %.0f), the backdrop read as %.0f", ours, $1, $4, seen
+          if (ours < $1 - 3 || ours > $4 + 3) printf ", off"
         } else {
-          gradient = 0.09 * 63.75 * 450 / $5
-          dia = 0.91 * (0.8 * 255 + 0.2 * $1) + gradient
-          alone = ((ours - gradient) / 0.91 - 0.8 * 255) / 0.2
+          printf "%.0f, rising %.0f over black (reckoned %.0f), the backdrop read as %.0f", ours, ours - black, reckoned - $1, seen
+          if (ours - black - (reckoned - $1) > 3 || reckoned - $1 - (ours - black) > 3) printf ", off"
         }
-        printf "%.0f (Dia %.0f), the material alone %.0f (Dia %d), the backdrop read as %.0f",
-          ours, dia, alone, $1, seen
-        if (ours - dia > 3 || dia - ours > 3) printf ", off"
         if (seen - level > 2 || level - seen > 2) printf ", capture off"
       }')
+      [ "$level" != 0 ] || read_black=$(echo "$reckons $place $sidebar" | awk '{ printf "%.2f", ($11 + $12 + $13) / 3 }')
       echo "$tone material over $level: $line"
       case "$line" in *", off"* | *"capture off"*) off="$off $tone $level," ;; esac
-      # Dia's reads 45 lighter over white than over black in dark, and 20 in light; an opaque
-      # material, as Reduce Transparency draws it, reads the same over both.
+      # The window reads lighter over white than over black, by about 60 in dark and 35 in light;
+      # an opaque material, as Reduce Transparency draws it, reads the same over both.
       case $level in
-      0) over_black=${line%% *} ;;
-      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      0) over_black=${line%%[ ,]*} ;;
+      255) [ $((${line%%[ ,]*} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
       esac
       material="$material$tone over $level $line; "
     done
@@ -1808,246 +1915,15 @@ else
   expect '^browser: window light false$' "the window didn't turn dark again with the Mac"
   [ -z "$opaque" ] ||
     fail "the sidebar read the same over black and white in${opaque%,}, so it's opaque: $material"
-  # GitHub's hosted Mac draws AppKit's material behind the window darker than the Mac Dia was
-  # measured on, 119 against 137 over black in light (#1554), so ours there is no measure of Dia's:
-  # the run goes on, saying so, and the check VMs keep the comparison.
+  # GitHub's hosted Mac draws AppKit's material behind the window darker than a check VM's,
+  # where the tokens were measured (#1554), so the window there is no measure of them: the run
+  # goes on, saying so, and the check VMs keep the comparison.
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
-    echo "skip: the sidebar against Dia's composite, as the hosted Mac's AppKit material isn't the one Dia was measured over"
+    echo "skip: the sidebar against the window ilo reckons, as the hosted Mac's AppKit material isn't the one its tokens were measured over"
   else
-    [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+    [ -z "$off" ] || fail "the sidebar isn't the window ilo reckons from its tokens over grey${off%,}: $material"
   fi
   material="over grey ${material%; }"
-fi
-
-# The Dock icon's dot shows the Space in front, and with Settings › General's "Dock icon takes the
-# Space's color" off it stays green (docs/ux-spec.md › Dock dot), read from the image the app gives
-# the Dock. The Space is black, which no default Space color is, and black over the dot's green
-# with a color blend leaves it grey. In the Mac's Tinted and Clear icon styles macOS draws the icon
-# in the style's colors and the app leaves it as it is.
-dock="not on this OS"
-if [ "$(uname)" = Darwin ]; then
-  grep -q '^browser: colored space [0-9]* 000000$' "$log" || black_space
-  # The last name the dot was drawn in, once it's $1 or macOS's own.
-  dock_dot() {
-    for _ in $(seq 100); do
-      shown=$(sed -n 's/^browser: dock dot \([^ ]*\) in .*/\1/p' "$log" | tail -1)
-      [ "$shown" = "$1" ] || [ "$shown" = system ] && return 0
-      sleep 0.1
-    done
-    fail "the Dock's dot wasn't drawn $1 but ${shown:-never}"
-  }
-  # The dot's sRGB levels in the icon, saved at $1, as "r g b" in $icon. Not echoed for a $(),
-  # whose subshell would count the driver's step for itself alone.
-  dock_icon() {
-    send dockicon "$1"
-    icon=$(since | sed -n 's/^browser: dock icon //p' | tail -1)
-  }
-  green() { echo "$1" | awk '{ exit !($2 > $1 + 50 && $2 > $3 + 25) }'; }
-  grey() { echo "$1" | awk '{ hi = $1; lo = $1; for (i = 2; i <= 3; i++) { if ($i > hi) hi = $i; if ($i < lo) lo = $i }; exit !(hi - lo <= 12) }'; }
-  dock_dot 000000
-  if [ "$shown" = system ]; then
-    echo "skip: the Dock icon's dot, as this Mac's icon style draws it in its own colors"
-    dock="left to macOS's icon style"
-  else
-    dock_icon "$out/dock-icon-black.png"
-    black=$icon
-    grey "$black" || fail "the Dock icon's dot in a black Space reads $black, not grey"
-    send menu Settings…
-    expect '^browser: settings shown ' "Settings… didn't show Settings for the Dock icon's switch"
-    send clickkey $(drawn "toolbar General")
-    settings_drew General
-    in_sight "switch dock icon color" || fail "Settings didn't draw the Dock icon's switch"
-    send clickkey $at
-    expect '^browser: dock icon color off$' "a click on the Dock icon's switch didn't turn it off"
-    send key w cmd
-    expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-    dock_dot green
-    dock_icon "$out/dock-icon-off.png"
-    plain=$icon
-    green "$plain" || fail "the Dock icon's dot with its switch off reads $plain, not green"
-    send menu Settings…
-    expect '^browser: settings shown General$' "Settings… didn't show General again"
-    settings_drew General
-    in_sight "switch dock icon color" || fail "Settings didn't draw the Dock icon's switch"
-    send clickkey $at
-    expect '^browser: dock icon color on$' "a click on the Dock icon's switch didn't turn it on again"
-    send key w cmd
-    expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-    dock_dot 000000
-    dock_icon "$out/dock-icon-on.png"
-    again=$icon
-    grey "$again" || fail "the Dock icon's dot back on reads $again, not the Space's grey"
-    dock="dot $black in a black Space, $plain with its switch off, $again on again"
-    dock_shots=", $out/dock-icon-black.png, $out/dock-icon-off.png, $out/dock-icon-on.png"
-  fi
-elif windows; then
-  # The taskbar button carries the same dot, and Settings names its switch for it (#2681).
-  # Explorer draws the button, where no capture of ours can take it, so a check VM's run copies the
-  # taskbar off its screen (check-windows.yml) and reads the dot there by its colour, as UI
-  # Automation lists no task buttons: ilo's green in a Space without a colour, blue in a blue Space,
-  # green with the switch off and blue again on, each time at the same button's place. Settings'
-  # window has a button of its own while it shows, which carries the dot too (#3326).
-  read_dot=
-  [ -z "${GITHUB_ACTIONS:-}" ] || read_dot=1
-  # The middle of each dot in $2 (rrggbb) in the BMP $1, "x y" a line, where the dot in $3 isn't;
-  # nothing without one.
-  dot_at() {
-    python3 -I - "$@" << 'PY'
-import struct, sys
-data = open(sys.argv[1], "rb").read()
-offset, = struct.unpack_from("<I", data, 10)
-width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
-stride = (bits * width + 31) // 32 * 4
-want, other = (tuple(bytes.fromhex(c)) for c in sys.argv[2:4])
-found, others = [], []
-for y in range(abs(height)):
-    row = offset + (y if height < 0 else abs(height) - 1 - y) * stride
-    for x in range(width):
-        p = row + x * bits // 8
-        rgb = (data[p + 2], data[p + 1], data[p])
-        if rgb == want:
-            found.append((x, y))
-        elif rgb == other:
-            others.append((x, y))
-# A dot is the pixels in its colour with no gap wider than 12 across them.
-dots = []
-for x, y in sorted(found):
-    if dots and x - dots[-1][-1][0] <= 12:
-        dots[-1].append((x, y))
-    else:
-        dots.append([(x, y)])
-for dot in dots:
-    cx = sorted(x for x, _ in dot)[len(dot) // 2]
-    cy = sorted(y for _, y in dot)[len(dot) // 2]
-    def near(points):
-        return sum(abs(x - cx) <= 12 and abs(y - cy) <= 12 for x, y in points)
-    if near(dot) >= 20 and near(others) < 5:
-        print(cx, cy)
-PY
-  }
-  # Where the taskbar shows $4 dots (1 without it), or with $5 exactly $4, in $1 and none in $2,
-  # from its copy saved at $out/taskbar-$3.png, in $dot, "x y" a line. Explorer redraws an overlay
-  # a moment after it's given, makes Settings' button a moment after the window shows, and takes
-  # it away a moment after it hides.
-  taskbar_dot() {
-    for _ in $(seq 20); do
-      screen_png $taskbar "$out/taskbar-$3.png" ||
-        fail "PowerShell didn't copy the taskbar off the screen"
-      to_bmp "$out/taskbar-$3.png" "$out/taskbar.bmp" || fail "PowerShell couldn't read $3's copy"
-      dot=$(dot_at "$out/taskbar.bmp" "$1" "$2")
-      dots=$(echo "$dot" | awk NF | wc -l)
-      if [ -n "${5:-}" ]; then
-        [ "$dots" -eq "$4" ] && return 0
-      else
-        [ "$dots" -ge "${4:-1}" ] && return 0
-      fi
-      sleep 0.25
-    done
-    return 1
-  }
-  # Whether a dot in $dot is within 2 pixels of "x y" in $1; with $2, whether one isn't.
-  same_place() {
-    echo "$dot" | awk -v at="$1" -v away="${2:-}" 'BEGIN { split(at, a, " ") } {
-      dx = $1 - a[1]; dy = $2 - a[2]
-      near = dx <= 2 && dx >= -2 && dy <= 2 && dy >= -2
-      if (away == "" ? near : !near) found = 1
-    } END { exit !found }'
-  }
-  if [ -n "$read_dot" ]; then
-    # The taskbar's left, top, right and bottom on the screen, from UI Automation, in pixels.
-    taskbar=$(powershell.exe -NoProfile -NonInteractive -Command '
-      Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-      Add-Type -Namespace Check -Name Dpi -MemberDefinition @"
-[DllImport("user32.dll")]
-public static extern bool SetProcessDPIAware();
-"@
-      [Check.Dpi]::SetProcessDPIAware() | Out-Null
-      $A = [System.Windows.Automation.AutomationElement]
-      $class = New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, "Shell_TrayWnd")
-      $tray = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $class)
-      if ($tray) {
-        $r = $tray.Current.BoundingRectangle
-        "{0} {1} {2} {3}" -f [int]$r.Left, [int]$r.Top, [int]$r.Right, [int]$r.Bottom
-      }' | tr -d '\r')
-    set -- $taskbar
-    [ $# = 4 ] || fail "UI Automation didn't say where the taskbar is: $taskbar"
-    taskbar_dot 0b8045 7eb6d5 green ||
-      fail "the taskbar showed no dot in ilo's green 0b8045 for a Space without a colour"
-    green_at=$dot
-    post rightclick 100 112
-    expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
-    send choose "$(cased 'Edit Theme Color…')"
-    expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
-    expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-    send clickkey "$(swatch_x 7)" $swatch_y
-    expect '^browser: colored space [0-9]* 7eb6d5$' "the blue swatch didn't colour the Space"
-    send key escape
-    expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
-    taskbar_dot 7eb6d5 0b8045 blue || fail "the taskbar button's dot didn't take the blue Space's 7eb6d5"
-    same_place "$green_at" || fail "the blue dot is at $dot, not at the green one's $green_at"
-  fi
-  send menu Settings…
-  expect '^browser: settings shown ' "Settings… didn't show Settings for the taskbar button's switch"
-  send clickkey $(drawn "toolbar General")
-  settings_drew General
-  in_sight "switch dock icon color" || fail "Settings didn't draw the taskbar button's switch"
-  send clickkey $at
-  expect '^browser: dock icon color off$' "a click on the taskbar button's switch didn't turn it off"
-  ../tools/window-screenshot.sh "$pid" "$out/taskbar-dot-switch.png" all || fail "no window to capture"
-  if [ -n "$read_dot" ]; then
-    taskbar_dot 0b8045 7eb6d5 off 2 ||
-      fail "the taskbar buttons' dots with the switch off, the browser window's and Settings', aren't both ilo's green 0b8045 in a blue Space: $(echo $dot)"
-    same_place "$green_at" || fail "the dots with the switch off are at $(echo $dot), none at $green_at"
-    same_place "$green_at" away ||
-      fail "Settings' taskbar button has no dot of its own beside the browser window's at $green_at: $(echo $dot)"
-    settings_dot=$(echo "$dot" | awk -v at="$green_at" 'BEGIN { split(at, a, " ") } {
-      dx = $1 - a[1]; dy = $2 - a[2]
-      if (dx > 2 || dx < -2 || dy > 2 || dy < -2) { print; exit }
-    }')
-  fi
-  send clickkey $at
-  expect '^browser: dock icon color on$' \
-    "a click on the taskbar button's switch didn't turn it on again"
-  if [ -n "$read_dot" ]; then
-    taskbar_dot 7eb6d5 0b8045 on 2 ||
-      fail "the taskbar buttons' dots with the switch on again, the browser window's and Settings', aren't both the blue Space's 7eb6d5: $(echo $dot)"
-    same_place "$green_at" || fail "the dots back on are at $(echo $dot), none at $green_at"
-    same_place "$green_at" away ||
-      fail "Settings' taskbar button has no dot of its own back on, beside the browser window's at $green_at: $(echo $dot)"
-  fi
-  send key w cmd
-  expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings"
-  if [ -n "$read_dot" ]; then
-    # Settings' button goes as it hides, and its next one, when it shows again, carries the dot
-    # with no click on the switch to set it.
-    taskbar_dot 7eb6d5 0b8045 hidden 1 exactly ||
-      fail "Settings hid and the taskbar doesn't show the browser window's dot alone: $(echo $dot)"
-    same_place "$green_at" || fail "with Settings hidden the dot is at $(echo $dot), not at $green_at"
-    send menu Settings…
-    expect '^browser: settings shown ' "Settings… didn't show Settings again for its taskbar button"
-    taskbar_dot 7eb6d5 0b8045 again 2 ||
-      fail "Settings shown again and the taskbar buttons' dots, the browser window's and Settings', aren't both the blue Space's 7eb6d5: $(echo $dot)"
-    same_place "$green_at" || fail "the dots with Settings shown again are at $(echo $dot), none at $green_at"
-    same_place "$green_at" away ||
-      fail "Settings' taskbar button shown again has no dot of its own beside the browser window's at $green_at: $(echo $dot)"
-    send key w cmd
-    expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings shown again"
-  fi
-  dock="the taskbar button's switch off and on again in Settings"
-  dock_shots=", $out/taskbar-dot-switch.png"
-  if [ -n "$read_dot" ]; then
-    # The steps after are for a Space without a colour, as it started.
-    post rightclick 100 112
-    expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
-    send choose "$(cased 'Remove Theme Color')"
-    expect '^browser: colored space [0-9]* none$' "Remove Theme Color didn't take the blue away"
-    dock="the taskbar button's dot read off the screen at $green_at: 0b8045 in a Space without a colour, 7eb6d5 in a blue Space, 0b8045 with its switch off in Settings and 7eb6d5 on again, Settings' own button carrying the same dot at $settings_dot, gone with Settings hidden and back with no click when it showed again"
-    dock_shots="$dock_shots, $out/taskbar-green.png, $out/taskbar-blue.png, $out/taskbar-off.png, $out/taskbar-on.png, $out/taskbar-hidden.png, $out/taskbar-again.png"
-  else
-    echo "skip: the taskbar button's dot in the Space's color: only a check VM's run copies the taskbar off its screen, so only its switch is checked."
-  fi
-else
-  echo "skip: the Dock icon's dot in the Space's color: Linux's host draws none."
 fi
 
 # Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
@@ -2252,4 +2128,4 @@ requestAnimationFrame(() => setTimeout(say));
   text_size="at Windows' Text size 110 % the page view keeps its margins, its page ${view_width} points wide over 1.1 ($out/text-size.png)"
 fi
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, ${displays:+$displays, }the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. With the sidebar put on the right in Settings, the pointer at the window's last column brings it out there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, ${display_shots:-}$out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-reveal-right.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}. Text size: $text_size."
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, ${displays:+$displays, }the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. With the sidebar put on the right in Settings, the pointer at the window's last column brings it out there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, ${display_shots:-}$out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-reveal-right.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}. Text size: $text_size."

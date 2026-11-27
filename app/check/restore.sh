@@ -109,8 +109,8 @@ expect "^browser: download landed $d\$" "the new download's icon didn't land"
 recorded
 ../tools/window-screenshot.sh "$pid" "$out/download-bin.png" || fail "no window to capture"
 # While it runs, the Library button keeps its name and keys, and resting on it shows the running
-# download over the finished one, and sends the bin away. Rested on again, recorded, the rows come
-# up from the bottom and go bottom first.
+# download over the finished one, and sends the bin away. Rested on again, recorded, the plate grows
+# out of the button and folds back.
 check_layout "with a download running"
 send move 24 $((height - 25))
 library_keys=⇧⌘L
@@ -161,8 +161,7 @@ expect '^browser: field Space name has the keyboard$' "New Space's name didn't h
 send type reading list
 send key return
 expect "^browser: create space $second reading list\$" "return didn't name the Space"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
+resting_key t "new Space"
 send type "http://localhost:$port/one.html"
 send key return
 expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"
@@ -172,14 +171,15 @@ post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
 New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu didn't offer its theme"
-# The theme picker's pink swatch, and + for a second colour, which a relaunch brings back.
+# The theme panel's one-colour palette, the sixth, and + for a second colour, which a relaunch
+# brings back.
 choose_drawn "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-send clickkey "$(swatch_x 1)" $swatch_y
-expect "^browser: colored space $second [0-9a-f]*\$" "the pink swatch didn't colour the Space"
+send clickkey $(panel_at palette 6)
+expect "^browser: colored space $second [0-9a-f]*\$" "the one-colour palette didn't colour the Space"
 color=$(grep "^browser: colored space $second " "$log" | tail -1 | cut -d' ' -f5)
-send clickkey 211.5 316.5
+send clickkey $(panel_at plus 1)
 expect "^browser: themed space $second x=[-0-9.]* y=[-0-9.]* colors=2 " \
   "+ didn't give the Space a second colour"
 theme=$(grep "^browser: themed space $second " "$log" | tail -1 | cut -d' ' -f5-)
@@ -247,7 +247,7 @@ case "$(uname)" in
 esac
 post key q cmd
 expect '^browser: command quit via ' "⌘Q didn't reach the UI"
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 post key return
 expect "$downloads_question" "⌘Q with a download running didn't ask first"
@@ -261,7 +261,7 @@ expect '^browser: library section downloads$' \
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen before the quit"
 post key q cmd
-expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
 post key return
 expect "$downloads_question" "⌘Q didn't ask again"
@@ -454,14 +454,12 @@ send key w cmd
 expect_tabs "$c $a" "$c" "after closing the tab from the archive"
 # The downloads the relaunch read didn't fly.
 grep -q '^browser: download flying ' "$log" && fail "a download the relaunch read flew in"
-# Resting on the footer's Library button shows the newest finished downloads over the tab list,
-# here notes.txt alone, as the cancelled one isn't finished. They stay as the pointer comes onto
-# them, and go once it's on neither.
+# Resting on the footer's Library button shows the newest downloads on its plate over the tab list,
+# here notes.txt alone, as the cancelled one isn't listed. The plate stays as the pointer comes onto
+# it, and goes once it's on neither.
 send move 24 $((height - 25))
 expect '^browser: recent downloads shown 1$' \
   "resting on the Library button didn't show the recent download"
-# notes.txt's row shows the system's icon for its type, as Finder's or the file manager's.
-expect '^browser: download [0-9]* preview icon 52x52$' "notes.txt's row didn't show its type's icon"
 onto=$((step + 1))
 send move 24 $((height - 45))
 send move 120 $((height - 78))
@@ -471,24 +469,6 @@ none_since '^browser: recent downloads hidden$' "$onto" ||
 ../tools/window-screenshot.sh "$pid" "$out/recent-downloads.png" || fail "no window to capture"
 send move $page_point
 expect '^browser: recent downloads hidden$' "the recent downloads stayed after the pointer left"
-# A right-click on the button picks what the rest lists, all of it at first. With Other Files off,
-# notes.txt isn't listed, so a rest shows nothing, and back on it's listed again.
-all=$(cased 'Images (checked), Videos (checked), Other Files (checked), Captures (checked)')
-post rightclick 24 $((height - 25))
-expect "^browser: menu shown $all\$" "a right-click on the Library button didn't show what it lists"
-../tools/window-screenshot.sh "$pid" "$out/library-button-menu.png" || fail "no window to capture"
-choose_drawn "$(cased 'Other Files')"
-expect '^browser: hover kinds images, videos, captures$' "Other Files didn't turn off"
-send move $page_point
-send move 24 $((height - 25))
-expect '^browser: recent downloads none$' "with Other Files off, a rest still had notes.txt to show"
-none_since '^browser: recent downloads shown' || fail "with Other Files off, notes.txt still showed"
-send move $page_point
-post rightclick 24 $((height - 25))
-expect "^browser: menu shown $(cased 'Images (checked), Videos (checked), Other Files, ')" \
-  "the Library button's menu didn't untick Other Files"
-choose_drawn "$(cased 'Other Files')"
-expect '^browser: hover kinds images, videos, other files, captures$' "Other Files didn't turn on"
 # A finished download's menu, with Chrome's word off the Mac for the file manager there, and on
 # Windows its name for the Trash.
 file_manager=Finder
@@ -991,16 +971,16 @@ new_window_bar
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-# General's first row is the switch.
-if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+# When it opens is General's second group.
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
   settings_drew General
 fi
-at=$(drawn "switch restore windows") || fail "Restore windows from last session has no switch"
+in_sight "segment Start fresh" || fail "When it opens has no Start fresh"
 send clickkey $at
 expect '^browser: restore windows off$' \
-  "a click on Restore windows from last session didn't turn it off"
+  "a click on Start fresh didn't turn Restore windows off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 exec 3>&-
@@ -1022,6 +1002,6 @@ grep -q '^browser: loaded ' "$log" && fail "a page loaded at a launch with Resto
 [ "$(grep -c '^browser: window opened ' "$log")" = 1 ] ||
   fail "the second window came back with Restore windows off"
 quit
-echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page, and from another Space in the one it closed in, restored at once or kept from its preview ($out/archive-restored-to-space.png, $out/archive-kept-to-space.png). Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. The session ending keeps a tab opened just before it. A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays, and a download ended that long ago leaves the list, keeping its file; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
+echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page, and from another Space in the one it closed in, restored at once or kept from its preview ($out/archive-restored-to-space.png, $out/archive-kept-to-space.png). Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest downloads on its plate, until the pointer leaves it, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. The session ending keeps a tab opened just before it. A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays, and a download ended that long ago leaves the list, keeping its file; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
 echo "  Restore, 3 tabs in 2 Spaces: ${restore_ms}ms. Windows: $out/restored.png, $out/tab-icon-picker.png, $out/unloaded-scrolled.png,"
-echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png"
+echo "  $out/recent-downloads.png, $out/media-video.png"

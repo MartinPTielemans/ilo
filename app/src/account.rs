@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::list_keys::Named;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     Global, KeyBinding, Pixels, Render, SharedString, Window, actions, canvas, div, prelude::*, px,
@@ -21,13 +22,15 @@ use gpui::{
 
 use crate::dialog::{Question, Return, Tone};
 use crate::settings_rows::{
-    Look, SLIDE, button, detailed_row, group, named_button, ring, stop_switch,
+    Look, SLIDE, button, detailed_row, end, frame, group, named_button, ring, stop_switch,
+    text as row_text,
 };
 use crate::text_input::TextInput;
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
+use crate::tokens::settings::sync;
 use crate::tokens::settings::{
-    BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_HEIGHT, ROW_X,
-    STATUS_DOT, STATUS_DOT_GAP, WORD_GAP, WORD_NUMBER, WORD_SPACE, WORDS_COLUMNS,
+    BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_X, STATUS_DOT,
+    STATUS_DOT_GAP, WORD_GAP, WORD_NUMBER, WORD_SPACE, WORDS_COLUMNS,
 };
 use crate::tokens::text;
 
@@ -45,6 +48,13 @@ pub const COPIED_NOTE: &str =
     "Copied for this device only. The clipboard forgets them in a minute and a half.";
 #[cfg(target_os = "linux")]
 pub const COPIED_NOTE: &str = "Copied. The clipboard forgets them in a minute and a half.";
+/// What the recovery words' field says when what was typed isn't 24 of them.
+pub(crate) const REFUSED_WORDS: &str = "These aren't 24 recovery words. Check each one.";
+/// A new device that isn't asking the others to add it, with nothing gone wrong.
+pub(crate) const ASK_ANOTHER: &str = "Ask a device already signed in to add this one.";
+/// While the sign-in window is open: ChatGPT's own line, as both wait in a window the browser
+/// opens, so the account and the assistant say it alike (FR19).
+pub(crate) const FINISH_SIGN_IN: &str = crate::agents::sign_in::CHATGPT_WAITING;
 /// The metadata that has GPUI's Linux clipboard offer a copy with KDE's password manager hint,
 /// which Klipper and the clipboard managers that follow it don't record (patches/
 /// gpui-linux-embedded.patch).
@@ -434,7 +444,7 @@ pub fn clock(at: f64, today: f64) -> String {
 }
 
 /// What the view says of a problem, by where the account is.
-fn problem_text(problem: Problem) -> &'static str {
+pub(crate) fn problem_text(problem: Problem) -> &'static str {
     match problem {
         Problem::WrongWords => "These words are for another account.",
         Problem::Declined => "Your other device didn't add this one.",
@@ -485,6 +495,15 @@ impl Account {
 
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    /// How many devices the account has, once the core has listed them since Sync showed: none
+    /// while it hasn't, as the list waits empty for its answer.
+    pub fn device_count(&self) -> Option<usize> {
+        self.devices
+            .as_ref()
+            .map(Vec::len)
+            .filter(|&count| count > 0)
     }
 
     /// Asks the core again how sync is keeping up, as Settings shows the account and as the core
@@ -610,7 +629,7 @@ impl Account {
     /// The server as the account names it: the build's own by the app's name, else its host.
     fn server_name(&self) -> SharedString {
         match self.state.default_server {
-            true => env!("APP_NAME").into(),
+            true => env!("PRODUCT_NAME").into(),
             false => host_of(&self.state.server).to_owned().into(),
         }
     }
@@ -628,11 +647,11 @@ impl Account {
 
     fn change_server(&mut self, cx: &mut Context<Self>) {
         let server = self.state.server.clone();
+        let colors = crate::settings_rows::field_colors(cx, |account: &Self| account.look);
         let input = cx.new(|cx| {
             TextInput::new("https://", cx)
                 .spoken("Sync Server Address")
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
                 .with_text(server)
         });
         self.server = Some(Field {
@@ -663,15 +682,15 @@ impl Account {
         kept
     }
 
-    fn enter_words(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn enter_words(&mut self, cx: &mut Context<Self>) {
         if self.state.status == Status::Pairing {
             self.host.cancel();
         }
+        let colors = crate::settings_rows::field_colors(cx, |account: &Self| account.look);
         let input = cx.new(|cx| {
             TextInput::new("24 words", cx)
                 .spoken("Recovery Words")
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
         });
         self.entering = Some(Field {
             input,
@@ -681,7 +700,7 @@ impl Account {
         cx.notify();
     }
 
-    fn keep_words(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn keep_words(&mut self, cx: &mut Context<Self>) {
         let Some(field) = &mut self.entering else {
             return;
         };
@@ -690,7 +709,13 @@ impl Account {
         cx.notify();
     }
 
-    fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// The field open, the server's address or the recovery words, whose ↩ and esc are an input
+    /// method's while it composes there (dismissal's rule).
+    pub(crate) fn open_field(&self) -> Option<Entity<TextInput>> {
+        (self.server.as_ref().or(self.entering.as_ref())).map(|field| field.input.clone())
+    }
+
+    pub(crate) fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // With no server, the field is the only way to name one, so it stays.
         let stays = self.no_server() && self.server.is_some();
         if !stays && self.server.take().is_none() {
@@ -700,13 +725,13 @@ impl Account {
         cx.notify();
     }
 
-    fn ask_again(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn ask_again(&mut self, cx: &mut Context<Self>) {
         self.asked = true;
         self.host.request_pairing();
         cx.notify();
     }
 
-    fn copy_words(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_words(&mut self, cx: &mut Context<Self>) {
         let Some(words) = &mut self.words else {
             return;
         };
@@ -722,6 +747,50 @@ impl Account {
             .detach();
         }
         cx.notify();
+    }
+
+    /// The words were saved: they go, and an account that syncs already is finished.
+    pub(crate) fn words_kept(&mut self, cx: &mut Context<Self>) {
+        self.words = None;
+        if self.state.status == Status::On {
+            cx.emit(AccountEvent::Finished);
+        }
+        cx.notify();
+    }
+
+    /// The recovery words on screen, for a view that draws them itself, as first run's card does.
+    pub(crate) fn shown_words(&self) -> Option<&[String]> {
+        self.words.as_ref().map(|words| words.words.as_slice())
+    }
+
+    /// Copy reads Copied, and the note on where the copy went shows, at the executor's `now`.
+    pub(crate) fn copied(&self, now: Instant) -> (bool, bool) {
+        let at = self.words.as_ref().and_then(|words| words.copied);
+        let within = |kept: Duration| at.is_some_and(|at| now - at < kept);
+        (within(COPIED), within(WORDS_KEPT))
+    }
+
+    /// This device has asked the others to add it since it signed in.
+    pub(crate) fn asked(&self) -> bool {
+        self.asked
+    }
+
+    /// The recovery words' field while it's open, and whether what was typed wasn't taken.
+    pub(crate) fn entering(&self) -> Option<(Entity<TextInput>, bool)> {
+        (self.entering.as_ref()).map(|field| (field.input.clone(), field.refused))
+    }
+
+    /// Stops what's under way: the sign-in window, or this device's request to the others.
+    pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
+        self.host.cancel();
+        cx.notify();
+    }
+
+    /// Asks the core for what shows and gives a field just opened the keyboard, as drawing the
+    /// view does, for a view that draws the account itself.
+    pub(crate) fn showing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ask_what_shows();
+        self.focus_field(window, cx);
     }
 
     /// Signs out, asking first if this is the account's only device, as its words are then the
@@ -887,21 +956,29 @@ impl Account {
             }),
         };
         let detail = match (signing_in, self.state.problem) {
-            (true, _) => Some("Finish in the window that opened."),
+            (true, _) => Some(FINISH_SIGN_IN),
             // The address it needs, not a server it couldn't reach, which the user can't act on.
             (false, _) if self.no_server() => Some("Enter your sync server's address to sign in."),
             (false, Some(problem)) => Some(problem_text(problem)),
             (false, None) => None,
         };
         let server = match &self.server {
-            Some(field) => self.field(field, "That isn't a server address ilo can use.", cx),
+            Some(field) => self.field(
+                field,
+                concat!(
+                    "That isn't a server address ",
+                    env!("PRODUCT_NAME"),
+                    " can use."
+                ),
+                cx,
+            ),
             None => {
                 let name = self.server_name();
                 div()
                     .pl(px(ROW_X))
                     .flex()
-                    // Under the step's button, centred as it is.
-                    .when(self.step, |line| line.pl_0().justify_center())
+                    // On first run's sheet, at the step's words' left edge.
+                    .when(self.step, |line| line.pl_0())
                     .text_size(px(text::SMALL))
                     .text_color(self.look.detail)
                     .child(format!("Server: {name} · "))
@@ -949,16 +1026,20 @@ impl Account {
                     .py(px(PADDING))
                     .key_context("AccountField")
                     .on_action(cx.listener(|account, _: &Keep, window, cx| {
+                        if !crate::dismissal::submits(&account.open_field(), cx) {
+                            return;
+                        }
                         match account.server.is_some() {
                             true => _ = account.keep_server(window, cx),
                             false => account.keep_words(cx),
                         }
                     }))
-                    .on_action(
-                        cx.listener(|account, _: &Leave, window, cx| {
+                    .on_action(cx.listener(|account, _: &Leave, window, cx| {
+                        let field = account.open_field();
+                        if crate::dismissal::Close::escape_from(&field, cx).is_some() {
                             account.leave_field(window, cx)
-                        }),
-                    )
+                        }
+                    }))
                     .child(self.place("field".into()))
                     .child(field.input.clone())],
             ))
@@ -1049,13 +1130,9 @@ impl Account {
                     .flex()
                     .justify_between()
                     .child(copy)
-                    .child(self.button("done", "Done", cx, |account, _, cx| {
-                        account.words = None;
-                        if account.state.status == Status::On {
-                            cx.emit(AccountEvent::Finished);
-                        }
-                        cx.notify();
-                    })),
+                    .child(
+                        self.button("done", "Done", cx, |account, _, cx| account.words_kept(cx)),
+                    ),
             )
     }
 
@@ -1063,7 +1140,7 @@ impl Account {
     /// words.
     fn new_device(&self, cx: &mut Context<Self>) -> gpui::Div {
         if let Some(field) = &self.entering {
-            let refused = "These aren't 24 recovery words. Check each one.";
+            let refused = REFUSED_WORDS;
             let wrong = self.state.problem == Some(Problem::WrongWords) && !field.refused;
             return div()
                 .child(header(&self.look, "Enter your recovery words", true))
@@ -1117,7 +1194,7 @@ impl Account {
                         "On a device signed in to {}, {} asks to add this one. Add it there if it \
                          shows this code.",
                         self.state.email,
-                        env!("APP_NAME"),
+                        env!("PRODUCT_NAME"),
                     ),
                     None,
                     Some(
@@ -1142,10 +1219,7 @@ impl Account {
             }
             false => lines(
                 &self.look,
-                self.state.problem.map_or(
-                    "Ask a device already signed in to add this one.",
-                    problem_text,
-                ),
+                self.state.problem.map_or(ASK_ANOTHER, problem_text),
                 None,
                 Some(
                     self.button("ask-again", "Ask Again", cx, |account, _, cx| {
@@ -1180,30 +1254,64 @@ impl Account {
 
     /// Signed in: the account, its devices, and the way to see the words again.
     fn signed_in(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
         let sign_out = self.button("sign-out", "Sign Out", cx, |account, window, cx| {
             account.sign_out(window, cx)
         });
-        let account = div().px(px(ROW_X)).py(px(PADDING)).child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(END_GAP))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(self.state.email.clone())
-                        .child(self.status_line(cx)),
-                )
-                .child(div().flex_none().child(sign_out)),
+        // The address's first letter on a round tile, as the drawing has the account (S6).
+        let initial: String = (self.state.email.chars().next())
+            .map(|first| first.to_uppercase().collect())
+            .unwrap_or_default();
+        let tile = div()
+            .flex_none()
+            .size(px(sync::TILE))
+            .rounded_full()
+            .bg(look.control)
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(sync::TILE_TEXT))
+            .font_weight(FontWeight::MEDIUM)
+            .child(initial);
+        let account = div()
+            .min_h(px(sync::ACCOUNT))
+            .px(px(ROW_X))
+            .py(px(PADDING))
+            .flex()
+            .items_center()
+            .gap(px(sync::TILE_GAP))
+            .child(tile)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().truncate().child(self.state.email.clone()))
+                    .child(self.status_line(cx)),
+            )
+            .child(div().flex_none().ml(px(END_GAP)).child(sign_out));
+        // Today's path to the words, with its own question first, from the drawn row.
+        let show = self.button_said(
+            "show-words",
+            "Show…",
+            "Show Recovery Words…",
+            cx,
+            |account, window, cx| account.show_recovery_words(window, cx),
+        );
+        let words = detailed_row(
+            look,
+            "Recovery words",
+            "The only way back in if you lose every device.",
+            Some(show.into_any_element()),
         );
 
+        let removable: Vec<_> = (self.devices.iter().flatten())
+            .filter(|device| !device.current)
+            .map(|device| device.id.clone())
+            .collect();
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
-                true => div()
-                    .text_color(self.look.detail)
-                    .child("This device")
-                    .into_any_element(),
+                // Where another's ✕ is, so the names and ends line up.
+                true => div().flex_none().w(px(sync::CLOSE_BOX)).into_any_element(),
                 false => {
                     let id = device.id.clone();
                     let remove =
@@ -1212,69 +1320,116 @@ impl Account {
                             cx.notify();
                         };
                     let spoken = format!("Remove {}", device.name);
-                    self.button_said(
-                        format!("remove {}", device.id),
-                        "Remove",
-                        spoken,
-                        cx,
-                        remove,
-                    )
-                    .into_any_element()
+                    // From the keys, the keyboard goes on to the ✕ of the device that takes its
+                    // place (list_keys' rule).
+                    let (gone, listed) = (device.id.clone(), removable.clone());
+                    let hand_on = move |_: &mut Self,
+                                        click: &gpui::ClickEvent,
+                                        window: &mut Window,
+                                        cx: &mut Context<Self>| {
+                        let keys = click.is_keyboard();
+                        crate::list_keys::removing(&gone, &listed, Named::ByRow, keys, window, cx)
+                    };
+                    let name = format!("remove {}", device.id);
+                    let hovered = look.control;
+                    div()
+                        .id(SharedString::from(name.clone()))
+                        .when(self.a11y, |close| named_button(close, spoken))
+                        .tab_index(0)
+                        .focus_from_keys_only()
+                        .focus_visible(ring(look.ink))
+                        .relative()
+                        .flex_none()
+                        .size(px(sync::CLOSE_BOX))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .hover(move |close| close.bg(hovered))
+                        .child(
+                            svg()
+                                .path("icons/x.svg")
+                                .size(px(sync::CLOSE))
+                                .text_color(look.detail),
+                        )
+                        .child(self.place(name))
+                        .on_click(
+                            cx.listener(move |account, _, window, cx| remove(account, window, cx)),
+                        )
+                        .on_click(cx.listener(hand_on))
+                        .into_any_element()
                 }
             };
+            // What the account knows of each: its system, and this one said so.
+            let said = match device.current {
+                true => SharedString::from("This device"),
+                false => device.os.clone(),
+            };
             div()
-                .min_h(px(ROW_HEIGHT))
+                .min_h(px(sync::DEVICE))
                 .px(px(ROW_X))
                 .py(px(PADDING))
                 .flex()
                 .items_center()
+                .gap(px(sync::DEVICE_GAP))
+                .child(
+                    svg()
+                        .flex_none()
+                        .path(device_glyph(&device.os))
+                        .size(px(sync::DEVICE_GLYPH))
+                        .text_color(look.detail),
+                )
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(div().truncate().child(device.name.clone()))
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(text::SMALL))
-                                .text_color(self.look.detail)
-                                .child(device.os.clone()),
-                        ),
+                        .truncate()
+                        .child(device.name.clone()),
                 )
-                .child(div().flex_none().ml(px(END_GAP)).child(control))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(text::SMALL))
+                        .text_color(look.detail)
+                        .child(said),
+                )
+                .child(control)
         });
         let devices: Vec<gpui::Div> = devices.collect();
+        // Named alone, as drawn: what each switch syncs is its name.
         let chosen = [
-            detailed_row(
-                &self.look,
-                "Settings",
-                "Ad blocking, Peek, Little ilo and more. What's this computer's own stays here.",
-                Some(self.choice(Choice::Settings, cx)),
-            ),
-            detailed_row(
-                &self.look,
-                "Extensions",
-                "Those from the Chrome Web Store install on your other devices too.",
-                Some(self.choice(Choice::Extensions, cx)),
-            ),
+            frame()
+                .child(row_text(look, "Settings", None))
+                .child(end([self.choice(Choice::Settings, cx)])),
+            frame()
+                .child(row_text(look, "Extensions", None))
+                .child(end([self.choice(Choice::Extensions, cx)])),
         ];
+        let always = div()
+            .flex()
+            .items_baseline()
+            .justify_between()
+            .gap(px(END_GAP))
+            .child(header(look, "What syncs", false))
+            .child(
+                div()
+                    .mb(px(HEADING_BOTTOM))
+                    .px(px(ROW_X))
+                    .text_size(px(text::SMALL))
+                    .text_color(look.detail)
+                    .child("Spaces, tabs, bookmarks and passwords always do"),
+            );
         div()
             .flex()
             .flex_col()
-            .child(group(&self.look, [account]))
-            .child(header(&self.look, "Also sync", false))
-            .child(group(&self.look, chosen))
+            .child(group(look, [account, words]))
+            .child(always)
+            .child(group(look, chosen))
             .when(!devices.is_empty(), |section| {
                 section
-                    .child(header(&self.look, "Devices", false))
-                    .child(group(&self.look, devices))
+                    .child(header(look, "Devices", false))
+                    .child(group(look, devices))
             })
-            .child(div().mt(px(BUTTONS_TOP)).flex().child(self.button(
-                "show-words",
-                "Show Recovery Words…",
-                cx,
-                |account, window, cx| account.show_recovery_words(window, cx),
-            )))
             .child(self.delete_group(cx))
     }
 
@@ -1294,29 +1449,21 @@ impl Account {
             Choice::Settings => "Sync Settings",
             Choice::Extensions => "Sync Extensions",
         };
-        stop_switch(
-            &self.look,
-            name,
-            spoken,
-            on,
-            slid,
-            self.look.accent,
-            self.a11y,
-        )
-        .on_click(cx.listener(move |account, _, _, cx| {
-            // check.sh waits for this line.
-            log!("browser: sync {name} {}", if on { "off" } else { "on" });
-            // It slides now; the core's word that it took the choice follows.
-            match what {
-                Choice::Settings => account.state.settings = !on,
-                Choice::Extensions => account.state.extensions = !on,
-            }
-            account.host.choose(what, !on);
-            account.switched = Some((what, crate::motion::start(cx)));
-            cx.notify();
-        }))
-        .child(self.place(format!("switch {name}")))
-        .into_any_element()
+        stop_switch(&self.look, name, spoken, on, slid, self.look.on, self.a11y)
+            .on_click(cx.listener(move |account, _, _, cx| {
+                // check.sh waits for this line.
+                log!("browser: sync {name} {}", if on { "off" } else { "on" });
+                // It slides now; the core's word that it took the choice follows.
+                match what {
+                    Choice::Settings => account.state.settings = !on,
+                    Choice::Extensions => account.state.extensions = !on,
+                }
+                account.host.choose(what, !on);
+                account.switched = Some((what, crate::motion::start(cx)));
+                cx.notify();
+            }))
+            .child(self.place(format!("switch {name}")))
+            .into_any_element()
     }
 
     /// Delete Account, under the rest while signed in, with or without the secret: someone who
@@ -1341,7 +1488,7 @@ impl Account {
     /// The server as a sentence names it: "ilo's server", or its host.
     fn server_phrase(&self) -> String {
         match self.state.default_server {
-            true => format!("{}'s server", env!("APP_NAME")),
+            true => format!("{}'s server", env!("PRODUCT_NAME")),
             false => host_of(&self.state.server).to_owned(),
         }
     }
@@ -1349,7 +1496,7 @@ impl Account {
     /// What the line under the account's email says: what stops sync, if anything, which shows in
     /// red, then when it last synced or what happens next.
     fn status_words(&self) -> (Option<String>, String) {
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let synced = &self.activity.synced;
         let since = &self.activity.since;
         let last = match synced.is_empty() {
@@ -1427,7 +1574,7 @@ impl Account {
         let dot = if trouble.is_some() {
             red
         } else {
-            self.look.accent
+            self.look.primary
         };
         let mut text = vec![];
         if let Some(trouble) = trouble {
@@ -1505,7 +1652,7 @@ impl Account {
     }
 
     /// Gives a field just shown the keyboard.
-    fn focus_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for field in [&mut self.server, &mut self.entering].into_iter().flatten() {
             if std::mem::take(&mut field.focus) {
                 window.focus(&field.input.focus_handle(cx), cx);
@@ -1529,6 +1676,17 @@ fn header(look: &Look, title: &'static str, first: bool) -> gpui::Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(look.heading)
         .child(title)
+}
+
+/// A device's glyph on its row: a phone for a phone's system, else the laptop.
+fn device_glyph(os: &str) -> &'static str {
+    match ["iOS", "iPadOS", "Android"]
+        .iter()
+        .any(|phone| os.starts_with(phone))
+    {
+        true => "icons/device-phone.svg",
+        false => "icons/device-laptop.svg",
+    }
 }
 
 /// A grey line under a box.

@@ -27,8 +27,8 @@ names=$({
   grep -o 'Adopt([^,]*, [^,]*, "[^"]*"' platform/windows/host.cc | grep -o '"[^"]*"'
   grep -o 'each(context, "[^"]*"' platform/windows/host.cc | grep -o '"[^"]*"'
 } | tr -d '"' | awk '!seen[$0]++')
-[ "$(printf '%s\n' "$names" | grep -c .)" -ge 23 ] ||
-  fail "the host's code gave fewer than the 23 names it had (#2563, #2954, #3555): $(printf '%s\n' "$names" | tr '\n' ',')"
+[ "$(printf '%s\n' "$names" | grep -c .)" -ge 22 ] ||
+  fail "the host's code gave fewer than the 22 names it had (#2563, #2954): $(printf '%s\n' "$names" | tr '\n' ',')"
 # The order the run walks them in. Each is opened and closed by open and close below.
 order='command bar
 find bar
@@ -51,8 +51,7 @@ offer
 drop targets
 reveal
 mini bar
-foot bar
-agent request'
+foot bar'
 unknown=$(printf '%s\n' "$names" | while read -r name; do
   printf '%s\n' "$order" | grep -qx "$name" || printf '%s, ' "$name"
 done)
@@ -80,11 +79,6 @@ host=${site#http://}
 host=${host%%:*}
 mkdir -p "$profile_dir/Default/Boosts"
 printf '%s\n' '/* overlays */' > "$profile_dir/Default/Boosts/$host.css"
-# An agent of the run's own, whose change asks with a card that opens the agent request (#3555).
-agent_token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$agent_token" \
-  > "$profile_dir/Agents"
-chmod 600 "$profile_dir/Agents"
 
 log="$out/overlays.log"
 step=0
@@ -106,7 +100,7 @@ fi
 logged '^browser: drive: real press' || fail "CI's desktop gave no real input, which the run's events need"
 
 # The tabs: the page pinned, then a folder under it holding a pinned tab, closed, and a login page
-# in Today. The Today row is under the two pinned rows, the divider and "+ New Tab".
+# in Today. The Today row is under the two pinned rows, the gap over Today and "+ New Tab".
 send key d cmd
 expect "^browser: pinned $a\$" "⌘D didn't pin the overlays page"
 send key t cmd
@@ -132,37 +126,7 @@ send insert "${site}login.html"
 send key return
 expect '^browser: title [0-9]* login$' "the login page didn't draw"
 l=$(today | cut -d' ' -f1)
-today_row="100 $((90 + 44 + 41 * 2 + 15 + 41 + 20))"
-# The agent: the bridge on two pipes, as rules' is, and a tab of its own, in its Space.
-await '^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ||
-  fail "the saved switch didn't start the agents' server"
-socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
-rm -f "$out/overlays-in" "$out/overlays-out"
-mkfifo "$out/overlays-in" "$out/overlays-out"
-BROWSER_AGENT_TOKEN=$agent_token windows_bridge "$app/mcp-bridge.exe" "$socket" \
-  "$out/overlays-in" "$out/overlays-out" 2>> "$out/overlays-bridge.log" &
-bridge_pid=$!
-exec 4> "$out/overlays-in" 5< "$out/overlays-out"
-# The bridge's next line within 30 s, as rules' next_answer.
-agent_line() {
-  perl -e 'alarm shift; my $line = "";
-    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
-    print $line; exit($line =~ /\n\z/ ? 0 : 1)' 30 <&5
-}
-agent_id=0
-# Sends the agent's call of the tool $1 with the arguments $2, without waiting for its answer.
-agent_call() {
-  agent_id=$((agent_id + 1))
-  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$agent_id,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" >&4
-}
-printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"overlays","version":"1"}}}' >&4
-agent_line > "$out/overlays-initialize.json" || fail "the browser didn't answer the agent's initialize"
-printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
-agent_call open_tab "{\"url\":\"$target\"}"
-opened=$(agent_line) || fail "the browser didn't answer the agent's open_tab"
-agent_tab=$(printf '%s\n' "$opened" | grep -o 'Opened tab [0-9]*' | head -1 | cut -d' ' -f3)
-[ -n "$agent_tab" ] || fail "the agent's open_tab answered: $opened"
-await "^browser: loaded $agent_tab $target\$" || fail "the agent's tab didn't load $target"
+today_row="100 $((86 + 42 + 34 * 2 + 6 + 34 + 17))"
 send click $(pinned_row 0)
 expect "^browser: selected $a in " "a click on the pinned overlays page didn't show it again"
 
@@ -341,20 +305,6 @@ EOF
       send flags
       expect '^browser: reveal shown$' "$2: Alt alone didn't bring the hidden sidebar out"
       ;;
-    # The agent's change asks with its card under the URL field, whose See the whole request floats
-    # the whole request beside it with the keyboard.
-    'agent request')
-      agent_call request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/api/overlays-note\",\"body\":{},\"what\":\"Replace the made-up note on the overlays page.\"}]}"
-      expect '^browser: agent mcp-client asks ' "$2: the agent's change didn't ask"
-      q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-      expect "^browser: agent request see $q at " "$2: the change's card drew no See the whole request"
-      read -r sx sy sw sh << EOF
-$(grep "^browser: agent request see $q at " "$log" | tail -1 | cut -d' ' -f7-)
-EOF
-      send click $((sx + 20)) $((sy + sh / 2))
-      expect "^browser: agent request $q shown, 1 changes\$" "$2: See the whole request didn't show it"
-      expect '^browser: agent request shown$' "$2: the whole request's window never showed"
-      ;;
   esac
 }
 # Closes the overlay $1, after the event $2.
@@ -415,19 +365,6 @@ close() {
       send dragto $today_row
       expect '^browser: drop targets hidden$' "$2: the tab back over the sidebar left the drop targets"
       send release $today_row
-      ;;
-    # Escape leaves the question asked, and Deny on the card answers it, so nothing is sent and
-    # no card is left for the next.
-    'agent request')
-      send key escape
-      expect "^browser: agent request $q closed (Escape)\$" "$2: Escape didn't close the whole request"
-      read -r qx qy qw qh << EOF
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-EOF
-      send click $((qx + qw / 4)) $((qy + qh - 26))
-      expect "^browser: agent mcp-client answered $q Dismiss\$" "$2: Deny didn't answer the change's question"
-      agent_line > /dev/null || fail "$2: the browser didn't answer the agent's denied change"
-      ! grep -q 'overlays-note' "$out/site.log" || fail "$2: the denied change reached the site"
       ;;
     reveal)
       send move 650 320
@@ -536,10 +473,6 @@ done
 walk "Win+D and back" win-d
 events="$events, Win+D and back"
 
-exec 4>&-
-for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done
-exec 5<&-
-rm -f "$out/overlays-in" "$out/overlays-out"
 exec 3>&-
 quit
 echo "ok: overlays. Each of the $(printf '%s\n' "$order" | grep -c .) the host floats, after $events: shown on screen at its window's scale, and closed off screen with neither the keyboard nor the capture."

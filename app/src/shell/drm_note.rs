@@ -54,17 +54,17 @@ const SWITCH_WORDS: &str = "This site's video needs Safari's engine. Play it in 
 const SWITCH: &str = "Play in This Tab";
 const WORDS: &str = concat!(
     "This site's video needs a module ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " doesn't have yet."
 );
 const PLAYREADY_WINDOWS_11: &str = concat!(
     "This site's video needs Windows 11, where ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " plays it."
 );
 const PLAYREADY_X64: &str = concat!(
     "This site's video needs an Intel or AMD PC. ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " can't play it on ARM."
 );
 const PLAYREADY_HARDWARE: &str =
@@ -80,7 +80,7 @@ const OPEN_DEFAULT_PRIVATE: &str = "Open in Default Browser, not private";
 const WIDEVINE: &str = "com.widevine.alpha";
 const WIDEVINE_WORDS: &str = concat!(
     "This site's video needs Google's Widevine module, which ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " can download from Google."
 );
 const WIDEVINE_DOWNLOAD: &str = "Download from Google";
@@ -89,7 +89,7 @@ const WIDEVINE_RETRY: &str = "Try Again";
 const WIDEVINE_DOWNLOADING_WORDS: &str = "Downloading Google's Widevine module…";
 const WIDEVINE_RESTART_WORDS: &str = concat!(
     "Google's Widevine module is ready. Restart ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " to play this video."
 );
 const WIDEVINE_RESTART: &str = crate::widevine::RESTART;
@@ -253,13 +253,12 @@ impl Shell {
     }
 
     /// The key system behind the note of the tab shown, if its page needs one. A page's question
-    /// takes the note's place until it's answered, as an agent's does, as all hang from the same
-    /// place. Each note is its engine's: Chromium's until the tab is in Safari's, which has the
+    /// takes the note's place until it's answered, as both hang from the same place. Each note is its engine's: Chromium's until the tab is in Safari's, which has the
     /// output's and the move's. The move's stays reported until Chromium's page commits, so a tab
     /// on its way back never shows it as Chromium's.
     pub(super) fn drm_note(&self) -> Option<&SharedString> {
         let playing = self.page(self.selected).system_engine;
-        let asked = self.page_asks() || self.agent_question.is_some();
+        let asked = self.page_asks();
         self.drm_notes
             .get(&self.selected)
             .filter(|key_system| safaris(key_system) == playing && !asked)

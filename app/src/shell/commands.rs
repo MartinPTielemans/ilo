@@ -15,8 +15,8 @@ use crate::usage::{self, Usage};
 
 use super::command_names::{
     CONVERT_HORIZONTAL, CONVERT_VERTICAL, DEVELOPER_MODE_OFF, DEVELOPER_MODE_ON, DONT_STAY_ON_TOP,
-    ENTER_FULL_SCREEN, EXIT_FULL_SCREEN, HIDE_SIDEBAR, HIDE_TOP_BAR, PIN_TAB, SHOW_TOP_BAR,
-    SIDEBAR_TO_LEFT, SIDEBAR_TO_RIGHT, STAY_ON_TOP, TOGGLE_SIDEBAR, UNPIN_TAB,
+    ENTER_FULL_SCREEN, EXIT_FULL_SCREEN, HIDE_SIDEBAR, PIN_TAB, SIDEBAR_TO_LEFT, SIDEBAR_TO_RIGHT,
+    STAY_ON_TOP, TOGGLE_SIDEBAR, UNPIN_TAB,
 };
 use super::{
     COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar, boost,
@@ -84,8 +84,8 @@ pub enum Command {
     RevealTab,
     /// Gives the sidebar the keyboard, its arrows moving over the rows (sidebar_keys.rs).
     FocusSidebar,
-    /// Gives an agent's question card the keyboard, or with the keyboard on it, gives it back
-    /// (agent_card_keys.rs).
+    /// Gives the newest of the task's ilo lines the keyboard, or with the keyboard on it, gives it
+    /// back (conversation/ilo_keys.rs).
     FocusAgentQuestion,
     /// Off the Mac, rings the footer's menu control, which Return opens, as Chrome's F10 rings its
     /// menu button (menu_keys.rs).
@@ -116,6 +116,9 @@ pub enum Command {
     /// Brings each site's Today tabs in the Space shown together, at its first tab's place
     /// (`crate::sort_by_site`).
     SortBySite,
+    /// Sorts the Space shown's today's tabs into folders, as a click on the broom does
+    /// (Browser::start_broom, #4252): the user's alone, so no agent tool runs it.
+    SortIntoFolders,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -182,8 +185,6 @@ pub enum Command {
     /// Moves the sidebar to the window's other side, Settings' Sidebar position, in every window.
     /// The command bar's alone, with no key (#2375).
     MoveSidebar,
-    /// Turns Top bar on or off, Settings' Top bar, in every window (#3160).
-    ToggleTopBar,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -403,14 +404,12 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // keeps it. Off the Mac it would be Alt+D, Chrome's, so it has none there.
     ("ctrl-d", Command::ToggleDeveloperMode, false),
     ("cmd-s", Command::ToggleSidebar, false),
-    // Unreserved as ⌘S is, so a page that keeps it, as vscode.dev's Run and Debug, still gets it.
-    ("shift-cmd-d", Command::ToggleTopBar, false),
     // Chrome's key for moving the keyboard out of the page, unreserved as Chrome's is, as Arc's ⌘.
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
     // Chrome's Focus Inactive Popup, which gives its permission bubbles the keyboard: ⌥⇧⌘A on the
-    // Mac and Alt+Shift+A elsewhere (#3869). Unreserved, and kept from the page only while a card
-    // shows (agent_card_keys.rs).
+    // Mac and Alt+Shift+A elsewhere (#3869). Unreserved, and kept from the page only while a task's
+    // conversation shows (conversation/ilo_keys.rs).
     ("alt-shift-cmd-a", Command::FocusAgentQuestion, false),
     ("ctrl-shift-a", Command::FocusAgentQuestion, false),
     // Chrome's key for its menu button, unreserved as Chrome's is, off the Mac alone, whose menu
@@ -453,14 +452,6 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-9", Command::SelectSpace(8), false),
 ];
 
-/// Top bar's item in a menu and its row in the command bar, by whether it's on.
-pub(super) fn top_bar_title(on: bool) -> &'static str {
-    match on {
-        true => HIDE_TOP_BAR,
-        false => SHOW_TOP_BAR,
-    }
-}
-
 /// What turns Developer Mode the other way, for a page in it or not.
 pub(super) fn developer_mode_title(on: bool) -> &'static str {
     if on {
@@ -497,6 +488,7 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     row(Command::CloseTab, &["close tab"]),
     row(Command::Clear, &["unpinned tabs"]),
     row(Command::SortBySite, &["group tabs by site", "tidy tabs"]),
+    row(Command::SortIntoFolders, &[]),
     row(Command::ClearCacheAndRefresh, &[]),
     row(Command::ClearCookiesAndRefresh, &[]),
     row(Command::ClearArchive, &[]),
@@ -648,16 +640,6 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         SIDEBAR_TO_LEFT,
         Command::MoveSidebar,
         &["side", "position", "left", "right"],
-    ),
-    (
-        SHOW_TOP_BAR,
-        Command::ToggleTopBar,
-        &["toolbar", "address bar", "url bar"],
-    ),
-    (
-        HIDE_TOP_BAR,
-        Command::ToggleTopBar,
-        &["toolbar", "address bar", "url bar"],
     ),
     (
         trace::RECORD,
@@ -1047,8 +1029,8 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 }
 
 /// ⇧⌘C in the link preview copies its page's address, not the tab's under it, as Arc's Peek
-/// does, with the toast ⇧⌘C shows.
-pub fn copy_url_of_preview(url: &str, cx: &mut App) {
+/// does, with the toast ⇧⌘C shows. `tabs` are the preview's and the page it was peeked from.
+pub fn copy_url_of_preview(url: &str, tabs: &[u64], cx: &mut App) {
     let Some(shell) = key_shell(cx) else {
         return;
     };
@@ -1056,7 +1038,7 @@ pub fn copy_url_of_preview(url: &str, cx: &mut App) {
         .update(cx, |shell, cx| {
             let url = shell.copied_link(url);
             if !url.is_empty() {
-                shell.copy(&url, "Copied Current URL", cx);
+                shell.copy_from(tabs, &url, "Copied Current URL", cx);
             }
         })
         .ok();
@@ -1143,6 +1125,7 @@ impl Command {
             Command::Exit => "exit",
             Command::Clear => "clear",
             Command::SortBySite => "sort-by-site",
+            Command::SortIntoFolders => "sort-into-folders",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1179,7 +1162,6 @@ impl Command {
             Command::RecordTrace => "record-trace",
             Command::StayOnTop => "stay-on-top",
             Command::MoveSidebar => "move-sidebar",
-            Command::ToggleTopBar => "toggle-top-bar",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1359,7 +1341,6 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
-    super::agent_card_keys::bind(cx);
     super::library::keys::bind(cx);
 }
 
@@ -1469,8 +1450,23 @@ impl Shell {
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
+        // First run's card has no close, so ⌘W and ⇧⌘W there close nothing; ⌘[ is the card's own
+        // Back (onboarding_key), not a page's.
+        if matches!(
+            command,
+            Command::CloseTab | Command::CloseWindow | Command::Back
+        ) && self.first_run_key(cx)
+        {
+            return;
+        }
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
+        // And a command of the user's after a close a page hasn't answered is no answer to it,
+        // so the view kept for its refusal goes. The same close again keeps it (#4202).
+        let closes = matches!(command, Command::CloseWindow | Command::Quit);
+        if users_own(from) && !closes {
+            self.forget_closing(cx);
+        }
         // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
         self.edit_url_waits = None;
         // And so is any but another ⌘W after one waiting to close the tab shown next (#3570).
@@ -1515,6 +1511,14 @@ impl Shell {
         // An Esc with nothing to stop closes a Little ilo window (Arc), as no menu's Stop does.
         let key = matches!(from, "ui" | "page");
         if matches!(command, Command::Stop) && key && self.escape_unused(cx) {
+            return;
+        }
+        // With no page the Space rests on its field, which ⌘T and ⌘L give the keyboard rather than
+        // opening a bar over it. The other ways to a new tab (the sidebar's row, a new window,
+        // Start Again's ask) open the bar, as they did.
+        if matches!(command, Command::NewTab | Command::EditUrl) && key && self.keys_to_resting(cx)
+        {
+            self.leave_keys("new tab", cx);
             return;
         }
         // The command bar opens over the page, and the reveal's panel makes way for it.
@@ -1572,6 +1576,7 @@ impl Shell {
             Command::CloseWindow => {
                 // As ⌘W does, from a window of Chrome's it closes that one.
                 if !self.browser.close_other_window(cx) {
+                    self.about_to_close(cx);
                     self.browser.close_window(cx);
                 }
                 return;
@@ -1621,6 +1626,13 @@ impl Shell {
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::SortBySite => return self.sort_by_site(cx),
+            // What the browser says now, as the broom's click reads it.
+            Command::SortIntoFolders => {
+                if self.browser.broom().is_some_and(super::Broom::sorts) {
+                    self.browser.start_broom(cx);
+                }
+                return;
+            }
             // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
             Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
@@ -1681,7 +1693,6 @@ impl Shell {
                     .browser
                     .keep_sidebar_right(!super::sidebar_right(cx), cx);
             }
-            Command::ToggleTopBar => return self.browser.keep_top_bar(!self.top_bar, cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1724,7 +1735,17 @@ impl Shell {
                 }
                 return;
             }
-            Command::Quit => return self.browser.quit(cx),
+            Command::Quit => {
+                // A task's view stands while Quit asks, so Cancel leaves the window as it was
+                // (#4202). Once the quit is decided it's as the window's close: the core shows the
+                // user's Space again, which the session then keeps for the window, and a page that
+                // refuses brings the view back.
+                let shell = cx.weak_entity();
+                let going = std::rc::Rc::new(move |cx: &mut App| {
+                    shell.update(cx, |shell, cx| shell.about_to_close(cx)).ok();
+                });
+                return self.browser.quit(going, cx);
+            }
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewBoard => return self.new_board(cx),
@@ -1898,7 +1919,7 @@ impl Shell {
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
         let space = self.space;
-        // The tasks at the foot are the window's, not the Space's, so they stay (Agent task).
+        // The task cards in Today aren't tabs, so they stay (spec-thread-card).
         if let Some(clear) = self.clear_now(cx) {
             self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
         }
@@ -1947,7 +1968,7 @@ impl Shell {
             return;
         };
         match markdown {
-            true => self.copy(&text, toast, cx),
+            true => self.copy_from(&[tab], &text, toast, cx),
             false => self.copy_page_url(tab, text, toast, cx),
         }
     }
@@ -1956,11 +1977,14 @@ impl Shell {
     /// a share sheet, with the capture toast's Share button: ⇧⌘C's and the URL field's button's.
     fn copy_page_url(&mut self, tab: u64, url: String, toast: &str, cx: &mut Context<Self>) {
         if !self.browser.has_share_sheet() {
-            return self.copy(&url, toast, cx);
+            return self.copy_from(&[tab], &url, toast, cx);
         }
         self.browser.copy(&url, cx);
-        // check.sh reads this line.
-        log!("browser: copied {url}");
+        // check.sh reads this line. A sign-in's page's address can hold its code or a token.
+        log!(
+            "browser: copied {}",
+            crate::agents::sign_in::logged(tab, &url)
+        );
         let (browser, title) = (self.browser.clone(), self.title(tab));
         let share = std::rc::Rc::new(move |at, cx: &mut App| {
             browser.share_from_toast(&url, &title, at, cx)
@@ -2069,9 +2093,23 @@ impl Shell {
 
     /// Copies `text` and shows `toast`.
     pub(super) fn copy(&mut self, text: &str, toast: &str, cx: &mut Context<Self>) {
+        self.copy_from(&[], text, toast, cx);
+    }
+
+    /// Copies `text`, made from the pages of `tabs`, and shows `toast`. A sign-in's page's address
+    /// can hold its code or a token (#4100), so the line names none of it when one is.
+    pub(super) fn copy_from(
+        &mut self,
+        tabs: &[u64],
+        text: &str,
+        toast: &str,
+        cx: &mut Context<Self>,
+    ) {
         self.browser.copy(text, cx);
+        let logged =
+            (tabs.iter()).fold(text, |text, &tab| crate::agents::sign_in::logged(tab, text));
         // check.sh reads this line.
-        log!("browser: copied {text}");
+        log!("browser: copied {logged}");
         self.browser.toast(toast, None, COPIED_TIME, cx);
     }
 
@@ -2099,7 +2137,7 @@ impl Shell {
     }
 
     /// `tabs`, those shown most recently first, then the rest in their order.
-    fn recent_first(&self, tabs: Vec<u64>) -> Vec<u64> {
+    pub(super) fn recent_first(&self, tabs: Vec<u64>) -> Vec<u64> {
         let recent = self.recent.iter().copied().filter(|tab| tabs.contains(tab));
         let mut order: Vec<u64> = recent.collect();
         for tab in tabs {
@@ -2258,7 +2296,7 @@ impl Shell {
             Command::FocusSidebar => {
                 self.library.is_none() && !self.page_fullscreen && !self.sidebar_rows().is_empty()
             }
-            Command::FocusAgentQuestion => self.agent_question().is_some(),
+            Command::FocusAgentQuestion => self.talk.is_some(),
             Command::FocusMenu => self.menu_reaches(),
             Command::ExpandFolders => self.shown_space().is_some_and(|space| {
                 space
@@ -2270,6 +2308,9 @@ impl Shell {
             Command::Clear => !self.today().is_empty(),
             // With every site's tabs together already, it would change nothing.
             Command::SortBySite => self.sorted_by_site(self.space).is_some(),
+            // Where the broom is drawn and takes a click: never in a private window or an agent's
+            // Space, and never with fewer than four tabs to sort or a sort running.
+            Command::SortIntoFolders => self.browser.broom().is_some_and(super::Broom::sorts),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
@@ -2343,7 +2384,6 @@ impl Shell {
             | Command::RecordTrace
             | Command::StayOnTop
             | Command::MoveSidebar
-            | Command::ToggleTopBar
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2424,7 +2464,6 @@ impl Shell {
                 };
                 (name == to).then_some(name)
             }
-            Command::ToggleTopBar => (name == top_bar_title(self.top_bar)).then_some(name),
             _ => Some(name),
         }
     }
@@ -2517,6 +2556,14 @@ pub(super) fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
     pinned.chain(&space.today).copied()
 }
 
+/// Whether a command from `from` is the user's own act in this window. Every key, menu, click and
+/// gesture is, and so is Chrome's Downloads after the user stopped a quit for them. No agent's path
+/// runs a command. What isn't: another launch asking the window in front for a new one, the bar ilo
+/// opens by itself as the onboarding ends and in a new window, and the preview's start.
+fn users_own(from: &str) -> bool {
+    !matches!(from, "launch" | "onboarding" | "new window" | "preview")
+}
+
 /// Whether a private window runs `command`. It has one Space, unsaved, so nothing that keeps a tab
 /// or shows another Space, and none of what the regular windows keep: the closed tabs, the
 /// Library's Spaces and archived tabs, the history. Its Library has its own session's downloads
@@ -2551,6 +2598,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::PreviousSpace
             | Command::ViewArchive
             | Command::ClearArchive
+            | Command::SortIntoFolders
             | Command::ViewAgents
             // It keeps nothing, so it makes no Boost, though it shows its profile's.
             | Command::NewBoost

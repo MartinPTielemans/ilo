@@ -107,6 +107,18 @@ pub(crate) fn shell_with_view(ui_view: *mut c_void) -> WeakEntity<Shell> {
     })
 }
 
+/// GPUI's window drawn in `ui_view`, a browser window's. GPUI's own view of it is one inside
+/// `ui_view` (`open_next_window_in`), so `ns_view` never names it.
+#[cfg(target_os = "macos")]
+pub(crate) fn handle_with_view(ui_view: *mut c_void) -> Option<AnyWindowHandle> {
+    WINDOWS.with_borrow(|windows| {
+        windows
+            .iter()
+            .find(|window| window.ui_view == ui_view)
+            .map(|window| window.handle)
+    })
+}
+
 /// A browser window became key: it goes first, so the shared overlays and the menu bar follow it.
 /// AppKit makes one key as another window orders out or closes, from inside the update that did
 /// it, such as Settings' close (#819), so the shell hears it once that update is over.

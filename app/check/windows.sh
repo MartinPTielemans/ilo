@@ -96,12 +96,14 @@ done
 [ "$(grep -c '^browser: empty card shown$' "$log")" -gt "$empties" ] ||
   fail "the new window's empty card didn't show its line"
 ../tools/window-screenshot.sh "$pid" "$out/empty-window.png" all || fail "no window to capture"
-# A click on the card with ⌘T's bar open only closes it: the host closes the bar at the press, and
-# the release mustn't open it again. Another driver step after the bar's report is in gives the
-# release time to have run.
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar in the new window"
-expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
+# A click on the card with New Tab's bar open only closes it: the host closes the bar at the press,
+# and the release mustn't open it again. Another driver step after the bar's report is in gives the
+# release time to have run. The sidebar's "+ New Tab" opens the bar over the card, where ⌘T gives
+# the Space's resting bar the keyboard instead (#4140).
+send click 100 148
+expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" in the new window didn't run New Tab"
+expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar in the new window"
+expect '^browser: new tab plate 1$' "a click on \"+ New Tab\" didn't give New Tab the selected plate"
 opened=$(grep -c '^browser: command new-tab via card$' "$log" || true)
 # Below the bar, which reaches y 410 and covers $page_point.
 send click 600 600
@@ -577,8 +579,8 @@ else
     send key s cmd
     expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar of the window on top"
     send move 600 400
-    send move 3 300
-    send move 3 306
+    send move 0 300
+    send move 0 306
     expect '^browser: reveal shown$' "the pointer at the edge of the window on top didn't bring its sidebar out"
     expect '^browser: reveal window shown$' "the sidebar out of the window on top didn't come on screen"
     send stack
@@ -715,8 +717,8 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   # the first window: the driver stands in for that, as it does for another app's.
   send window $driven_sixth
   set -- $(row 0)
-  send dragover $1 $(($2 - 20)) tab $c
-  send dragdrop $1 $(($2 - 20))
+  send dragover $1 $(($2 - 17)) tab $c
+  send dragdrop $1 $(($2 - 17))
   expect '^browser: drag dropped$' "the second window's list didn't take the tab dragged from the first"
   expect "^browser: tab $c dropped from window $first in today 0\$" \
     "the second window's list didn't put the tab where its line was"
@@ -731,16 +733,16 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   send key z cmd shift
   expect "^browser: window $sixth shows $c\$" "⇧⌘Z didn't bring the tab back to the second window's list"
   if windows; then
-    # The picture a drag of its row shows (#1859): the row's band of the sidebar, 228 by 40 points,
+    # The picture a drag of its row shows (#1859): the row's band of the sidebar, 228 by 34 points,
     # as the window draws it, at the window's scale. The driver carries the drag without Windows'
     # own, which shows the picture (#1583), so it has the host make the picture and write it to a
     # file.
     set -- $(row_of $c)
-    send tabpicture 0 $(($2 - 20)) 228 40 "$(cygpath -aw "$out/windows-tab-picture.bmp")"
+    send tabpicture 0 $(($2 - 17)) 228 34 "$(cygpath -aw "$out/windows-tab-picture.bmp")"
     expect '^browser: tab picture [1-9][0-9]*x[1-9][0-9]*$' "the host made no picture of the tab's row"
     picture=$(grep '^browser: tab picture ' "$log" | tail -1 | cut -d' ' -f4)
-    echo "$picture" | awk -Fx '{ exit !($1 >= 228 && $2 >= 40 && $1 / $2 > 5.6 && $1 / $2 < 5.8) }' ||
-      fail "the picture of the tab's row is $picture, not the row's 228 by 40 at the window's scale"
+    echo "$picture" | awk -Fx '{ exit !($1 >= 228 && $2 >= 34 && $1 / $2 > 6.6 && $1 / $2 < 6.8) }' ||
+      fail "the picture of the tab's row is $picture, not the row's 228 by 34 at the window's scale"
   fi
   # Dragged past the second window's bottom edge, its row leaves as the system's drag, and let go
   # over the page, which takes no tab, it opens in a window of its own there, under the pointer.

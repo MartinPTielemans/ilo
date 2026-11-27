@@ -4,6 +4,8 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use crate::dismissal::{By, Close, Why};
+
 use gpui::{
     Context, DispatchPhase, Point, ScrollDelta, ScrollEvent, TouchPhase, Window, canvas, div,
     prelude::*, px,
@@ -346,7 +348,9 @@ impl Shell {
             next_door: false,
         });
         if cancel {
-            self.form_going = self.close_form(window, cx);
+            // The user went to another Space, by the pointer.
+            let close = Close::new(Why::FocusLeft, By::Pointer);
+            self.form_going = self.close_form(close, window, cx);
         } else if space != self.space {
             // check.sh waits for this line.
             log!("browser: command select-space via swipe");
@@ -426,7 +430,7 @@ impl Shell {
             && space != self.space
         {
             if self.form().is_some() {
-                self.cancel_space(window, cx);
+                self.cancel_space(Close::new(Why::FocusLeft, By::Pointer), window, cx);
                 return;
             }
             // check.sh waits for this line.
@@ -681,6 +685,7 @@ mod tests {
             name: format!("Space {id}").into(),
             color: None,
             theme: None,
+            transparency: None,
             icon: Default::default(),
             profile: 0,
             agent: Default::default(),
@@ -691,6 +696,7 @@ mod tests {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         };
         ids.iter().map(space).collect()
     }

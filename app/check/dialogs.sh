@@ -545,7 +545,7 @@ grep -v '^browser: drive ' "$log" | grep -q zq7lovelace && fail "the password re
 # app outlives them all with no panic.
 go_from_bar "$site"
 expect "^browser: title $page ready\$" "the served page didn't load for its link"
-# 200 by 40 points, 100 in from the card's top left, which is 228 and 10 in from the window's.
+# 200 by 40 points, 100 in from the card's top left, which is 228 and 8 in from the window's.
 link_point="430 130"
 for round in $(seq 20); do
   send move $link_point
@@ -719,7 +719,8 @@ if windows && [ "$background_dialog" = "the foreground away" ]; then
   send key l cmd shift
   expect '^browser: command view-library via ' "Ctrl+Shift+L didn't open the Library"
   expect '^browser: library shown$' "Ctrl+Shift+L didn't show the Library"
-  send click $page_point
+  # The page beside the Library, which is 644 wide.
+  send click 744 400
   [ "$focus" = RenderWidgetHostViewCocoa ] ||
     fail "a click on the page beside the Library didn't give it the keyboard: $focus"
   rm -f "$out/site/held.go" "$out/front"
@@ -955,7 +956,7 @@ expect "^browser: page $held unloaded 0\$" "the unloaded pinned tab didn't load 
 expect "^browser: loaded $held ${site}alerts.html\$" "the pinned tab's page didn't load again once shown"
 alert_up $held "the pinned tab loaded again"
 # The Today tab at the top, under the pinned row, takes the alert down.
-send click 100 $(($(row 0 | cut -d' ' -f2) + 41))
+send click 100 $(($(row 0 | cut -d' ' -f2) + 34))
 expect '^browser: dialog withdrawn$' "the pinned tab's alert stayed up over another tab"
 send middleclick $(pinned_row 0)
 expect '^browser: command close-tab via sidebar$' \
@@ -980,6 +981,9 @@ alert_up $favorite "the Favorite"
 # right-press moves the X focus off the alert, which took the keys back from the menu (#3616).
 post rightclick 114 114
 expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab"
+# AppKit puts the menu's window on screen some frames after it's shown, taking the keyboard then: an
+# Escape before went to the alert under it and cancelled that instead (restore.sh's choose_drawn).
+expect '^browser: menu drawn ' "the tile's menu over the Favorite's alert didn't come on screen"
 send key escape
 expect '^browser: menu window hidden$' "Escape didn't close the tile's menu over the Favorite's alert"
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
@@ -988,6 +992,7 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
 fi
 post rightclick 114 114
 expect "^browser: menu shown .*$(cased 'Close Tab')\$" "a right-click on the tile didn't offer Close Tab again"
+expect '^browser: menu drawn ' "the tile's menu over the Favorite's alert didn't come on screen again"
 send choose "$(cased 'Close Tab')"
 expect '^browser: command close-tab via tab menu$' "Close Tab in the tile's menu didn't run"
 expect "^browser: page $favorite unloaded 1\$" "Close Tab didn't unload the Favorite whose alert was up"

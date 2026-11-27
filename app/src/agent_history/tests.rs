@@ -45,6 +45,8 @@ fn past(id: &str, ended: u64) -> Past {
             },
         ],
         answers: "claude-code".into(),
+        end: Some(crate::agents::kept::End::Done),
+        sorted: None,
     }
 }
 
@@ -65,6 +67,44 @@ fn an_entry_reads_back_as_it_was_kept() {
     let entries = vec![past("task-2", 2_000_000), past("task-1", 1_000_000)];
     let text = write(&entries) + "not json\n";
     assert_eq!(read(&text), entries);
+}
+
+/// A thread's row says how its last turn ended and when, as W4 says it, and no more: the time or
+/// the day it's given, after V's word, and that alone for an entry kept before its end was.
+#[test]
+fn a_threads_row_says_how_it_ended_and_when() {
+    use crate::agents::kept::End;
+    let mut past = past("task-1", 1_000_000);
+    for (end, said) in [
+        (Some(End::Done), "Done 21 Nov"),
+        (Some(End::Stopped), "Stopped 21 Nov"),
+        (Some(End::Failed), "Interrupted 21 Nov"),
+        (Some(End::Limit), "Claude Code at limit 21 Nov"),
+        (None, "21 Nov"),
+    ] {
+        past.end = end;
+        assert_eq!(past.ended("21 Nov"), said, "{end:?}");
+    }
+    past.end = Some(End::Done);
+    assert_eq!(past.ended("13:31"), "Done 13:31");
+}
+
+/// An entry kept before how it ended was has no end, and one a later build ended in a way this one
+/// doesn't know reads without it; both read all the same.
+#[test]
+fn an_entry_from_before_its_end_was_kept_reads_without_it() {
+    let line = r#"{"id":"task-1","title":"Book","agent":"Claude Code","started":1,"ended":61,"pages":[],"orders":0,"messages":0}"#;
+    let later = r#"{"id":"task-2","title":"Book","agent":"Claude Code","started":1,"ended":61,"pages":[],"orders":0,"messages":0,"end":"paused"}"#;
+    let read = read(&format!("{line}\n{later}\n"));
+    assert_eq!(read.len(), 2);
+    assert!(read.iter().all(|past| past.end.is_none()), "{read:?}");
+    for end in crate::agents::kept::End::ALL {
+        let past = Past {
+            end: Some(end),
+            ..past("task-3", 1_000_000)
+        };
+        assert_eq!(super::read(&write(std::slice::from_ref(&past))), vec![past]);
+    }
 }
 
 /// An entry kept before its steps and answers were has neither, and reads all the same.
@@ -125,10 +165,44 @@ fn one_entry_deletes_alone() {
     assert_eq!(deleted(entries, "task-2"), vec![past("task-1", DAY)]);
 }
 
-/// Its row says its agent, when it ended, what it did that had consequences, and its pages.
+/// Its page says its agent, when it ended, what it did that had consequences, and its pages.
 #[test]
-fn a_row_says_what_its_receipt_did() {
-    let about = past("task-1", 1_000_000).about();
-    assert!(about.starts_with("Claude Code · "), "{about}");
-    assert!(about.ends_with(" · 1 order placed · 1 page"), "{about}");
+fn a_page_says_what_its_receipt_did() {
+    let about = past("task-1", 1_000_000).about("Tue 21:05");
+    assert_eq!(about, "Claude Code · Tue 21:05 · 1 order placed · 1 page");
+}
+
+/// A sort's entry keeps its counts and its assistant alone, and a build from before sorts, which
+/// reads a task's title and pages, skips its line.
+#[test]
+fn a_sorts_entry_is_counts_alone() {
+    let sorted = Sorted {
+        handed: 12,
+        moved: 9,
+        folders: 3,
+    };
+    let sort = Past::sort("claude", 1_000, 1_030, sorted);
+    let text = write(&[sort.clone(), past("task-1", 2_000)]);
+    let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    let mut keys: Vec<&str> = line
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["agent", "ended", "id", "sorted", "started"]);
+    assert_eq!(line["agent"], "claude");
+    assert!(line.get("title").is_none() && line.get("pages").is_none());
+    assert_eq!(read(&text), vec![sort, past("task-1", 2_000)]);
+    let failed = Past::sort(
+        "claude",
+        3_000,
+        3_030,
+        Sorted {
+            handed: 4,
+            ..Sorted::default()
+        },
+    );
+    assert_eq!(read(&write(std::slice::from_ref(&failed))), vec![failed]);
 }

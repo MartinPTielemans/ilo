@@ -16,9 +16,6 @@ pub(crate) const BOOST_EDITOR: c_int = 4;
 
 pub(crate) const TAB_SWITCHER: c_int = 5;
 
-/// The whole of an agent's request, beside its question's card (#3548).
-pub(crate) const AGENT_REQUEST: c_int = 6;
-
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
 pub(crate) const SITE_CONTROLS: c_int = 7;
 
@@ -93,15 +90,6 @@ impl dialog::Host for DialogHost {
 
     fn give_held_keys(&self) {
         unsafe { platform::host_release_held_keys() };
-    }
-}
-
-/// The Dock icon's dot, swapped by the host (platform/mac/dock.mm).
-pub(crate) struct DockDot;
-
-impl dock_dot::Host for DockDot {
-    fn show(&self, color: Option<u32>) {
-        unsafe { platform::host_dock_dot(color.is_some(), color.unwrap_or(0)) };
     }
 }
 
@@ -237,6 +225,11 @@ impl site_controls::Host for SiteControlsHost {
                 };
                 share_page(&window, &url, &title, frame);
             }
+            site_controls::Run::Sensitive(on) => {
+                crate::agents_core::update(move |agents, cx| {
+                    agents.mark_tab_sensitive(tab, on, cx)
+                });
+            }
             site_controls::Run::SiteSettings => {
                 let url = window
                     .shell
@@ -342,8 +335,57 @@ impl menu::Host for MenuHost {
         unsafe { platform::host_show_menu_window(ui_view, in_reveal, left, top, width, height) };
     }
 
+    // The Mac's window has its material under the panels; the others' menus are opaque.
+    #[cfg(target_os = "macos")]
+    fn glass(&self, panels: &[(Bounds<Pixels>, f32)], light: bool) {
+        let flat: Vec<f64> = (panels.iter())
+            .flat_map(|(at, radius)| {
+                [at.origin.x, at.origin.y, at.size.width, at.size.height]
+                    .map(f64::from)
+                    .into_iter()
+                    .chain([f64::from(*radius)])
+            })
+            .collect();
+        unsafe { platform::host_set_menu_glass(flat.as_ptr(), panels.len(), light) };
+    }
+
     fn hide(&self) {
         unsafe { platform::host_hide_menu_window() };
+    }
+
+    // The Mac's window has the pointer over its whole frame, so a press in the room is its own.
+    // The reveal's panel isn't the window's content, so a press over it goes on as it did.
+    #[cfg(target_os = "macos")]
+    fn press_under(&self, at: Point<Pixels>, cx: &mut App) -> bool {
+        let (ui_view, in_reveal) = MENU_OVER.get();
+        if ui_view.is_null() || in_reveal {
+            return false;
+        }
+        // A browser window's is in the app's list by the host's view, which its UI draws inside;
+        // any other window the menu is over, such as Settings, is the one whose own view it is.
+        // With none, the press isn't taken: it would go nowhere.
+        let over = handle_with_view(ui_view).or_else(|| {
+            cx.windows().into_iter().find(|window| {
+                (window.update(cx, |_, window, _| ns_view(window) == ui_view)).unwrap_or(false)
+            })
+        });
+        let Some(over) = over else {
+            return false;
+        };
+        cx.defer(move |cx| {
+            (over.update(cx, |_, window, cx| {
+                let press = gpui::MouseDownEvent {
+                    button: gpui::MouseButton::Right,
+                    position: at,
+                    modifiers: window.modifiers(),
+                    click_count: 1,
+                    first_mouse: false,
+                };
+                window.dispatch_event(gpui::PlatformInput::MouseDown(press), cx);
+            }))
+            .ok();
+        });
+        true
     }
 
     #[cfg(target_os = "linux")]
@@ -549,34 +591,6 @@ pub(crate) fn recent_emoji() -> icon_picker::Recents {
 /// The user left the icon picker without picking.
 pub(crate) extern "C" fn icon_picker_dismissed() {
     update_app(icon_picker::dismissed);
-}
-
-pub(crate) struct AgentRequestHost;
-
-impl agent_request::Host for AgentRequestHost {
-    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
-        let Some(view) = ui_view_of(window) else {
-            return;
-        };
-        let (left, top, width) = (left.into(), top.into(), agent_request::WIDTH.into());
-        unsafe {
-            platform::host_set_overlay_height(AGENT_REQUEST, height.into());
-            platform::host_show_overlay(AGENT_REQUEST, view, false, left, top, width);
-        }
-    }
-
-    fn set_height(&self, height: f32) {
-        unsafe { platform::host_set_overlay_height(AGENT_REQUEST, height.into()) };
-    }
-
-    fn hide(&self) {
-        unsafe { platform::host_hide_overlay(AGENT_REQUEST) };
-    }
-}
-
-/// The user left the whole request, such as with a click outside it.
-pub(crate) extern "C" fn agent_request_dismissed() {
-    update_app(agent_request::dismissed);
 }
 
 pub(crate) struct FolderPreviewHost;
@@ -852,10 +866,14 @@ pub(crate) unsafe extern "C" fn tab_link_target(
     let url = unsafe { CStr::from_ptr(url) }
         .to_string_lossy()
         .into_owned();
-    // check.sh reads this line.
+    // check.sh reads this line. A link on a sign-in's page is on its host (#4100), so it names none.
     log!(
         "browser: link target {}",
-        if url.is_empty() { "none" } else { url.as_str() }
+        if url.is_empty() {
+            "none"
+        } else {
+            browser::agents::sign_in::logged(tab, &url)
+        }
     );
     let target = (!url.is_empty()).then(|| link_target::Target {
         text: url.into(),
@@ -885,7 +903,7 @@ pub(crate) unsafe extern "C" fn crash_report_offered(_: *mut c_void) {
         button("Send Report", "send", true),
         button("Don't Send", "don't send", false),
     ];
-    let text = concat!(env!("APP_NAME"), " quit unexpectedly.");
+    let text = concat!(env!("PRODUCT_NAME"), " quit unexpectedly.");
     update_app(move |cx| {
         with_overlays(move |cx| toast::show_until_answered(text, buttons, cx), cx)
     });

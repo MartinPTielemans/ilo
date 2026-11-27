@@ -19,11 +19,12 @@ use gpui::{
 };
 
 use crate::{
+    dismissal::{By, Close, Why},
     elevation::Level,
     palette::{INK, Palette, STATE_HOVERED, STATE_PRESSED},
     shell::{KEY_CONTEXT, cubic_bezier},
     space_icon::{self, GLYPHS, SpaceIcon, has_icon},
-    text_input::{self, TextInput},
+    text_input::{self, Colors, TextInput},
 };
 
 mod emoji;
@@ -217,10 +218,12 @@ pub fn open_at(
     };
     let window = cx.open_window(options, |_, cx| {
         let search = cx.new(|cx| {
-            TextInput::new("Search", cx)
-                .placeholder_color(rgba(HINT))
-                .caret_color(rgb(CARET))
-                .selection_color(rgba(HOVERED))
+            // The card is dark in every look, so the field's colours are the card's own.
+            TextInput::new("Search", cx).follows(|_| Colors {
+                placeholder: rgba(HINT).into(),
+                caret: Some(rgb(CARET).into()),
+                selection: Some(rgba(HOVERED).into()),
+            })
         });
         cx.new(|cx| IconPicker {
             host,
@@ -322,8 +325,8 @@ pub fn entity(cx: &App) -> Option<Entity<IconPicker>> {
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
         window
-            .update(cx, |picker, window, cx| {
-                picker.dismiss(&Dismiss, window, cx)
+            .update(cx, |picker, _, cx| {
+                picker.close(Close::new(Why::FocusLeft, By::Code), cx)
             })
             .ok();
     }
@@ -331,11 +334,9 @@ pub fn leave(cx: &mut App) {
 
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
+        let close = Close::left(cx.active_window().is_none());
         window
-            .update(cx, |picker, _, cx| {
-                picker.picking = None;
-                cx.notify();
-            })
+            .update(cx, |picker, _, cx| picker.close(close, cx))
             .ok();
     }
 }
@@ -619,17 +620,28 @@ impl IconPicker {
         cx.notify();
     }
 
+    /// Esc closes the picker, unless it was an input method's, composing in the search
+    /// (dismissal's rule).
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(close) = Close::escape_from([&self.search.clone()], cx) {
+            self.close(close, cx);
+        }
+    }
+
+    /// Closes the picker for `close`, hiding it unless the host already has, as the user left it.
+    fn close(&mut self, close: Close, cx: &mut Context<Self>) {
         if self.picking.take().is_some() {
-            // check.sh reads this line.
-            log!("browser: icon picker dismissed");
-            self.host.hide();
+            if !matches!(close.why, Why::PressOutside | Why::WindowLeft) {
+                // check.sh reads this line.
+                log!("browser: icon picker dismissed");
+                self.host.hide();
+            }
             cx.notify();
         }
     }
 
-    /// ↩ on the Emoji tab picks the emoji on the plate. While an input method composes, it's the
-    /// method's.
+    /// ↩ on the Emoji tab picks the emoji on the plate, unless it was an input method's,
+    /// composing in the search.
     fn keep(&mut self, _: &Keep, _: &mut Window, cx: &mut Context<Self>) {
         let Some(picking) = self
             .picking
@@ -638,10 +650,11 @@ impl IconPicker {
         else {
             return;
         };
-        if let Some(item) = picking
-            .selected
-            .filter(|_| !self.search.read(cx).composing())
-        {
+        let selected = picking.selected;
+        if !crate::dismissal::submits([&self.search.clone()], cx) {
+            return;
+        }
+        if let Some(item) = selected {
             self.pick_emoji(item, cx);
         }
     }
@@ -666,8 +679,8 @@ impl IconPicker {
                 .justify_center()
                 .rounded(px(SEGMENTS_RADIUS))
                 .when(chosen, |segment| {
-                    let palette = crate::palette::current(cx);
-                    segment.bg(palette.accent).text_color(palette.accent_label)
+                    let (fill, label) = crate::palette::current(cx).accent_on_dark();
+                    segment.bg(fill).text_color(label)
                 })
                 // The other takes the ladder under the pointer (ours: Arc's isn't recorded), in Ink, away
                 // from its white label, which reads on the track with no more room, as the

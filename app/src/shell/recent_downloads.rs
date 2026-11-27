@@ -1,78 +1,29 @@
-//! The Library button's recent downloads: the newest files, in rows over the foot of the sidebar,
-//! the newest next to the button, coming and going as Arc's do, of the kinds picked from the
-//! button's menu, the Library's captures among them (docs/ux-spec.md › Downloads).
+//! The Library button's plate of recent downloads: with the pointer resting on the button, the
+//! button turns into a plate that grows upward out of the foot, inside the sidebar, and lists the
+//! last four downloads, newest first, a running one with how far it's got. Leaving it folds it
+//! back (docs/ux-spec.md › Downloads).
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{sync::Arc, time::Duration};
 
 use gpui::{
-    AnyElement, Context, Image, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Task,
-    Window, div, img, linear_color_stop, linear_gradient, prelude::*, px, svg,
+    AnyElement, BoxShadow, Context, FontWeight, Hsla, Image, ObjectFit, PathBuilder, Pixels, Point,
+    SharedString, Task, Window, canvas, div, img, point, prelude::*, px, relative, rgba, svg,
 };
 
 use super::{
-    Download, DownloadState, FOOTER_HEIGHT, MenuEntry, NAV_SIZE, SECONDARY, Section, Shell,
-    library::{capture_id, is_video, of},
+    Download, DownloadState, FOOTER_HEIGHT, Section, Shell, cubic_bezier, host,
+    library::{LIBRARY_BACK_INSET, bytes, is_video},
 };
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Palette, Tone};
+use crate::tokens::shell::recent_downloads as t;
+use crate::tokens::shell::recent_downloads::motion::{EASE, FOLD, GROW, REST, ROWS_FROM};
+use crate::tokens::shell::{FOOT_ROW, LIBRARY_BUTTON};
 
-/// What the hover lists, bits the button's menu turns on and off: images, videos and other files
-/// downloaded, and the captures saved to the Library (Arc's screenshots).
-pub const HOVER_IMAGES: u32 = 1;
-pub const HOVER_VIDEOS: u32 = 2;
-pub const HOVER_OTHER_FILES: u32 = 4;
-pub const HOVER_CAPTURES: u32 = 8;
-pub const HOVER_ALL: u32 = 15;
-/// The menu's rows, in its order, with their names in the log.
-const HOVER_MENU: [(&str, &str, u32); 4] = [
-    ("Images", "images", HOVER_IMAGES),
-    ("Videos", "videos", HOVER_VIDEOS),
-    ("Other Files", "other files", HOVER_OTHER_FILES),
-    ("Captures", "captures", HOVER_CAPTURES),
-];
-
-/// The bit a file's name puts it under.
-fn kind(name: &str) -> u32 {
-    match is_video(name) {
-        Some(false) => HOVER_IMAGES,
-        Some(true) => HOVER_VIDEOS,
-        None => HOVER_OTHER_FILES,
-    }
-}
-
-/// Arc's: the rows show 0.2 s into a rest on the button, so a pointer passing it leaves them. The
-/// bottom one comes first and each next one 25 ms later, fading in over 0.18 s as it rises 5 pt
-/// over 0.12 s.
-const RECENT_WAIT: Duration = Duration::from_millis(200);
-const RECENT_STAGGER_IN: f32 = 0.025;
-const RECENT_FADE_IN: f32 = 0.18;
-const RECENT_RISE: f32 = 5.;
-const RECENT_RISE_TIME: f32 = 0.12;
-/// Arc's: they go 70 ms after the pointer leaves, the bottom one first and the top one 50 ms after
-/// it, each fading out over 0.13 s where it is.
-const RECENT_LINGER: f32 = 0.07;
-const RECENT_STAGGER_OUT: f32 = 0.05 / (RECENT_COUNT - 1) as f32;
-const RECENT_FADE_OUT: f32 = 0.13;
-/// Arc's: four rows 56 apart, a 40 pt column at 8 for an image's preview 40 wide or the file's
-/// icon 26 wide, and the name at 61 over its age.
-const RECENT_COUNT: usize = 4;
-use crate::tokens::shell::recent_downloads::AGE_LINE;
-use crate::tokens::shell::recent_downloads::AGE_SIZE;
-use crate::tokens::shell::recent_downloads::COLUMN;
-use crate::tokens::shell::recent_downloads::COLUMN_X;
-use crate::tokens::shell::recent_downloads::ICON;
-use crate::tokens::shell::recent_downloads::NAME;
-use crate::tokens::shell::recent_downloads::NAME_LINE;
-use crate::tokens::shell::recent_downloads::NAME_SIZE;
-use crate::tokens::shell::recent_downloads::PLATE_INSET;
-use crate::tokens::shell::recent_downloads::PLATE_RADIUS;
-use crate::tokens::shell::recent_downloads::PREVIEW_HEIGHT;
-use crate::tokens::shell::recent_downloads::PREVIEW_RADIUS;
-use crate::tokens::shell::recent_downloads::RECENT_PITCH;
-use crate::tokens::shell::recent_downloads::SHADE;
-use crate::tokens::shell::recent_downloads::SHADE_GAP;
-use crate::tokens::shell::recent_downloads::TEXT_END;
-use crate::tokens::shell::recent_downloads::TEXT_X;
+/// How long the pointer rests on the button before the plate opens, so one passing it opens none.
+const RECENT_REST: Duration = crate::motion::ms(REST);
+/// How many downloads the plate lists.
+const RECENT_COUNT: usize = t::COUNT as usize;
 
 const MINUTE: f64 = 60_000.;
 const HOUR: f64 = 60. * MINUTE;
@@ -93,81 +44,245 @@ pub struct FilePreview {
     pub photo: bool,
 }
 
-/// The recent downloads' rows, and where the pointer is that keeps them.
+/// The plate, and where the pointer is that keeps it.
 #[derive(Default)]
 pub(super) struct RecentDownloads {
     over_button: bool,
-    over_rows: bool,
-    /// The wait before they show, from the pointer coming onto the button.
+    over_plate: bool,
+    /// The rest before it opens, from the pointer coming onto the button.
     wait: Option<Task<()>>,
-    /// The downloads shown, newest first, with their ages as they opened. Empty while none show.
-    rows: Vec<(u64, SharedString)>,
-    /// They're going, and take no pointer.
+    /// The downloads listed, newest first. Empty while the plate is shut.
+    rows: Vec<u64>,
+    /// It's folding back, and takes no pointer.
     going: bool,
-    /// When the fade toward where they're going started, from the first frame drawn after it was
-    /// set.
-    fade: Option<Instant>,
-    /// How opaque each row was as the fade started, newest first, where it turned on its way; none
-    /// for rows that started from nothing, or from all there.
-    from: Vec<f32>,
-    /// The fade has ended, and its line is logged.
+    /// When it turned toward open or shut, from the first frame drawn after it did.
+    turned: Option<Instant>,
+    /// How far open it was as it turned.
+    from: f32,
+    /// Its motion has ended, and its line is logged.
     settled: bool,
 }
 
 impl RecentDownloads {
-    /// How opaque the row `index` places from the bottom was as the fade started.
-    fn from(&self, index: usize) -> f32 {
-        let start = if self.going { 1. } else { 0. };
-        self.from.get(index).copied().unwrap_or(start)
+    /// Whether the Library button is the plate's foot: while any of the plate shows.
+    pub(super) fn plated(&self) -> bool {
+        !self.rows.is_empty()
     }
 }
 
-/// How opaque the row `index` places from the bottom draws `t` seconds into its fade from `from`,
-/// toward going or coming. One starting from nothing, or from all there, waits its turn; one
-/// turned on its way turns at once.
-fn row_opacity(going: bool, index: usize, from: f32, t: f32) -> f32 {
-    let index = index as f32;
+/// How far open the plate is, 0 shut to 1 open, `t` seconds after it turned toward going or coming
+/// from `from`: the whole way open takes GROW, and the whole way shut FOLD.
+fn opened(going: bool, from: f32, t: f32) -> f32 {
     match going {
-        false => {
-            let start = if from == 0. {
-                index * RECENT_STAGGER_IN
-            } else {
-                0.
-            };
-            (from + (t - start).max(0.) / RECENT_FADE_IN).min(1.)
-        }
-        true => {
-            let start = RECENT_LINGER
-                + if from == 1. {
-                    index * RECENT_STAGGER_OUT
-                } else {
-                    0.
-                };
-            (from - (t - start).max(0.) / RECENT_FADE_OUT).max(0.)
-        }
+        false => (from + t / GROW).min(1.),
+        true => (from - t / FOLD).max(0.),
     }
 }
 
-/// How far under its place a row coming in draws at `opacity`: it rises out of the ease as it's
-/// two thirds in, since its rise takes 0.12 s of the fade's 0.18.
-fn row_drop(opacity: f32) -> f32 {
-    let risen = (opacity * RECENT_FADE_IN / RECENT_RISE_TIME).min(1.);
-    RECENT_RISE * (1. - risen).powi(3)
+/// How much of its size the plate has when it's `open`: on its ease, so it leaves the button fast
+/// and settles. Shut and open are exact, which the curve's solver only comes close to.
+fn grown(open: f32) -> f32 {
+    match open {
+        open if open <= 0. => 0.,
+        open if open >= 1. => 1.,
+        open => cubic_bezier(EASE[0], EASE[1], EASE[2], EASE[3], open),
+    }
 }
 
-/// The downloads the rows can show, of `kinds`, newest first: the finished ones with a file, and
-/// those still coming, as a download that runs on shouldn't hide the files before it. A held one
-/// shows too, as nothing else says it's waiting to be kept or deleted.
-fn recent(downloads: &[Download], kinds: u32) -> impl Iterator<Item = &Download> {
-    let shown = move |each: &&Download| {
-        kind(&each.name) & kinds != 0
-            && match each.state {
-                DownloadState::Done => !each.path.is_empty(),
-                DownloadState::Running | DownloadState::Paused => true,
-                DownloadState::Cancelled | DownloadState::Failed => false,
-            }
+/// How strong the heading's ink is on the plate in a `tone` window.
+fn heading_ink(tone: Tone) -> f32 {
+    match tone {
+        Tone::Dark => t::HEADING_INK,
+        Tone::Light => t::LIGHT_HEADING_INK,
+    }
+}
+
+/// The plate's colour in a `tone` window whose own look, opaque, is `ground`: the floating level's
+/// fill over it. GPUI draws a box's shadow under the box too, so through the fill alone the plate
+/// would be as much darker than the button's box under it, which has no shadow, and the tab list
+/// would show through both.
+fn plate(tone: Tone, ground: Hsla) -> Hsla {
+    ground.blend(Hsla::from(rgba(match tone {
+        Tone::Dark => crate::tokens::floating::FILL,
+        Tone::Light => crate::tokens::floating::LIGHT_FILL,
+    })))
+}
+
+/// The inks of what the plate says, where it's `plate`: a name's, a detail's and the heading's.
+/// They lie on the plate, so their floor is its own, and a row's the plate's under the one the
+/// row wears under the pointer. The window's floor answers for its material over any backdrop,
+/// and on a dark window lifts the quiet inks all the way to a name's.
+fn inks(palette: &Palette, plate: Hsla) -> [Hsla; 3] {
+    let lit = plate.blend(palette.plate(t::ROW_HOVERED));
+    [
+        palette.text_on(t::NAME, lit),
+        palette.text_on(palette.secondary(), lit),
+        palette.text_on(heading_ink(palette.tone), plate),
+    ]
+}
+
+/// The plate and the button's box under it as one shape: a body `width` by `height` over a box
+/// `LIBRARY_BUTTON` by `FOOT_ROW` at its near side, with a curve taking the box's far side into
+/// the body's foot. While the body is growing its corners are as round as it has room for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Outline {
+    width: f32,
+    height: f32,
+    /// The body's top corners and its far bottom one.
+    top: f32,
+    far: f32,
+    /// The curve from the body's foot into the box's far side.
+    curve: f32,
+}
+
+impl Outline {
+    fn of(width: f32, height: f32) -> Self {
+        let past = (width - LIBRARY_BUTTON).max(0.);
+        let curve = t::CURVE.min(past / 2.);
+        let top = t::RADIUS.min(width / 2.).min(height / 2.);
+        Outline {
+            width,
+            height,
+            top,
+            far: top.min(past - curve),
+            curve,
+        }
+    }
+
+    /// Its line, `inset` inside its edge, from `origin`, the body's top near corner.
+    fn trace(&self, path: &mut PathBuilder, origin: Point<Pixels>, inset: f32) {
+        let at = |x: f32, y: f32| origin + point(px(x), px(y));
+        // A corner `radius` round at the edge, turning with the line or against it.
+        let turn = |path: &mut PathBuilder, radius: f32, with: bool, to: Point<Pixels>| match radius
+            > 0.
+        {
+            true => path.arc_to(point(px(radius), px(radius)), px(0.), false, with, to),
+            false => path.line_to(to),
+        };
+        let (right, foot) = (self.width - inset, self.height - inset);
+        let (box_right, box_foot) = (LIBRARY_BUTTON - inset, self.height + FOOT_ROW - inset);
+        let (top, far, curve, round) = (self.top, self.far, self.curve, t::STRIP_RADIUS);
+        path.move_to(at(top, inset));
+        path.line_to(at(self.width - top, inset));
+        turn(path, top - inset, true, at(right, top));
+        path.line_to(at(right, self.height - far));
+        turn(path, far - inset, true, at(self.width - far, foot));
+        path.line_to(at(LIBRARY_BUTTON + curve, foot));
+        turn(
+            path,
+            curve + inset,
+            false,
+            at(box_right, self.height + curve),
+        );
+        path.line_to(at(box_right, self.height + FOOT_ROW - round));
+        turn(
+            path,
+            round - inset,
+            true,
+            at(LIBRARY_BUTTON - round, box_foot),
+        );
+        path.line_to(at(round, box_foot));
+        turn(
+            path,
+            round - inset,
+            true,
+            at(inset, self.height + FOOT_ROW - round),
+        );
+        path.line_to(at(inset, top));
+        turn(path, top - inset, true, at(top, inset));
+        path.close();
+    }
+}
+
+/// How opaque the rows are when the plate is `open`: they come in over the second half of the way.
+fn rows_shown(open: f32) -> f32 {
+    ((open - ROWS_FROM) / (1. - ROWS_FROM)).clamp(0., 1.)
+}
+
+/// Whether the plate lists a download: a finished one with a file, and one still coming, as a
+/// download that runs on shouldn't hide the files before it. A held one lists too, as nothing
+/// else says it's waiting to be kept or deleted.
+fn lists(download: &Download) -> bool {
+    match download.state {
+        DownloadState::Done => !download.path.is_empty(),
+        DownloadState::Running | DownloadState::Paused => true,
+        DownloadState::Cancelled | DownloadState::Failed => false,
+    }
+}
+
+/// The downloads the plate lists, newest first.
+fn recent(downloads: &[Download]) -> Vec<u64> {
+    let mut files: Vec<_> = downloads.iter().filter(|each| lists(each)).collect();
+    files.sort_by(|a, b| b.started.total_cmp(&a.started));
+    files.truncate(RECENT_COUNT);
+    files.iter().map(|each| each.id).collect()
+}
+
+/// How far a download still coming has got, 0 to 1, if its size is known and it isn't held.
+pub(super) fn progress(download: &Download) -> Option<f32> {
+    let coming = matches!(
+        download.state,
+        DownloadState::Running | DownloadState::Paused
+    );
+    (coming && !download.held && download.total > 0)
+        .then(|| (download.received as f32 / download.total as f32).clamp(0., 1.))
+}
+
+/// A number of a unit as the plate writes it: whole from 10 up and with one decimal under it, so
+/// a small one still moves as its file comes, but never a decimal that is nought. One that rounds
+/// up to 10 is written whole.
+fn amount(of: f64) -> String {
+    let tenths = (of * 10.).round();
+    match tenths {
+        t if t >= 100. => format!("{of:.0}"),
+        t if t % 10. == 0. => format!("{:.0}", t / 10.),
+        t => format!("{:.1}", t / 10.),
+    }
+}
+
+/// How much of a download has come, beside its bar, where the Library's words for it don't fit:
+/// both sizes in the whole one's unit, said once ("48 of 122 MB", "1.2 of 4.8 GB"). Kilobytes
+/// and bytes are always whole.
+pub(super) fn come(received: i64, total: i64) -> String {
+    if total <= 0 {
+        return bytes(received);
+    }
+    let (received, total) = (received.clamp(0, total) as f64, total as f64);
+    let (unit, name) = match total {
+        t if t < 1e3 => return format!("{received:.0} of {t:.0} bytes"),
+        t if t < 1e6 => return format!("{:.0} of {:.0} KB", received / 1e3, t / 1e3),
+        t if t < 1e9 => (1e6, "MB"),
+        _ => (1e9, "GB"),
     };
-    downloads.iter().filter(shown)
+    format!(
+        "{} of {} {name}",
+        amount(received / unit),
+        amount(total / unit)
+    )
+}
+
+/// The glyph on the tile of a file with no picture: a page, or the warning triangle for one the
+/// browser holds until it's kept or deleted.
+pub(super) fn tile_glyph(download: &Download) -> &'static str {
+    match download.held {
+        true => "icons/triangle-alert.svg",
+        false => "icons/file.svg",
+    }
+}
+
+/// What a row says under its file's name: a held one and a finished one as their rows in the
+/// Library's Downloads do, and one still coming how much of it has. A paused one's bar says how
+/// far it got, and "Paused" with the sizes doesn't fit beside it.
+fn detail(download: &Download) -> SharedString {
+    match download.state {
+        _ if download.held => "May harm your computer".into(),
+        DownloadState::Paused if download.total > 0 => "Paused".into(),
+        DownloadState::Paused => format!("Paused · {}", bytes(download.received)).into(),
+        DownloadState::Done => {
+            format!("{} · {}", bytes(download.received), host(&download.url)).into()
+        }
+        _ => come(download.received, download.total).into(),
+    }
 }
 
 /// How long ago `started` is at `now`, in milliseconds since the Unix epoch, in words, with
@@ -225,106 +340,53 @@ pub(super) fn now() -> f64 {
 }
 
 impl Shell {
-    /// What the rows show, newest first, each a download's id or a capture's (`capture_id`), with
-    /// when it started or was saved.
-    fn recent_files(&self, cx: &mut Context<Self>) -> Vec<(u64, f64)> {
-        let kinds = self.browser.hover_kinds(cx);
-        let downloads = recent(&self.downloads, kinds).map(|each| (each.id, each.started));
-        let captures = (self.captures.iter())
-            .filter(|_| kinds & HOVER_CAPTURES != 0)
-            .map(|each| (capture_id(&each.path), each.saved));
-        let mut files: Vec<_> = downloads.chain(captures).collect();
-        files.sort_by(|a, b| b.1.total_cmp(&a.1));
-        files.truncate(RECENT_COUNT);
-        files
-    }
-
-    /// The menu a right-click on the Library button shows: what its hover lists, each ticked while
-    /// it does.
-    pub(super) fn hover_kinds_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        self.recent_downloads_gone(cx);
-        let kinds = self.browser.hover_kinds(cx);
-        // The files' kinds, a line, then the captures.
-        let rows = [Some(0), Some(1), Some(2), None, Some(3)];
-        let rows = rows.map(|row| row.map(|at| HOVER_MENU[at]));
-        let entries = (rows.iter())
-            .map(|row| match row {
-                Some((title, _, bit)) => MenuEntry::new(title, true).checked(kinds & bit != 0),
-                None => MenuEntry::line(),
-            })
-            .collect();
-        let in_reveal = self.library.is_none() && self.sidebar_hidden;
-        self.context_menu_in(
-            entries,
-            position,
-            in_reveal,
-            Box::new(move |chosen, shell, cx| {
-                let Some((_, _, bit)) = chosen.and_then(|at| rows.get(at).copied().flatten())
-                else {
-                    return;
-                };
-                let kinds = shell.browser.hover_kinds(cx) ^ bit;
-                shell.browser.set_hover_kinds(kinds, cx);
-                let named: Vec<_> = (HOVER_MENU.iter())
-                    .filter(|(_, _, bit)| kinds & bit != 0)
-                    .map(|(_, name, _)| *name)
-                    .collect();
-                // check.sh waits for this line.
-                log!("browser: hover kinds {}", named.join(", "));
-            }),
-            cx,
-        );
-    }
-
-    /// The pointer came onto the Library button, or the rows, or left. It leaves one as it comes
+    /// The pointer came onto the Library button, or the plate, or left. It leaves one as it comes
     /// onto the other in the same move, in either order, so what that means waits for both.
     pub(super) fn hover_recent_downloads(
         &mut self,
-        rows: bool,
+        plate: bool,
         hovered: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match rows {
-            true => self.recent_downloads.over_rows = hovered,
+        match plate {
+            true => self.recent_downloads.over_plate = hovered,
             false => self.recent_downloads.over_button = hovered,
         }
         cx.defer_in(window, |shell, _, cx| shell.settle_recent_downloads(cx));
     }
 
-    /// Shows the rows a moment after the pointer comes onto the button, keeps them while it's on
-    /// the button or them, and sends them away once it's on neither.
+    /// Opens the plate once the pointer has rested on the button, keeps it while the pointer is on
+    /// the button or it, and folds it back once it's on neither. The rest is one timer, started as
+    /// the pointer comes and dropped as it leaves: nothing here runs while the pointer is elsewhere.
     pub(super) fn settle_recent_downloads(&mut self, cx: &mut Context<Self>) {
-        // A row's menu takes the pointer from them as it comes on screen over them, and they stay
-        // while it's open, as the reveal does, for it to act on them. They settle as it closes.
+        // A row's menu takes the pointer from the plate as it comes on screen over it, and the
+        // plate stays while it's open, as the reveal does, for it to act on. It settles as the
+        // menu closes.
         if self.menu_open {
             return;
         }
         let recent = &self.recent_downloads;
-        if recent.over_rows && !recent.going && !recent.rows.is_empty() {
-            // check.sh reads this line, which says the pointer keeps them.
+        if recent.over_plate && !recent.going && !recent.rows.is_empty() {
+            // check.sh reads this line, which says the pointer keeps it.
             log!("browser: recent downloads under the pointer");
         }
-        if !recent.over_button && !(recent.over_rows && !recent.going) {
+        if !recent.over_button && !(recent.over_plate && !recent.going) {
             self.recent_downloads.wait = None;
             return self.hide_recent_downloads(cx);
         }
         if !recent.rows.is_empty() {
-            // Back on the button as they go, they come back from where they are.
+            // Back on the button as it folds, it grows again from where it is.
             if recent.going {
-                self.fade_recent_downloads(false, cx);
+                self.turn_recent_downloads(false, cx);
             }
             return;
         }
         if recent.wait.is_some() || !self.recent_downloads_can_show() {
             return;
         }
-        // Listed again as the wait starts, so they're current when it ends.
-        if self.browser.hover_kinds(cx) & HOVER_CAPTURES != 0 {
-            self.browser.list_captures(cx);
-        }
         self.recent_downloads.wait = Some(cx.spawn(async move |shell, cx| {
-            cx.background_executor().timer(RECENT_WAIT).await;
+            cx.background_executor().timer(RECENT_REST).await;
             shell
                 .update(cx, |shell, cx| {
                     shell.recent_downloads.wait = None;
@@ -334,7 +396,7 @@ impl Shell {
         }));
     }
 
-    /// Whether the rows can show: the sidebar is still, docked or out in the reveal, with the
+    /// Whether the plate can open: the sidebar is still, docked or out in the reveal, with the
     /// Library closed.
     fn recent_downloads_can_show(&self) -> bool {
         let still = self.sidebar_motion.is_none() && self.library.is_none();
@@ -342,48 +404,39 @@ impl Shell {
         still && shown && !self.page_fullscreen && self.recent_downloads.over_button
     }
 
-    /// Lists the newest downloads with their ages now, if there are any, and asks for the
-    /// previews it hasn't yet.
+    /// Lists the newest downloads, if there are any, and asks for the pictures it hasn't yet.
     fn open_recent_downloads(&mut self, cx: &mut Context<Self>) {
         if !self.recent_downloads_can_show() {
             return;
         }
-        let (now, today) = (now(), self.browser.day_starts()[0]);
-        let rows: Vec<_> = (self.recent_files(cx).into_iter())
-            .map(|(id, at)| (id, age(at, now, today).into()))
-            .collect();
+        let rows = recent(&self.downloads);
         if rows.is_empty() {
-            // check.sh waits for this line.
-            log!("browser: recent downloads none");
             return;
         }
         let recent = &mut self.recent_downloads;
         recent.rows = rows;
         recent.going = false;
-        recent.fade = None;
-        recent.from.clear();
+        recent.turned = None;
+        recent.from = 0.;
         recent.settled = false;
-        // The list shows the download the bin holds.
+        // The plate lists the download the bin holds.
         self.bin_leaves(cx);
         self.ask_download_previews(cx);
         cx.notify();
     }
 
-    /// Asks once for the preview of each row's file that has finished, as one still coming has
-    /// no file to look at yet.
+    /// Asks once for the picture of each listed file that has finished and whose name says it's an
+    /// image or a video: one still coming has no file to look at yet, and any other file's tile
+    /// shows the page glyph.
     fn ask_download_previews(&mut self, cx: &mut Context<Self>) {
-        let path = |id: u64| match self.downloads.iter().find(|each| each.id == id) {
-            Some(each) => {
-                (each.state == DownloadState::Done && !each.held && !each.path.is_empty())
-                    .then(|| each.path.clone())
-            }
-            None => (self.captures.iter())
-                .find(|each| capture_id(&each.path) == id)
-                .map(|each| each.path.clone()),
+        let path = |id: u64| {
+            let each = self.downloads.iter().find(|each| each.id == id)?;
+            let finished = each.state == DownloadState::Done && !each.held && !each.path.is_empty();
+            (finished && is_video(&each.name).is_some()).then(|| each.path.clone())
         };
         let asked: Vec<_> = (self.recent_downloads.rows.iter())
-            .filter(|(id, _)| !self.download_previews.contains_key(id))
-            .filter_map(|&(id, _)| Some((id, path(id)?)))
+            .filter(|id| !self.download_previews.contains_key(id))
+            .filter_map(|&id| Some((id, path(id)?)))
             .collect();
         for (id, path) in asked {
             self.download_previews.insert(id, None);
@@ -391,18 +444,18 @@ impl Shell {
         }
     }
 
-    /// Sends the rows away with their fade, from where they are, if they show.
+    /// Folds the plate back, from where it is, if it shows.
     pub(super) fn hide_recent_downloads(&mut self, cx: &mut Context<Self>) {
         if !self.recent_downloads.rows.is_empty() && !self.recent_downloads.going {
-            self.fade_recent_downloads(true, cx);
+            self.turn_recent_downloads(true, cx);
         }
     }
 
-    /// Takes the rows away at once, as what they show over goes.
+    /// Takes the plate away at once, as what it shows over goes.
     pub(super) fn recent_downloads_gone(&mut self, cx: &mut Context<Self>) {
         let recent = &mut self.recent_downloads;
         recent.wait = None;
-        recent.over_rows = false;
+        recent.over_plate = false;
         if recent.rows.is_empty() {
             return;
         }
@@ -412,54 +465,50 @@ impl Shell {
         cx.notify();
     }
 
-    /// Turns the rows' fade toward going, or coming, each row from the opacity it's at.
-    fn fade_recent_downloads(&mut self, going: bool, cx: &mut Context<Self>) {
+    /// Turns the plate toward folding back, or growing, from as far open as it is.
+    fn turn_recent_downloads(&mut self, going: bool, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
-        let from = self.recent_row_opacities(now);
+        let from = self.recent_downloads_open(now, cx);
         let recent = &mut self.recent_downloads;
         recent.going = going;
         recent.settled = false;
         if going {
-            recent.over_rows = false;
+            recent.over_plate = false;
         }
         recent.from = from;
         // Now, or from the first frame if none has been drawn yet.
-        recent.fade = recent.fade.map(|_| now);
+        recent.turned = recent.turned.map(|_| now);
         cx.notify();
     }
 
-    /// How opaque each row draws, newest first, at `now` on the executor's clock, which a test
-    /// moves on.
-    fn recent_row_opacities(&self, now: Instant) -> Vec<f32> {
+    /// How far open the plate is at `now` on the executor's clock, which a test moves on. Under
+    /// Reduce Motion it's where it's going at once: it appears and goes.
+    fn recent_downloads_open(&self, now: Instant, cx: &gpui::App) -> f32 {
         let recent = &self.recent_downloads;
-        let t = recent
-            .fade
-            .map_or(0., |fade| now.saturating_duration_since(fade).as_secs_f32());
-        let row = |index| row_opacity(recent.going, index, recent.from(index), t);
-        (0..recent.rows.len()).map(row).collect()
+        if crate::motion::still(cx) {
+            return if recent.going { 0. } else { 1. };
+        }
+        let t = recent.turned.map_or(0., |turned| {
+            now.saturating_duration_since(turned).as_secs_f32()
+        });
+        opened(recent.going, recent.from, t)
     }
 
-    /// The downloads or captures changed: the rows keep those still there, and go with none.
+    /// The downloads changed: the plate keeps those still listed, and goes with none.
     pub(super) fn recent_downloads_changed(&mut self, cx: &mut Context<Self>) {
         if self.recent_downloads.rows.is_empty() {
             return;
         }
-        let files = self.recent_files(cx);
-        let recent = &mut self.recent_downloads;
-        let kept: Vec<_> = (recent.rows.iter())
-            .map(|(id, _)| files.iter().any(|(file, _)| file == id))
-            .collect();
-        let mut keeps = kept.iter();
-        recent.rows.retain(|_| keeps.next() == Some(&true));
-        let mut keeps = kept.iter();
-        recent.from.retain(|_| keeps.next() == Some(&true));
-        if recent.rows.is_empty() {
+        let downloads = &self.downloads;
+        (self.recent_downloads.rows)
+            .retain(|id| downloads.iter().any(|each| each.id == *id && lists(each)));
+        if self.recent_downloads.rows.is_empty() {
             // check.sh waits for this line.
             log!("browser: recent downloads hidden");
         }
         self.ask_download_previews(cx);
         // A row still coming shows its bytes, which change with each report, and only while the
-        // pointer keeps the rows.
+        // pointer keeps the plate.
         cx.notify();
     }
 
@@ -472,33 +521,31 @@ impl Shell {
     ) {
         if let Some(entry) = self.download_previews.get_mut(&id) {
             *entry = preview;
-            let in_media = self.library.is_some() && self.section == Section::Media;
-            if in_media || self.recent_downloads.rows.iter().any(|(row, _)| *row == id) {
+            let listed = matches!(self.section, Section::Media | Section::Downloads);
+            if (self.library.is_some() && listed) || self.recent_downloads.rows.contains(&id) {
                 cx.notify();
             }
         }
     }
 
-    /// Steps the rows' fade for a frame, and once it's done, says so, and lets them go if they
-    /// went.
+    /// Steps the plate's motion for a frame, and once it's done, says so, and lets the plate go if
+    /// it folded. With the plate shut it returns at once, so a tab switch or a launch asks for no
+    /// frame here.
     pub(super) fn step_recent_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.recent_downloads.rows.is_empty() || self.recent_downloads.settled {
             return;
         }
         let now = cx.background_executor().now();
-        self.recent_downloads.fade.get_or_insert(now);
+        self.recent_downloads.turned.get_or_insert(now);
         let end = if self.recent_downloads.going { 0. } else { 1. };
-        if self
-            .recent_row_opacities(now)
-            .iter()
-            .any(|&opacity| opacity != end)
-        {
+        if self.recent_downloads_open(now, cx) != end {
             window.request_animation_frame();
             return;
         }
         let recent = &mut self.recent_downloads;
         recent.settled = true;
-        // check.sh waits for these lines, logged with the frame that ends the fade.
+        recent.from = end;
+        // check.sh waits for these lines, logged with the frame that ends the motion.
         if recent.going {
             recent.rows.clear();
             log!("browser: recent downloads hidden");
@@ -507,212 +554,233 @@ impl Shell {
         }
     }
 
-    /// The rows, over the tab list's foot and taking its pointer while they show, and the gap down
-    /// to the button, which keeps them as the pointer crosses it; and behind them, the sidebar's
-    /// own look hiding the list from just over the top row, coming back over the shade above it.
-    /// The shade takes no pointer.
+    /// The plate where it's all open: as wide as the sidebar's rows, and as tall as its heading
+    /// and rows inside its padding.
+    fn recent_downloads_size(&self) -> (f32, f32) {
+        let rows = self.recent_downloads.rows.len() as f32;
+        (
+            self.width() - 2. * LIBRARY_BACK_INSET,
+            2. * t::PADDING + t::HEADING + rows * t::ROW,
+        )
+    }
+
+    /// The plate, drawn by the sidebar inside its own bounds, under the Library button: a menu's
+    /// shadow, then the plate and the button's own box as one shape in its fill with its line
+    /// along the whole of it, and the body with what it lists, growing upward from the box. While
+    /// it shows it takes the tab list's pointer.
     pub(super) fn recent_download_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let recent = &self.recent_downloads;
         if recent.rows.is_empty() || self.page_fullscreen {
             return Vec::new();
         }
         let live = !recent.going;
-        let button_top = (FOOTER_HEIGHT + NAV_SIZE) / 2.;
-        let height = recent.rows.len() as f32 * RECENT_PITCH;
-        let window = f32::from(self.viewport.height).max(1.);
-        let opacities = self.recent_row_opacities(cx.background_executor().now());
-        let still = crate::motion::still(cx);
-        let rows: Vec<_> = (recent.rows.iter().zip(&opacities).enumerate().rev())
-            .map(|(index, ((id, age), &opacity))| {
-                let down = match (still, recent.going) {
-                    (true, _) => 0.,
-                    (false, true) => row_drop(recent.from(index)),
-                    (false, false) => row_drop(opacity),
-                };
-                self.recent_row(*id, age, live, (opacity, down), cx)
+        let open = self.recent_downloads_open(cx.background_executor().now(), cx);
+        let (size, shown) = (grown(open), rows_shown(open));
+        let tone = self.palette.tone;
+        // The window's look at its foot, where the plate lies.
+        let fill = plate(tone, self.window_fill_at(1.));
+        let rim = Hsla::from(rgba(match tone {
+            Tone::Dark => crate::tokens::floating::RIM,
+            Tone::Light => crate::tokens::floating::LIGHT_RIM,
+        }));
+        let [_, _, heading_ink] = inks(&self.palette, fill);
+        let (full_width, full_height) = self.recent_downloads_size();
+        let width = LIBRARY_BUTTON + (full_width - LIBRARY_BUTTON) * size;
+        let height = full_height * size;
+        let outline = Outline::of(width, height);
+        let button_top = (FOOTER_HEIGHT + FOOT_ROW) / 2.;
+        let rows: Vec<_> = (recent.rows.iter())
+            .map(|&id| self.recent_row(id, live, cx))
+            .collect();
+        let heading = div()
+            .flex_none()
+            .h(px(t::HEADING))
+            .px(px(t::ROW_INSET))
+            .flex()
+            .items_center()
+            .text_size(px(t::DETAIL_SIZE))
+            .line_height(px(t::DETAIL_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(heading_ink)
+            .child("Downloads");
+        // The body's box, which the shadow lies under and what it lists is cut to.
+        let boxed = || {
+            div()
+                .absolute()
+                .left(px(LIBRARY_BACK_INSET))
+                .bottom(px(button_top))
+                .w(px(width))
+                .h(px(height))
+                .rounded_tl(px(outline.top))
+                .rounded_tr(px(outline.top))
+                .rounded_br(px(outline.far))
+        };
+        // What floats' shadows, which come with the plate as the shape does.
+        let shadows: Vec<_> = (crate::elevation::menu_shadow().into_iter())
+            .map(|shadow| BoxShadow {
+                color: shadow.color.opacity(size),
+                ..shadow
             })
             .collect();
-        // Never over the list's top, above which are the URL field and the window's buttons.
-        let bottom = window - FOOTER_HEIGHT;
-        let hidden = bottom - height - SHADE_GAP;
-        let top = (hidden - SHADE).max(self.list_start().min(hidden));
-        let fill = |y: f32| self.window_fill_at(y / window);
-        let shade = div()
-            .absolute()
-            .left_0()
-            .w(px(self.width()))
-            .top(px(top))
-            .h(px(bottom - top))
-            .opacity(opacities.iter().copied().fold(0., f32::max))
-            .flex()
-            .flex_col()
-            .child(div().h(px(hidden - top)).bg(linear_gradient(
-                180.,
-                linear_color_stop(fill(top).opacity(0.), 0.),
-                linear_color_stop(fill(hidden), 1.),
-            )))
-            .child(div().flex_1().bg(linear_gradient(
-                180.,
-                linear_color_stop(fill(hidden), 0.),
-                linear_color_stop(fill(bottom), 1.),
-            )));
-        let area = div()
+        let shadow = boxed().shadow(shadows);
+        // One shape, so the fill has no seam where the body meets the box and the line runs
+        // round both: GPUI's borders follow one box each.
+        let shape = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let mut filled = PathBuilder::fill();
+                outline.trace(&mut filled, bounds.origin, 0.);
+                if let Ok(filled) = filled.build() {
+                    window.paint_path(filled, fill.opacity(size));
+                }
+                let mut line = PathBuilder::stroke(px(t::LINE));
+                outline.trace(&mut line, bounds.origin, t::LINE / 2.);
+                if let Ok(line) = line.build() {
+                    window.paint_path(line, rim.opacity(size));
+                }
+            },
+        )
+        .absolute()
+        .left(px(LIBRARY_BACK_INSET))
+        .bottom(px((FOOTER_HEIGHT - FOOT_ROW) / 2.))
+        .w(px(width))
+        .h(px(height + FOOT_ROW));
+        let body = boxed()
             .id("recent-downloads")
-            .absolute()
-            .left_0()
-            .w(px(self.width()))
-            .bottom(px(button_top))
-            .h(px(height + FOOTER_HEIGHT - button_top))
-            .when(live, |area| {
-                area.block_mouse_except_scroll().on_hover(cx.listener(
+            .overflow_hidden()
+            .when(live, |body| {
+                body.block_mouse_except_scroll().on_hover(cx.listener(
                     |shell, hovered: &bool, window, cx| {
                         shell.hover_recent_downloads(true, *hovered, window, cx)
                     },
                 ))
             })
+            // Laid out as it is all open, from its top: the body shows as much as it has grown.
             .child(
                 div()
                     .absolute()
                     .top_0()
                     .left_0()
-                    .right_0()
-                    .h(px(height))
+                    .w(px(full_width))
+                    .h(px(full_height))
+                    .p(px(t::PADDING))
                     .flex()
                     .flex_col()
-                    .children(rows),
+                    .child(heading)
+                    .child(div().flex().flex_col().opacity(shown).children(rows)),
             )
             .children(live.then(|| self.download_press_listeners(cx)));
-        vec![shade.into_any_element(), area.into_any_element()]
+        vec![
+            shadow.into_any_element(),
+            shape.into_any_element(),
+            body.into_any_element(),
+        ]
     }
 
-    /// A row: the file's preview or icon in its column, its name over its age, and while the rows
-    /// show, what a Library row does; at its `opacity`, `down` under its place as it comes.
-    fn recent_row(
-        &self,
-        id: u64,
-        age: &SharedString,
-        live: bool,
-        (opacity, down): (f32, f32),
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let download = self.downloads.iter().find(|each| each.id == id);
-        let capture =
-            (self.captures.iter()).find(|each| download.is_none() && capture_id(&each.path) == id);
-        let name = match (download, capture) {
-            (Some(download), _) => download.name.clone(),
-            (None, Some(capture)) => capture.name.clone(),
-            (None, None) => return div().h(px(RECENT_PITCH)).into_any_element(),
+    /// A row: the file's picture, or the page glyph on a tile, then its name over how much of it
+    /// has come, with a bar while it's coming, or its size and where it's from; and while the
+    /// plate shows, what its row in the Library does.
+    fn recent_row(&self, id: u64, live: bool, cx: &mut Context<Self>) -> AnyElement {
+        let Some(download) = self.downloads.iter().find(|each| each.id == id) else {
+            return div().flex_none().h(px(t::ROW)).into_any_element();
         };
-        let preview = match self.download_previews.get(&id).cloned().flatten() {
-            Some(preview) if preview.photo => {
-                let (width, height) = (preview.width.max(1.), preview.height.max(1.));
-                let scale = (COLUMN / width).min(PREVIEW_HEIGHT / height);
+        let tile = div()
+            .flex_none()
+            .size(px(t::TILE))
+            .rounded(px(t::TILE_RADIUS));
+        let tile = match self.download_previews.get(&id).cloned().flatten() {
+            Some(preview) if preview.photo => tile.overflow_hidden().child(
                 img(preview.image)
-                    .w(px(width * scale))
-                    .h(px(height * scale))
-                    .rounded(px(PREVIEW_RADIUS))
-                    .into_any_element()
-            }
-            Some(preview) => img(preview.image).size(px(ICON)).into_any_element(),
-            // The generic file glyph, as the Library's rows show, until the preview comes.
-            None => svg()
-                .path("icons/file.svg")
-                .size(px(ICON * 0.75))
-                .text_color(self.palette.text(SECONDARY))
-                .into_any_element(),
-        };
-        // One still coming says how much has come, and a held one why, as its Library row does,
-        // and its age once done.
-        let detail: SharedString = match download {
-            Some(download) if download.held => "May harm your computer".into(),
-            Some(download) if download.state == DownloadState::Running => {
-                of(download.received, download.total).into()
-            }
-            Some(download) if download.state == DownloadState::Paused => {
-                format!("Paused · {}", of(download.received, download.total)).into()
-            }
-            _ => age.clone(),
-        };
-        let line = |text: SharedString, size: f32, height: f32, color: f32| {
-            div()
-                .h(px(height))
+                    .size(px(t::TILE))
+                    .rounded(px(t::TILE_RADIUS))
+                    .object_fit(ObjectFit::Cover),
+            ),
+            _ => tile
                 .flex()
                 .items_center()
-                .text_size(px(size))
-                .text_color(self.palette.text(color))
+                .justify_center()
+                .bg(self.palette.plate(t::TILE_FILL))
+                .child(
+                    svg()
+                        .path(tile_glyph(download))
+                        .size(px(t::TILE_GLYPH))
+                        .text_color(self.palette.glyph(t::TILE_GLYPH_INK)),
+                ),
+        };
+        let on = plate(self.palette.tone, self.window_fill_at(1.));
+        let [name_ink, quiet, _] = inks(&self.palette, on);
+        let line = |text: SharedString| {
+            div()
+                .min_w_0()
+                .h(px(t::DETAIL_LINE))
+                .flex()
+                .items_center()
+                .text_size(px(t::DETAIL_SIZE))
+                .text_color(quiet)
                 .child(div().truncate().child(text))
         };
-        let plate = div()
-            .id(("recent-download", id))
-            .absolute()
-            .left(px(PLATE_INSET))
-            .right(px(PLATE_INSET))
-            .top(px(2.))
-            .bottom(px(2.))
-            .rounded(px(PLATE_RADIUS));
-        let plate = match (live, capture) {
-            (false, _) => plate,
-            (true, None) => self.download_row(plate, id, "recent downloads", cx),
-            // A capture's row opens it as its tile in Media does, and has its menu.
-            (true, Some(capture)) => {
-                let path = capture.path.clone();
-                plate
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                    .on_click({
-                        let path = path.clone();
-                        cx.listener(move |shell, _, _, cx| {
-                            shell.open_media(&path, cx);
-                            shell.hide_recent_downloads(cx);
-                        })
-                    })
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                            shell.capture_menu(path.clone(), event.position, cx)
-                        }),
-                    )
-            }
+        let under = match progress(download) {
+            Some(done) => div()
+                .mt(px(t::BAR_ABOVE))
+                .flex()
+                .items_center()
+                .gap(px(t::BAR_GAP))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(t::BAR_WIDTH))
+                        .h(px(t::BAR_HEIGHT))
+                        .rounded(px(t::BAR_HEIGHT / 2.))
+                        .bg(self.palette.faint(t::BAR_TRACK))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(done))
+                                .rounded(px(t::BAR_HEIGHT / 2.))
+                                .bg(self.palette.glyph(t::BAR_FILL)),
+                        ),
+                )
+                .child(line(detail(download))),
+            None => div()
+                .mt(px(t::DETAIL_ABOVE))
+                .flex()
+                .child(line(detail(download))),
         };
+        let name = div()
+            .h(px(t::NAME_LINE))
+            .flex()
+            .items_center()
+            .text_size(px(t::NAME_SIZE))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(name_ink)
+            .child(div().truncate().child(download.name.clone()));
         let row = div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .top(px(down))
-            .h(px(RECENT_PITCH))
-            .child(plate)
+            .id(("recent-download", id))
+            .flex_none()
+            .h(px(t::ROW))
+            .px(px(t::ROW_INSET))
+            .flex()
+            .items_center()
+            .gap(px(t::ROW_GAP))
+            .rounded(px(t::ROW_RADIUS));
+        let row = match live {
+            true => {
+                let lit = self.palette.plate(t::ROW_HOVERED);
+                self.download_row(row, id, "recent downloads", lit, cx)
+            }
+            false => row,
+        };
+        row.child(tile)
             .child(
                 div()
-                    .absolute()
-                    .left(px(COLUMN_X))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(COLUMN))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(preview),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(TEXT_X))
-                    .right(px(TEXT_END))
-                    .top_0()
-                    .bottom_0()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
-                    .justify_center()
-                    .child(line(name, NAME_SIZE, NAME_LINE, NAME))
-                    .child(line(detail, AGE_SIZE, AGE_LINE, SECONDARY)),
-            );
-        let row = div()
-            .flex_none()
-            .relative()
-            .h(px(RECENT_PITCH))
-            .opacity(opacity)
-            .child(row);
-        row.into_any_element()
+                    .child(name)
+                    .child(under),
+            )
+            .into_any_element()
     }
 }
 
@@ -720,17 +788,23 @@ impl Shell {
 mod tests {
     use std::{rc::Rc, time::Duration};
 
-    use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
+    use gpui::{
+        Entity, Hsla, Modifiers, MouseButton, Rgba, TestAppContext, VisualTestContext, black,
+        point, px, white,
+    };
 
     use super::{
         super::{
-            Captured, Download, DownloadState, Shell,
-            library::{Section, capture_id},
+            Captured, Download, DownloadState, FOOTER_HEIGHT, Shell,
+            library::{LIBRARY_BACK_INSET, Section},
             recorder::Recorder,
         },
-        DAY, HOUR, MINUTE, RECENT_FADE_IN, RECENT_FADE_OUT, RECENT_LINGER, RECENT_STAGGER_IN,
-        RECENT_STAGGER_OUT, RECENT_WAIT, WEEK, age, now, row_drop, row_opacity,
+        DAY, HOUR, MINUTE, Outline, RECENT_REST, WEEK, age, come, detail, grown, heading_ink, inks,
+        now, opened, plate, rows_shown, t, tile_glyph,
     };
+    use crate::palette::{Palette, TEXT, Tone, contrast, over};
+    use crate::tokens::shell::recent_downloads::motion::{FOLD, GROW, ROWS_FROM};
+    use crate::tokens::shell::{FOOT_ROW, LIBRARY_BUTTON};
 
     /// Ages count minutes, hours, then yesterday, days and weeks, and past four weeks give the
     /// date, with its year if it isn't this one's.
@@ -796,8 +870,8 @@ mod tests {
         (shell, cx, host)
     }
 
-    fn move_to(cx: &mut VisualTestContext, x: f32, y: f32) {
-        cx.simulate_mouse_move(point(px(x), px(y)), None, Modifiers::none());
+    fn move_to(cx: &mut VisualTestContext, at: (f32, f32)) {
+        cx.simulate_mouse_move(point(px(at.0), px(at.1)), None, Modifiers::none());
         cx.run_until_parked();
     }
 
@@ -806,186 +880,182 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// The rows listed, newest first, with their ages, and whether they're going.
-    fn rows(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Vec<(u64, String)>, bool) {
+    /// A frame drawn, which steps the plate's motion.
+    fn frame(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+
+    /// The downloads listed, newest first, and whether the plate is folding back.
+    fn rows(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Vec<u64>, bool) {
         shell.read_with(cx, |shell, _| {
             let recent = &shell.recent_downloads;
-            let rows = recent
-                .rows
-                .iter()
-                .map(|(id, age)| (*id, age.to_string()))
-                .collect();
-            (rows, recent.going)
+            (recent.rows.clone(), recent.going)
         })
     }
 
-    /// A right-click on the Library button picks what its hover lists, each kind of file and the
-    /// Library's captures, which list among the downloads by when they were saved.
+    /// The middle of the Library button, and of row `index` of the `count` the plate lists, the
+    /// newest at its top; and a point over the page, on neither.
+    fn button(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (f32, f32) {
+        let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
+        (
+            LIBRARY_BACK_INSET + LIBRARY_BUTTON / 2.,
+            height - FOOTER_HEIGHT / 2.,
+        )
+    }
+
+    fn row(
+        shell: &Entity<Shell>,
+        cx: &mut VisualTestContext,
+        count: usize,
+        index: usize,
+    ) -> (f32, f32) {
+        let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
+        let plate = 2. * t::PADDING + t::HEADING + count as f32 * t::ROW;
+        let top = height - (FOOTER_HEIGHT + FOOT_ROW) / 2. - plate;
+        (
+            120.,
+            top + t::PADDING + t::HEADING + (index as f32 + 0.5) * t::ROW,
+        )
+    }
+
+    const AWAY: (f32, f32) = (400., 300.);
+
+    /// The plate opens only once the pointer has rested on the button, and a pointer passing over
+    /// it starts nothing that outlives its leaving. With no downloads, or only ones that were
+    /// cancelled or failed, it doesn't open at all.
     #[gpui::test]
-    fn the_library_button_s_menu_picks_what_its_hover_lists(cx: &mut TestAppContext) {
+    fn the_plate_opens_after_the_rest_and_never_with_none(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx);
+        let waits = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| shell.recent_downloads.wait.is_some())
+        };
+        let at = button(&shell, cx);
+        assert!(!waits(cx), "nothing waits at launch");
+
+        move_to(cx, at);
+        wait(cx, RECENT_REST * 2);
+        assert!(rows(&shell, cx).0.is_empty(), "it opens with no downloads");
+        move_to(cx, AWAY);
+
+        let mut cancelled = done(1, MINUTE);
+        cancelled.state = DownloadState::Cancelled;
+        let mut failed = done(2, HOUR);
+        failed.state = DownloadState::Failed;
+        shell.update(cx, |shell, cx| {
+            shell.set_downloads(vec![cancelled, failed], cx)
+        });
+        move_to(cx, at);
+        wait(cx, RECENT_REST * 2);
+        assert!(
+            rows(&shell, cx).0.is_empty(),
+            "it opens with none that lists"
+        );
+        move_to(cx, AWAY);
+
+        shell.update(cx, |shell, cx| shell.set_downloads(vec![done(3, HOUR)], cx));
+        cx.run_until_parked();
+        assert!(!waits(cx), "a download wakes nothing by itself");
+        move_to(cx, at);
+        assert!(waits(cx), "the rest starts as the pointer comes");
+        wait(cx, RECENT_REST / 2);
+        move_to(cx, AWAY);
+        assert!(!waits(cx), "and is dropped as it leaves");
+        wait(cx, RECENT_REST * 2);
+        assert!(
+            rows(&shell, cx).0.is_empty(),
+            "passing over the button opens it"
+        );
+
+        move_to(cx, at);
+        wait(cx, RECENT_REST - Duration::from_millis(10));
+        assert!(rows(&shell, cx).0.is_empty(), "it opens before the rest");
+        wait(cx, Duration::from_millis(10));
+        assert_eq!(rows(&shell, cx), (vec![3], false));
+        assert!(!waits(cx), "the rest is one shot");
+    }
+
+    /// It lists the last four downloads and nothing else, newest first whatever order the core
+    /// gives them in: those still coming and a held one among the finished, none that was
+    /// cancelled, and none of the Library's captures. It asks once for the picture of each
+    /// finished file that is one, and for a running one's once it has finished. A click on the
+    /// button still opens the Library where it was, and takes the plate away at once.
+    #[gpui::test]
+    fn the_plate_lists_the_last_four_downloads_newest_first(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
-        let mut picture = done(2, 2. * HOUR);
+        let mut running = done(9, 0.);
+        (running.state, running.name) = (DownloadState::Running, "clip.mp4".into());
+        (running.received, running.total) = (4, 10);
+        let mut held = done(8, MINUTE);
+        (held.state, held.held) = (DownloadState::Running, true);
+        let mut cancelled = done(7, 2. * MINUTE);
+        cancelled.state = DownloadState::Cancelled;
+        let mut picture = done(5, 2. * HOUR);
         picture.name = "picture.png".into();
-        let path = "/media/Capture.png";
-        let name = "Capture.png".into();
+        let downloads = vec![
+            done(1, 10. * DAY),
+            done(4, 4. * DAY),
+            picture,
+            done(2, 9. * DAY),
+            cancelled,
+            running,
+            done(3, 8. * DAY),
+            held,
+        ];
         let capture = Captured {
-            path: path.into(),
-            name,
-            saved: now() - MINUTE,
+            path: "/media/Capture.png".into(),
+            name: "Capture.png".into(),
+            saved: now() - 10_000.,
         };
         shell.update(cx, |shell, cx| {
-            shell.set_downloads(vec![picture, done(1, DAY)], cx);
+            shell.set_downloads(downloads, cx);
             shell.set_captures(vec![capture], cx);
         });
         cx.run_until_parked();
-        let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
-        let button = point(px(24.), px(height - 25.));
-        let pick = |title: &str, cx: &mut VisualTestContext| {
-            cx.simulate_mouse_down(button, MouseButton::Right, Modifiers::none());
-            cx.simulate_mouse_up(button, MouseButton::Right, Modifiers::none());
-            cx.run_until_parked();
-            let titles: Vec<_> = (host.menus.borrow().last().unwrap().iter())
-                .map(|(title, _)| title.to_string())
-                .collect();
-            assert_eq!(titles, ["Images", "Videos", "Other Files", "", "Captures"]);
-            cx.update(|_, cx| host.choose(title, cx));
-            cx.run_until_parked();
-            // Off the button, so the next rest shows the rows anew.
-            move_to(cx, 400., 300.);
-        };
-        let listed = |cx: &mut VisualTestContext| {
-            move_to(cx, 24., height - 25.);
-            wait(cx, RECENT_WAIT);
-            let ids = rows(&shell, cx)
-                .0
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect::<Vec<_>>();
-            move_to(cx, 400., 300.);
-            wait(cx, RECENT_WAIT);
-            ids
-        };
-        assert_eq!(listed(cx), [capture_id(path), 2, 1]);
-        pick("Other Files", cx);
-        assert_eq!(listed(cx), [capture_id(path), 2]);
-        pick("Captures", cx);
-        assert_eq!(listed(cx), [2]);
-        pick("Other Files", cx);
-        assert_eq!(listed(cx), [2, 1]);
-    }
-
-    /// Resting on the Library button for a moment shows the four newest downloads, the
-    /// running and held ones with the finished ones, with their ages, and asks for the finished
-    /// ones' previews once, and the running one's once it finishes. They stay as the pointer crosses
-    /// from the button onto them, go once it's on neither, and come back from going when it's on
-    /// the button again. While the download runs, the button still names itself View Library, and
-    /// a click opens the Library where it was, not on Downloads, and takes the rows away.
-    #[gpui::test]
-    fn the_recent_downloads_show_while_the_pointer_rests_on_the_button(cx: &mut TestAppContext) {
-        let (shell, cx, host) = window(cx);
-        let mut running = done(9, 0.);
-        running.state = DownloadState::Running;
-        let mut held = done(8, MINUTE);
-        (held.state, held.held) = (DownloadState::Running, true);
-        let downloads = vec![
-            running,
-            held,
-            done(5, 2. * HOUR),
-            done(4, 4. * DAY),
-            done(3, 8. * DAY),
-            done(2, 9. * DAY),
-            done(1, 10. * DAY),
-        ];
-        shell.update(cx, |shell, cx| shell.set_downloads(downloads, cx));
-        cx.run_until_parked();
-        let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
-        let button = (24., height - 25.);
+        let at = button(&shell, cx);
         host.take();
 
-        move_to(cx, button.0, button.1);
-        wait(cx, RECENT_WAIT - Duration::from_millis(100));
-        assert!(rows(&shell, cx).0.is_empty(), "they wait for a rest");
-        wait(cx, Duration::from_millis(100));
-        let shown = vec![
-            (9, "just now".to_string()),
-            (8, "1 minute ago".to_string()),
-            (5, "2 hours ago".to_string()),
-            (4, "4 days ago".to_string()),
-        ];
-        assert_eq!(rows(&shell, cx), (shown.clone(), false));
-        // The Library's captures are listed again as the wait starts.
-        let asked = ["list captures", "file preview 5", "file preview 4"];
+        move_to(cx, at);
+        wait(cx, RECENT_REST);
+        assert_eq!(rows(&shell, cx), (vec![9, 8, 5, 4], false));
         let calls = host.take();
         assert!(
             calls.iter().any(|call| call == "tooltip View Library ⇧⌘L"),
             "{calls:?}"
         );
-        let previews: Vec<_> = calls.iter().filter(|c| !c.starts_with("tooltip")).collect();
-        assert_eq!(previews, asked);
+        let asked: Vec<_> = (calls.iter())
+            .filter(|call| !call.starts_with("tooltip"))
+            .collect();
+        assert_eq!(asked, ["file preview 5"], "only the finished picture's");
 
-        // Up across the gap onto the newest row, at the bottom, and the oldest, at the top.
-        move_to(cx, 24., height - 45.);
-        move_to(cx, 120., height - 50. - 28.);
-        move_to(cx, 120., height - 50. - 3. * 56. - 28.);
-        assert_eq!(
-            rows(&shell, cx),
-            (shown.clone(), false),
-            "the rows keep them"
-        );
-
-        // Their fade in ends on the test's clock, which stands still from here, so they're still
-        // going when the pointer comes back however long the machine takes.
-        wait(
-            cx,
-            Duration::from_secs_f32(3. * RECENT_STAGGER_IN + RECENT_FADE_IN),
-        );
-        move_to(cx, 120., 200.);
-        assert_eq!(
-            rows(&shell, cx),
-            (shown.clone(), true),
-            "they go with the pointer on neither"
-        );
-        move_to(cx, button.0, button.1);
-        assert_eq!(
-            rows(&shell, cx),
-            (shown.clone(), false),
-            "the button brings them back"
-        );
-
-        // The running one finishing keeps its row and gets its preview.
-        host.take();
+        // The running one finishing keeps its row and gets its picture.
         let mut finished = shell.read_with(cx, |shell, _| shell.downloads.clone());
-        finished[0].state = DownloadState::Done;
+        let clip = finished.iter_mut().find(|each| each.id == 9).unwrap();
+        clip.state = DownloadState::Done;
         shell.update(cx, |shell, cx| shell.set_downloads(finished, cx));
         cx.run_until_parked();
-        assert_eq!(rows(&shell, cx), (shown.clone(), false));
-        let calls = host.take();
-        let previews: Vec<_> = calls
-            .iter()
-            .filter(|c| c.starts_with("file preview"))
+        assert_eq!(rows(&shell, cx), (vec![9, 8, 5, 4], false));
+        let previews: Vec<_> = (host.take().into_iter())
+            .filter(|call| call.starts_with("file preview"))
             .collect();
         assert_eq!(previews, ["file preview 9"]);
-        let mut running = shell.read_with(cx, |shell, _| shell.downloads.clone());
-        running[0].state = DownloadState::Running;
-        shell.update(cx, |shell, cx| shell.set_downloads(running, cx));
 
-        // A later rest asks for no preview again.
+        // A later rest asks for none again.
         shell.update(cx, |shell, cx| shell.recent_downloads_gone(cx));
-        move_to(cx, 120., 200.);
-        move_to(cx, button.0, button.1);
-        wait(cx, RECENT_WAIT);
+        move_to(cx, AWAY);
+        move_to(cx, at);
+        wait(cx, RECENT_REST);
         assert_eq!(rows(&shell, cx).0.len(), 4);
         assert!(
-            host.take()
-                .iter()
-                .all(|call| !call.starts_with("file preview"))
+            (host.take().iter()).all(|call| !call.starts_with("file preview")),
+            "a picture is asked for once"
         );
 
-        cx.simulate_click(point(px(button.0), px(button.1)), Modifiers::none());
+        cx.simulate_click(point(px(at.0), px(at.1)), Modifiers::none());
         cx.run_until_parked();
         assert!(
             rows(&shell, cx).0.is_empty(),
-            "the Library takes them away at once"
+            "the Library takes the plate away at once"
         );
         let (open, archive) = shell.read_with(cx, |shell, _| {
             (shell.library_open, shell.section == Section::Archive)
@@ -993,27 +1063,102 @@ mod tests {
         assert!(open && archive, "a click opens the Library where it was");
     }
 
-    /// A right-click on a row shows its menu, which takes the pointer as it comes on screen over
-    /// them, and the rows stay while it's open for it to act on, then go once it closes with the
-    /// pointer on neither them nor the button.
+    /// A click on the button opens the Library with no plate up too: before the rest is over,
+    /// which the click ends, and with nothing to list.
     #[gpui::test]
-    fn the_recent_downloads_stay_under_a_rows_menu(cx: &mut TestAppContext) {
+    fn a_click_on_the_button_opens_the_library_with_no_plate_up(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx);
+        shell.update(cx, |shell, cx| shell.set_downloads(vec![done(1, HOUR)], cx));
+        let at = button(&shell, cx);
+        move_to(cx, at);
+        cx.simulate_click(point(px(at.0), px(at.1)), Modifiers::none());
+        cx.run_until_parked();
+        assert!(shell.read_with(cx, |shell, _| shell.library_open));
+        wait(cx, RECENT_REST * 2);
+        assert!(
+            rows(&shell, cx).0.is_empty(),
+            "no plate opens over the Library"
+        );
+    }
+
+    /// The plate stays as the pointer crosses from the button onto it, folds back once the pointer
+    /// is on neither, grows again from the button while it folds, and is gone when its fold ends.
+    #[gpui::test]
+    fn the_plate_stays_under_the_pointer_and_folds_back_as_it_leaves(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx);
+        let downloads = vec![done(2, HOUR), done(1, 2. * HOUR)];
+        shell.update(cx, |shell, cx| shell.set_downloads(downloads, cx));
+        let at = button(&shell, cx);
+        move_to(cx, at);
+        wait(cx, RECENT_REST);
+        frame(&shell, cx);
+        wait(cx, Duration::from_secs_f32(GROW));
+        frame(&shell, cx);
+        assert!(
+            shell.read_with(cx, |shell, _| shell.recent_downloads.settled),
+            "it's open after its growth"
+        );
+
+        // Up from the button onto the plate's foot, then its rows, the oldest and the newest.
+        move_to(cx, (at.0, at.1 - FOOT_ROW / 2. - 2.));
+        assert_eq!(rows(&shell, cx), (vec![2, 1], false), "its foot keeps it");
+        let (oldest, newest) = (row(&shell, cx, 2, 1), row(&shell, cx, 2, 0));
+        move_to(cx, oldest);
+        move_to(cx, newest);
+        assert_eq!(rows(&shell, cx), (vec![2, 1], false), "its rows keep it");
+
+        move_to(cx, AWAY);
+        assert_eq!(
+            rows(&shell, cx),
+            (vec![2, 1], true),
+            "it folds with the pointer on neither"
+        );
+        // Folding, it takes no pointer: only the button brings it back.
+        move_to(cx, newest);
+        assert!(rows(&shell, cx).1);
+        move_to(cx, at);
+        assert_eq!(
+            rows(&shell, cx),
+            (vec![2, 1], false),
+            "the button brings it back"
+        );
+
+        move_to(cx, AWAY);
+        frame(&shell, cx);
+        wait(cx, Duration::from_secs_f32(FOLD + GROW));
+        frame(&shell, cx);
+        assert!(
+            rows(&shell, cx).0.is_empty(),
+            "it's gone when its fold ends"
+        );
+        frame(&shell, cx);
+        assert!(
+            shell.read_with(cx, |shell, _| shell.recent_downloads.wait.is_none()),
+            "and nothing waits once it's gone"
+        );
+    }
+
+    /// A right-click on a row shows its menu, which takes the pointer as it comes on screen over
+    /// the plate, and the plate stays while it's open for it to act on, then folds back once it
+    /// closes with the pointer on neither it nor the button.
+    #[gpui::test]
+    fn the_plate_stays_under_a_rows_menu(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
         let downloads = vec![done(2, HOUR), done(1, 2. * HOUR)];
         shell.update(cx, |shell, cx| shell.set_downloads(downloads, cx));
-        let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
-        move_to(cx, 24., height - 25.);
-        wait(cx, RECENT_WAIT);
-        wait(
-            cx,
-            Duration::from_secs_f32(RECENT_STAGGER_IN + RECENT_FADE_IN),
-        );
+        let at = button(&shell, cx);
+        move_to(cx, at);
+        wait(cx, RECENT_REST);
+        frame(&shell, cx);
+        wait(cx, Duration::from_secs_f32(GROW));
+        frame(&shell, cx);
         assert_eq!(rows(&shell, cx).0.len(), 2);
 
-        let row = point(px(120.), px(height - 50. - 28.));
-        move_to(cx, 120., height - 50. - 28.);
-        cx.simulate_mouse_down(row, MouseButton::Right, Modifiers::none());
-        cx.simulate_mouse_up(row, MouseButton::Right, Modifiers::none());
+        let newest = row(&shell, cx, 2, 0);
+        move_to(cx, newest);
+        let on = point(px(newest.0), px(newest.1));
+        cx.simulate_mouse_down(on, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(on, MouseButton::Right, Modifiers::none());
         cx.run_until_parked();
         let titles: Vec<_> = (host.menus.borrow().last().unwrap().iter())
             .map(|(title, _)| title.to_string())
@@ -1022,108 +1167,237 @@ mod tests {
             titles.iter().any(|title| title == "Move to Trash"),
             "{titles:?}"
         );
-        move_to(cx, 120., 200.);
+        move_to(cx, AWAY);
         let (kept, going) = rows(&shell, cx);
-        assert!(kept.len() == 2 && !going, "the menu keeps them");
+        assert!(kept.len() == 2 && !going, "the menu keeps it");
 
         cx.update(|_, cx| host.dismiss(cx));
         cx.run_until_parked();
         assert!(
             rows(&shell, cx).1,
-            "they go as it closes, the pointer on neither"
+            "it folds as the menu closes, the pointer on neither"
         );
     }
 
-    /// The rows come in from the bottom, each 25 ms after the one under it, fading in over 0.18 s
-    /// as they rise 5 pt over the first 0.12 s. They go 70 ms after the pointer leaves, the bottom
-    /// one first and the top one 50 ms later, each fading out over 0.13 s; one turned on its way
-    /// turns at once.
-    #[test]
-    fn the_rows_come_up_from_the_bottom_and_go_bottom_first() {
-        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        assert_eq!(row_opacity(false, 0, 0., 0.), 0.);
-        assert!(close(row_opacity(false, 0, 0., 0.09), 0.5));
-        assert_eq!(row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN), 0.);
-        assert!(close(
-            row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + 0.09),
-            0.5
-        ));
-        assert_eq!(
-            row_opacity(false, 3, 0., 3. * RECENT_STAGGER_IN + RECENT_FADE_IN + 1e-4),
-            1.
-        );
-        assert_eq!(row_drop(0.), 5.);
-        assert!(row_drop(0.5) > 0. && row_drop(0.5) < 0.2);
-        assert_eq!(row_drop(2. / 3.), 0.);
-
-        assert_eq!(row_opacity(true, 0, 1., RECENT_LINGER), 1.);
-        assert!(close(
-            row_opacity(true, 0, 1., RECENT_LINGER + RECENT_FADE_OUT / 2.),
-            0.5
-        ));
-        let top = RECENT_LINGER + 3. * RECENT_STAGGER_OUT;
-        assert!(close(top - RECENT_LINGER, 0.05));
-        assert_eq!(row_opacity(true, 3, 1., top), 1.);
-        assert_eq!(row_opacity(true, 3, 1., top + RECENT_FADE_OUT + 1e-4), 0.);
-        // Turned at half: back in over half the fade, and out after the linger alone.
-        assert!(close(row_opacity(false, 3, 0.5, RECENT_FADE_IN / 4.), 0.75));
-        assert!(close(
-            row_opacity(true, 3, 0.5, RECENT_LINGER + RECENT_FADE_OUT / 4.),
-            0.25
-        ));
-    }
-
-    /// A pointer passing over the button leaves no rows. A download running alone shows as one, and
-    /// so does a held one, which Chrome keeps running until it's kept or deleted, whose row's
-    /// click offers Keep and Delete.
+    /// A download running alone lists, and so does a held one, which Chrome keeps running until
+    /// it's kept or deleted, whose row's click offers Keep and Delete, as its row in the Library
+    /// does.
     #[gpui::test]
-    fn the_recent_downloads_need_a_rest_and_show_a_held_download(cx: &mut TestAppContext) {
+    fn the_plate_lists_a_held_download_whose_row_offers_keep_and_delete(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
-        shell.update(cx, |shell, cx| shell.set_downloads(vec![done(1, HOUR)], cx));
-        let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
-        move_to(cx, 24., height - 25.);
-        wait(cx, RECENT_WAIT / 2);
-        move_to(cx, 300., 200.);
-        wait(cx, RECENT_WAIT * 2);
-        assert!(
-            rows(&shell, cx).0.is_empty(),
-            "passing over the button shows nothing"
-        );
-
         let mut running = done(2, 0.);
         running.state = DownloadState::Running;
         shell.update(cx, |shell, cx| {
             shell.set_downloads(vec![running.clone()], cx)
         });
-        move_to(cx, 24., height - 25.);
-        wait(cx, RECENT_WAIT * 2);
-        assert_eq!(
-            rows(&shell, cx).0,
-            [(2, "just now".to_string())],
-            "a running one shows"
-        );
+        let at = button(&shell, cx);
+        move_to(cx, at);
+        wait(cx, RECENT_REST);
+        assert_eq!(rows(&shell, cx).0, [2], "a running one lists");
 
-        move_to(cx, 300., 200.);
-        wait(cx, RECENT_WAIT * 2);
         shell.update(cx, |shell, cx| shell.recent_downloads_gone(cx));
+        move_to(cx, AWAY);
         running.held = true;
         shell.update(cx, |shell, cx| shell.set_downloads(vec![running], cx));
-        move_to(cx, 24., height - 25.);
-        wait(cx, RECENT_WAIT * 2);
-        assert_eq!(
-            rows(&shell, cx).0,
-            [(2, "just now".to_string())],
-            "a held one shows"
-        );
-        move_to(cx, 24., height - 45.);
-        cx.simulate_click(point(px(120.), px(height - 50. - 28.)), Modifiers::none());
+        move_to(cx, at);
+        wait(cx, RECENT_REST);
+        frame(&shell, cx);
+        wait(cx, Duration::from_secs_f32(GROW));
+        frame(&shell, cx);
+        assert_eq!(rows(&shell, cx).0, [2], "a held one lists");
+        let only = row(&shell, cx, 1, 0);
+        move_to(cx, only);
+        cx.simulate_click(point(px(only.0), px(only.1)), Modifiers::none());
         cx.run_until_parked();
         let menu = host.menus.borrow().last().cloned().unwrap_or_default();
-        let titles: Vec<_> = menu
-            .iter()
-            .take(2)
+        let titles: Vec<_> = (menu.iter().take(2))
             .map(|(title, _)| title.to_string())
             .collect();
         assert_eq!(titles, ["Keep", "Delete"]);
+    }
+
+    /// Under Reduce Motion the plate appears, open, after the same rest, and goes at once.
+    #[gpui::test]
+    fn under_reduce_motion_the_plate_appears_and_goes(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window(cx);
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        shell.update(cx, |shell, cx| shell.set_downloads(vec![done(1, HOUR)], cx));
+        let at = button(&shell, cx);
+        let open = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, cx| {
+                shell.recent_downloads_open(cx.background_executor().now(), cx)
+            })
+        };
+        move_to(cx, at);
+        wait(cx, RECENT_REST - Duration::from_millis(10));
+        assert!(rows(&shell, cx).0.is_empty(), "the rest is kept");
+        wait(cx, Duration::from_millis(10));
+        assert_eq!(rows(&shell, cx), (vec![1], false));
+        assert_eq!(open(cx), 1., "it's open on its first frame");
+        frame(&shell, cx);
+        assert!(shell.read_with(cx, |shell, _| shell.recent_downloads.settled));
+
+        // No clock moves between the pointer leaving and the plate being gone.
+        move_to(cx, AWAY);
+        frame(&shell, cx);
+        assert!(rows(&shell, cx).0.is_empty(), "it goes at once");
+    }
+
+    /// It grows from the button over GROW and folds back over FOLD, each from as far open as it is
+    /// when it turns; its size leaves the button fast and settles, and its rows come in over the
+    /// second half of the way.
+    #[test]
+    fn the_plate_grows_out_of_the_button_and_folds_back() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert_eq!(opened(false, 0., 0.), 0.);
+        assert!(close(opened(false, 0., GROW / 2.), 0.5));
+        assert_eq!(opened(false, 0., GROW * 2.), 1.);
+        assert_eq!(opened(true, 1., 0.), 1.);
+        assert!(close(opened(true, 1., FOLD / 2.), 0.5));
+        assert_eq!(opened(true, 1., FOLD * 2.), 0.);
+        // Turned half open: a quarter of either way on from there.
+        assert!(close(opened(false, 0.5, GROW / 4.), 0.75));
+        assert!(close(opened(true, 0.5, FOLD / 4.), 0.25));
+        assert!(FOLD < GROW, "it folds back faster than it grows");
+
+        assert_eq!((grown(0.), grown(1.)), (0., 1.));
+        assert!(grown(0.5) > 0.8, "most of its size by half its time");
+        assert!((1..10).all(|step| grown(step as f32 / 10.) > grown((step - 1) as f32 / 10.)));
+
+        assert_eq!(rows_shown(0.), 0.);
+        assert_eq!(rows_shown(ROWS_FROM), 0.);
+        assert!(close(rows_shown((ROWS_FROM + 1.) / 2.), 0.5));
+        assert_eq!(rows_shown(1.), 1.);
+    }
+
+    /// A file with no picture has a page on its tile, and one the browser holds the warning
+    /// triangle, so the row that asks something of the user is told from the rest before it's read.
+    #[test]
+    fn a_held_files_tile_wears_the_warning_triangle() {
+        let mut download = done(1, HOUR);
+        assert_eq!(tile_glyph(&download), "icons/file.svg");
+        download.state = DownloadState::Running;
+        assert_eq!(tile_glyph(&download), "icons/file.svg");
+        download.held = true;
+        assert_eq!(tile_glyph(&download), "icons/triangle-alert.svg");
+    }
+
+    /// A row says what its row in the Library's Downloads does, but one still coming, whose words
+    /// there don't fit beside its bar: both sizes in the whole one's unit, said once, each whole
+    /// from 10 up and with one decimal under it, never a nought after the point, and kilobytes
+    /// and bytes always whole.
+    #[test]
+    fn a_row_says_how_much_has_come_in_one_unit() {
+        for (received, total, says) in [
+            (48_200_000, 121_500_000, "48 of 122 MB"),
+            (1_200_000_000, 4_800_000_000, "1.2 of 4.8 GB"),
+            (0, 4_800_000_000, "0 of 4.8 GB"),
+            (4_000_000_000, 4_800_000_000, "4 of 4.8 GB"),
+            (2_000, 4_000, "2 of 4 KB"),
+            (12_300_000_000, 48_700_000_000, "12 of 49 GB"),
+            (2_400_000, 122_000_000, "2.4 of 122 MB"),
+            (4_040_000, 122_000_000, "4 of 122 MB"),
+            (9_940_000, 10_000_000, "9.9 of 10 MB"),
+            (9_960_000, 122_000_000, "10 of 122 MB"),
+            (2_400, 9_400, "2 of 9 KB"),
+            (300, 900, "300 of 900 bytes"),
+            (5, 9, "5 of 9 bytes"),
+        ] {
+            assert_eq!(come(received, total), says);
+        }
+        assert_eq!(come(5_000, 4_000), "4 of 4 KB", "never more than there is");
+        assert_eq!(
+            come(1_200_000, 0),
+            "1.2 MB",
+            "a size not known says what has come"
+        );
+
+        let mut download = done(1, HOUR);
+        (download.received, download.total) = (18_400, 18_400);
+        assert_eq!(detail(&download), "18 KB · example.org");
+        (download.state, download.received) = (DownloadState::Running, 9_000);
+        assert_eq!(detail(&download), "9 of 18 KB");
+        download.state = DownloadState::Paused;
+        assert_eq!(detail(&download), "Paused", "its bar says how far");
+        download.total = 0;
+        assert_eq!(
+            detail(&download),
+            "Paused · 9 KB",
+            "with no bar, what has come"
+        );
+        download.total = 18_400;
+        (download.state, download.held) = (DownloadState::Running, true);
+        assert_eq!(detail(&download), "May harm your computer");
+    }
+
+    /// What the plate says reads on it, the floating fill over the sidebar, in both looks: a name
+    /// at 7:1, and its detail and the heading, small text both, at the text's floor, as all of a
+    /// row is on the plate it wears under the pointer. The heading's ink is its token's there,
+    /// which no floor lifts. Over a theme the sidebar's own look is another colour, and the floors
+    /// hold where it's as dark and as light as a colour can be.
+    #[test]
+    fn the_plates_text_reads_on_its_fill() {
+        let mut short = Vec::new();
+        for tone in [Tone::Dark, Tone::Light] {
+            let palette = Palette::of(None, tone);
+            let on = |ground: Hsla, ink: Hsla| {
+                let (ground, ink) = (Rgba::from(ground), Rgba::from(ink));
+                contrast(over(ground, ink, ink.a), ground)
+            };
+            let sidebar = Hsla::from(palette.underlay);
+            for (ground, most) in [(sidebar, 7.), (black(), TEXT), (white(), TEXT)] {
+                let plate = plate(tone, ground);
+                let [name, quiet, heading] = inks(&palette, plate);
+                let tile = plate.blend(palette.plate(t::TILE_FILL));
+                let lit = plate.blend(palette.plate(t::ROW_HOVERED));
+                for (what, read, floor) in [
+                    ("a name", on(plate, name), most),
+                    ("a detail", on(plate, quiet), TEXT),
+                    ("the heading", on(plate, heading), TEXT),
+                    (
+                        "the page glyph",
+                        on(tile, palette.glyph(t::TILE_GLYPH_INK)),
+                        3.,
+                    ),
+                    ("a name on a row under the pointer", on(lit, name), most),
+                    ("a detail on a row under the pointer", on(lit, quiet), TEXT),
+                ] {
+                    if read < floor {
+                        short.push(format!("{tone:?}: {what} reads at {read:.2}"));
+                    }
+                }
+            }
+            let [_, _, heading] = inks(&palette, plate(tone, sidebar));
+            assert_eq!(heading.a, heading_ink(tone), "{tone:?}");
+        }
+        assert!(short.is_empty(), "{}", short.join("\n"));
+    }
+
+    /// The plate's corners are a panel's once it's open, and never rounder than it has room for
+    /// on the way: none while it's no bigger than the button, and the curve into the button's
+    /// side never past the middle of what runs on beyond it.
+    #[test]
+    fn the_outlines_corners_fit_the_plate_as_it_grows() {
+        let open = Outline::of(224., 200.);
+        assert_eq!(
+            (open.top, open.far, open.curve),
+            (t::RADIUS, t::RADIUS, t::CURVE)
+        );
+        let shut = Outline::of(LIBRARY_BUTTON, 0.);
+        assert_eq!((shut.top, shut.far, shut.curve), (0., 0., 0.));
+        for step in 0..=20 {
+            let size = step as f32 / 20.;
+            let (width, height) = (LIBRARY_BUTTON + (224. - LIBRARY_BUTTON) * size, 200. * size);
+            let outline = Outline::of(width, height);
+            assert!(2. * outline.top <= width.min(height) + 1e-3);
+            assert!(outline.top + outline.far <= height + 1e-3);
+            assert!(outline.far + outline.curve <= width - LIBRARY_BUTTON + 1e-3);
+            assert!(outline.far >= 0. && outline.curve >= 0.);
+        }
+        assert!(
+            t::CURVE <= FOOT_ROW - t::STRIP_RADIUS,
+            "the curve ends above the box's foot"
+        );
+        assert!(2. * t::STRIP_RADIUS <= LIBRARY_BUTTON.min(FOOT_ROW));
     }
 }

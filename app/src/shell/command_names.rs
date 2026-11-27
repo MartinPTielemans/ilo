@@ -18,8 +18,6 @@ pub const STAY_ON_TOP: &str = "Stay On Top";
 pub(super) const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
 pub(super) const SIDEBAR_TO_RIGHT: &str = "Move Sidebar to the Right";
 pub(super) const SIDEBAR_TO_LEFT: &str = "Move Sidebar to the Left";
-pub(super) const SHOW_TOP_BAR: &str = "Show Top Bar";
-pub(super) const HIDE_TOP_BAR: &str = "Hide Top Bar";
 /// Arc's, in sentence case.
 pub(super) const DEVELOPER_MODE_ON: &str = "Turn on Developer Mode for this site";
 pub(super) const DEVELOPER_MODE_OFF: &str = "Turn off Developer Mode for this site";
@@ -41,7 +39,7 @@ impl Command {
             SearchTabs => &["Search Tabs…"],
             NewWindow => &["New Window"],
             NewPrivateWindow => &["New Incognito Window"],
-            NewLittleWindow => &["New Little ilo Window"],
+            NewLittleWindow => &["New Little Window"],
             NewBlankWindow => &["New Blank Window", BLANK_WINDOW_ITEM],
             OpenInMainWindow => &["Open in Main Window"],
             CloseWindow => &["Close Window"],
@@ -82,6 +80,7 @@ impl Command {
             Exit => &["Exit"],
             Clear => &["Clear Today"],
             SortBySite => &["Sort Today Tabs by Site"],
+            SortIntoFolders => &[super::broom::NAME],
             Undo | Redo => &[],
             CopyUrl => &["Copy URL"],
             CopyMarkdownLink => &["Copy URL as Markdown"],
@@ -117,7 +116,6 @@ impl Command {
             RecordTrace => &[trace::RECORD, trace::STOP_RECORDING],
             StayOnTop => &[STAY_ON_TOP, DONT_STAY_ON_TOP],
             MoveSidebar => &[SIDEBAR_TO_RIGHT, SIDEBAR_TO_LEFT],
-            ToggleTopBar => &[SHOW_TOP_BAR, HIDE_TOP_BAR],
             ToggleDeveloperMode => &[
                 "Toggle Developer Mode",
                 DEVELOPER_MODE_ON,
@@ -240,7 +238,6 @@ mod tests {
         Command::ToggleFullScreen,
         Command::StayOnTop,
         Command::MoveSidebar,
-        Command::ToggleTopBar,
         Command::ToggleDeveloperMode,
         Command::ChangeOrientation,
         Command::RecordTrace,
@@ -273,7 +270,6 @@ mod tests {
             let on = state == 1;
             let bar = MenuBar {
                 sidebar_hidden: on,
-                top_bar: on,
                 pinned_shut: on,
                 developer_mode: Some(on),
                 tracing: on,

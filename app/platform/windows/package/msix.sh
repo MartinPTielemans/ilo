@@ -1,8 +1,8 @@
 #!/bin/bash
 # Packs an app folder, the engine with Browser.dll and what package.sh puts beside it, as an MSIX
 # for the Microsoft Store, unsigned, as the Store signs it: the identity from
-# branding/windows-store.ini, the name from branding/name and the version from Cargo.toml with the 0
-# the Store wants last. package.sh packs a release's; check-windows.yml packs build/Browser and
+# branding/windows-store.ini, the name from branding/name and the four-part version from version.sh,
+# which climbs with the build. package.sh packs a release's; check-windows.yml packs build/Browser and
 # installs it, signed for its runner alone, for the links run's activation of the package (#1427).
 # A folder without chrome.exe, Browser.dll packed alone, skips makeappx's check that the manifest's
 # executable is there.
@@ -19,7 +19,7 @@ fail() {
 }
 
 name=$(cat "$app/branding/name")
-version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$app/Cargo.toml" | head -1)
+product=$(cat "$app/branding/product")
 store() { git config -f "$app/branding/windows-store.ini" "store.$1"; }
 
 stage=$(mktemp -d)
@@ -40,8 +40,9 @@ manifest=$(<"$here/AppxManifest.xml")
 manifest=${manifest//@IDENTITY_NAME@/$(xml "$(store identity-name)")}
 manifest=${manifest//@PUBLISHER_DISPLAY_NAME@/$(xml "$(store publisher-display-name)")}
 manifest=${manifest//@PUBLISHER@/$(xml "$(store publisher)")}
-manifest=${manifest//@VERSION@/$version.0}
+manifest=${manifest//@VERSION@/$("$here/version.sh")}
 manifest=${manifest//@NAME@/$(xml "$name")}
+manifest=${manifest//@PRODUCT@/$(xml "$product")}
 printf '%s\n' "$manifest" >"$stage/AppxManifest.xml"
 ! grep -q '@[A-Z_]*@' "$stage/AppxManifest.xml" || fail "AppxManifest.xml has a value msix.sh doesn't fill."
 

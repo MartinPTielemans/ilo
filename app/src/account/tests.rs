@@ -295,6 +295,74 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
     );
 }
 
+/// The address's field stays as Settings goes from dark to light and back, and draws in the look
+/// the page has each time, not in the one it was made in.
+#[gpui::test]
+fn the_servers_field_follows_the_look(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::SignedOut), cx);
+    tab.click("change-server");
+    let mut colours = Vec::new();
+    for dark in [false, true, false] {
+        let look = Look::settings(dark);
+        tab.account
+            .update(tab.cx, |account, cx| account.set_look(look, cx));
+        tab.cx.run_until_parked();
+        let drawn = tab.account.read_with(tab.cx, |account, cx| {
+            let field = account.server.as_ref().expect("the field stays");
+            field.input.read(cx).colors()
+        });
+        assert_eq!(drawn, look.field(), "dark {dark}");
+        colours.push(drawn);
+    }
+    assert_ne!(colours[0], colours[1], "light and dark drew the same field");
+    assert_eq!(colours[0], colours[2]);
+}
+
+/// ↩ and esc while an input method composes in the server's address are the composition's: ↩
+/// keeps no address, esc leaves the field open, and both leave the marked text for the method.
+/// Once the method has committed it, the next ↩ keeps the address.
+#[gpui::test]
+fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let mut tab = shown(state(Status::SignedOut), cx);
+    tab.click("change-server");
+    tab.type_text("https://ilo.example.");
+    let field = tab
+        .account
+        .read_with(tab.cx, |account, _| account.open_field().unwrap());
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+        })
+    });
+    tab.cx.run_until_parked();
+    let marked = |tab: &mut Shown| {
+        field.read_with(tab.cx, |field, _| {
+            (field.text().to_string(), field.composing())
+        })
+    };
+    tab.keys("enter");
+    assert!(
+        tab.host.take().is_empty(),
+        "↩ kept the address while composing"
+    );
+    tab.keys("escape");
+    let open = tab
+        .account
+        .read_with(tab.cx, |account, _| account.server.is_some());
+    assert!(open, "esc left the field while composing");
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), true));
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, "ぴ", window, cx)
+        })
+    });
+    tab.cx.run_until_parked();
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), false));
+    tab.keys("enter");
+    assert_eq!(tab.host.take(), ["server https://ilo.example.ぴ"]);
+}
+
 /// A build that names no server, before the user has named one, asks for the address in place of
 /// a server it can't reach: the field is open, Sign In signs in to what's typed there, and the
 /// field stays until the core has the server, as nothing else could name one.
@@ -621,7 +689,7 @@ fn back_from_the_words(cx: &mut TestAppContext) {
     assert_eq!(tab.host.take(), ["request pairing"]);
 }
 
-/// Signed in, the devices are listed, this one marked and the others with Remove.
+/// Signed in, the devices are listed, this one marked and the others with a ✕ that removes it.
 #[gpui::test]
 fn the_devices_and_remove(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
@@ -828,7 +896,7 @@ impl Shown<'_> {
 #[gpui::test]
 fn the_status_line_says_when_it_synced_and_what_stops_it(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
-    let app = env!("APP_NAME");
+    let app = env!("PRODUCT_NAME");
     assert_eq!(tab.status(), (None, format!("Syncing through {app}")));
     assert!(tab.host.take().contains(&"activity".to_string()));
 
@@ -1036,7 +1104,7 @@ fn every_control_in_sync_has_a_name(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_lasting_trouble_says_what_and_since_when(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
-    let app = env!("APP_NAME");
+    let app = env!("PRODUCT_NAME");
     let since = "since 14:52";
     tab.shows_since("at 14:50", Some(Trouble::Offline), since);
     assert_eq!(
@@ -1218,4 +1286,12 @@ fn since_reads_as_the_line_puts_it() {
     );
     assert_eq!(since_when(today - 80. * hour, days), "for 4 days");
     assert_eq!(since_when(0., days), "");
+}
+
+/// Settings › Sync and first run's card say one line while the account's sign-in window is up, and
+/// it's ChatGPT's, whose sign-in also waits in a window the browser opens (FR19). The line is drawn
+/// as plain text, which an assistive app's tree doesn't hold, so the test holds the line they read.
+#[test]
+fn the_sign_in_wait_says_the_assistants_line() {
+    assert_eq!(FINISH_SIGN_IN, crate::agents::sign_in::CHATGPT_WAITING);
 }

@@ -46,6 +46,43 @@ pub(super) const END: &str = r#"{"end":true}"#;
 /// connects and disconnects agents.
 pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
+/// The user's two switches, which the UI thread sets as the user does and the server's threads
+/// read (#4260): neither touches the other.
+#[derive(Clone, Default)]
+pub struct Switches {
+    /// The product's own threads, each connecting with its task's token.
+    pub threads: Arc<AtomicBool>,
+    /// Other apps' agents, each connecting with the token of an app the user connected.
+    pub others: Arc<AtomicBool>,
+}
+
+/// Which kind of agent a connection is, told by its token alone: by the agent id the app wrote
+/// beside the token it gave, never by anything the connecting side says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    /// One of the product's own threads.
+    Inside,
+    /// An app the user connected, driving the browser from outside.
+    Outside,
+}
+
+/// What a connection is told whose token the browser didn't give.
+pub const UNKNOWN_TOKEN: &str =
+    "The token isn't one the browser gave. Connect the client again in Settings › Other apps.";
+
+/// The kind `agent` is: a task's id is inside, an app's outside, and anything else neither, which
+/// is refused.
+pub fn side(agent: &str) -> Option<Side> {
+    match (
+        super::is_task_id(agent),
+        super::clients::Client::from_id(agent),
+    ) {
+        (true, _) => Some(Side::Inside),
+        (false, Some(_)) => Some(Side::Outside),
+        (false, None) => None,
+    }
+}
+
 /// The protocol versions the server speaks, newest first.
 pub(super) const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// A message may be no longer, which none an agent sends comes near.
@@ -57,7 +94,10 @@ const MAX_CONNECTIONS: usize = 32;
 /// room for a machine that's stalled.
 const TOKEN_WAIT: Duration = Duration::from_secs(5);
 /// What a client is told when every place is taken.
-const FULL: &str = "ilo is at its limit for connected clients. Quit another client session, then reconnect or restart this one.";
+const FULL: &str = concat!(
+    env!("PRODUCT_NAME"),
+    " is at its limit for connected clients. Quit another client session, then reconnect or restart this one."
+);
 
 /// The server, running until it's dropped.
 pub struct Server {
@@ -72,6 +112,7 @@ struct Shared {
     path: PathBuf,
     stopped: AtomicBool,
     tokens: Tokens,
+    switches: Switches,
     token_wait: Duration,
     /// The connections open, by a number of their own, from 1: the UI takes 0 for no connection's.
     connections: Mutex<HashMap<u64, Connection>>,
@@ -95,9 +136,10 @@ impl Server {
     pub fn start(
         path: &Path,
         tokens: Tokens,
+        switches: Switches,
         events: UnboundedSender<Event>,
     ) -> io::Result<Server> {
-        Server::listen(path, tokens, events, TOKEN_WAIT)
+        Server::listen(path, tokens, switches, events, TOKEN_WAIT)
     }
 
     /// Listens on a socket at `path`, readable and writable by the user alone, in place of any
@@ -106,6 +148,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
+        switches: Switches,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -125,6 +168,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            switches,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -142,6 +186,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
+        switches: Switches,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -150,6 +195,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            switches,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -345,11 +391,15 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
         .and_then(|first| Some(first.get("token")?.as_str()?.to_string()))
         .unwrap_or_default();
     let Some(agent) = shared.agent(&token) else {
-        let refused =
-            "The token isn't one the browser gave. Connect the client again in Settings › Agents.";
+        let refused = UNKNOWN_TOKEN;
         _ = writeln!(writer, "{}", json!({ "error": refused })).and_then(|()| writer.flush());
         return;
     };
+    if shared.refused(&agent) {
+        let off = super::bridge::off();
+        _ = writeln!(writer, "{}", json!({ "error": off })).and_then(|()| writer.flush());
+        return;
+    }
     if reader.get_mut().token_taken().is_err() {
         return;
     }
@@ -375,6 +425,7 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
             // A token the user has since disconnected, or a browser that stopped, answers no more.
             if shared.stopped.load(Ordering::SeqCst)
                 || shared.agent(&token).as_ref() != Some(&agent)
+                || shared.refused(&agent)
             {
                 break;
             }
@@ -431,7 +482,7 @@ enum Lane {
     InOrder,
     /// One tab's calls, in the order they came.
     Tab(u64),
-    /// ask, hand_off and ask_for_tab: one prompt at a time, the others waiting their turn.
+    /// `ONE_AT_A_TIME`'s tools: one prompt at a time, the others waiting their turn.
     Asks,
 }
 
@@ -571,6 +622,11 @@ impl<'a> Answering<'a> {
     }
 }
 
+/// What asks the user and waits for their answer one at a time, the next waiting its turn. A step
+/// the user takes on a tab (hand_off) isn't here: it holds only its tab's lane, so each tab's
+/// stands by itself and the other tabs carry on; another such step leaves this list the same way.
+const ONE_AT_A_TIME: [&str; 2] = ["ask", "ask_for_tab"];
+
 /// The lanes a message holds while it's answered.
 fn lanes(line: &str) -> Vec<Lane> {
     let message = serde_json::from_str::<Value>(line).unwrap_or_default();
@@ -583,17 +639,31 @@ fn lanes(line: &str) -> Vec<Lane> {
         .and_then(Value::as_u64))
     .filter(|tab| *tab != 0);
     let own = match (tool, tab) {
-        ("open_tab", _) => None,
+        // A search with no tab opens one, as open_tab does. A strand waits on its own run, which
+        // calls on a connection of its own, so it holds no lane its thread's other calls wait on.
+        ("open_tab", _) | (super::tools::SEARCHED, None) | (super::tools::STRAND, _) => None,
         (_, Some(tab)) => Some(Lane::Tab(tab)),
         (_, None) => Some(Lane::InOrder),
     };
-    let asks = matches!(tool, "ask" | "hand_off" | "ask_for_tab").then_some(Lane::Asks);
+    let asks = ONE_AT_A_TIME.contains(&tool).then_some(Lane::Asks);
     own.into_iter().chain(asks).collect()
 }
 
 impl Shared {
     fn agent(&self, token: &str) -> Option<String> {
         self.tokens.lock().unwrap().get(token).cloned()
+    }
+
+    /// Whether `agent` is refused: one of the product's own threads while the user has threads
+    /// off, an app's while they have other apps' agents off, whatever the other switch says, and
+    /// one of neither kind always. Its token says which: the apps the user connected have their
+    /// app's id, a thread's own start its task's.
+    fn refused(&self, agent: &str) -> bool {
+        match side(agent) {
+            Some(Side::Inside) => !self.switches.threads.load(Ordering::SeqCst),
+            Some(Side::Outside) => !self.switches.others.load(Ordering::SeqCst),
+            None => true,
+        }
     }
 
     /// Connection `number` began answering a message, or wrote its answer: a stopped one closes
@@ -687,7 +757,7 @@ fn initialize(shared: &Shared, number: u64, agent: &str, params: &Value) -> Valu
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
-        "serverInfo": { "name": env!("APP_NAME"), "version": env!("CARGO_PKG_VERSION") },
+        "serverInfo": { "name": crate::product::PRODUCT, "version": env!("CARGO_PKG_VERSION") },
         "instructions": tools::INSTRUCTIONS,
     })
 }
@@ -736,6 +806,7 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
         error: result.error.then(|| result.text.clone()),
         kind: result.kind,
         image: result.image.clone(),
+        notes: result.notes.map(|note| note.name),
     });
     result
 }

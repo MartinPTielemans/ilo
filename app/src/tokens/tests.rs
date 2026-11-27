@@ -7,6 +7,16 @@ use std::{fs, path::Path};
 /// The literals that stay in the code: the file, a piece of the line, and why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "agents/wall/links.rs",
+        "0x2FC1_2FC1",
+        "ZFS's filesystem number, not a colour",
+    ),
+    (
+        "agents/wall/links.rs",
+        "0xCA45_1A4E",
+        "bcachefs's filesystem number, not a colour",
+    ),
+    (
         "theme.rs",
         "0x9e37_79b9",
         "the grain's random seed, not a colour",
@@ -27,24 +37,24 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the preview's made-up Space colours",
     ),
     (
-        "shell/dock_dot.rs",
-        "0x8655BF",
-        "a test's made-up Space colour",
-    ),
-    (
-        "shell/dock_dot.rs",
-        "0xE0475B",
-        "a test's made-up Space colour",
-    ),
-    (
         "shell/undo_tests.rs",
         "Some(0xff0000)",
         "a test's made-up Space colour",
     ),
     (
+        "shell/tab_background_tests.rs",
+        "const PAGES",
+        "a test's made-up pages' background colours",
+    ),
+    (
         "shell/extensions.rs",
         "FontWeight::BOLD",
         "the badge's count, a pictogram inside its pill",
+    ),
+    (
+        "agents/wall/rules.rs",
+        "0x8001_7472",
+        "the Mac's TIOCSTI ioctl, which a walled task's rules deny, and no colour",
     ),
 ];
 
@@ -99,6 +109,8 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // Stop's square in a thread's composer's round button, which rounds a glyph, not a corner.
+    "shell.conversation.composer-square-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",
     "theme-picker.arrow-tip-radius",
@@ -108,16 +120,61 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.split-targets.half-glyph-radius",
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
+    // The Library's downloads as drawn (values-library-foot.md, 33): the file's tile and the row's
+    // buttons at 8, and the bar at 2.
+    "shell.library.download-tile-radius",
+    "shell.library.download-bar-radius",
+    "shell.library.download-button-radius",
+    // The page's own corner, as the redesign draws it: between a control's and a row's.
+    "shell.card-radius",
+    // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
+    "menu.row-radius",
+    "menu.quiet-radius",
+    "menu.quiet-row-radius",
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
     "settings.side-radius",
     "settings.side-page-radius",
+    // Settings in the owner's drawing (spec-settings.md): its pages' rows at 8, the page's plane
+    // at 10 inside the window's 12, and the search field's ⌘F chip at 5.
+    "settings.form.row-radius",
+    "settings.form.panel-radius",
+    "settings.form.chip-radius",
     // Share favorites' Spaces and their tiles at the drawing's scale (#2430).
     "settings.share-space-radius",
     "settings.share-tile-radius",
     "mini-bar.radius",
+    // The Transparency picker's small ilo, at the drawing's scale (#4129).
+    "transparency.picture-radius",
+    "transparency.bright-radius",
+    "transparency.window-radius",
+    "transparency.row-radius",
+    "transparency.page-radius",
+    "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
+    // A resting card's page inside the card (#4140).
+    "shell.composer.page-radius",
+    // A thread's stage, at the drawing's values (spec-thread-stage.md): the rail's tiles, and the
+    // user's message, rounder than a row as the drawing's bubble is.
+    "shell.task.tile-radius",
+    "shell.conversation.radius",
+    // A held step's buttons, at the drawing's 8.
+    "shell.conversation.ilo.held-button-radius",
+    // The page buttons in the panel beside a page, at the drawing's 8.
+    "shell.conversation.panel.page-radius",
+    // The theme panel's Auto · Light · Dark: a segment concentric inside its frame, as drawn.
+    "theme-panel.segment-frame-radius",
+    "theme-panel.segment-radius",
+    // A thread card's button, at the drawing's 8 (spec-thread-card).
+    "shell.task-card.button-radius",
+    // Settings' segmented track, concentric round its segments at the control radius.
+    "settings.segment-radius",
+    // The foot's plates in the owner's drawing (spec-library-foot-theme.md): 28 square at 8.
+    "shell.foot-plate-radius",
+    // The downloads plate in the same drawing: a row at 9 and its tile at 7.
+    "shell.recent-downloads.row-radius",
+    "shell.recent-downloads.tile-radius",
 ];
 
 #[test]
@@ -156,8 +213,7 @@ fn every_corner_is_one_of_the_four_radii() {
 #[test]
 fn a_corner_inside_another_is_concentric() {
     use super::{
-        command_bar, foot_bar, hover_card, menu, mini_bar, radius, shell,
-        shell::{extensions, recent_downloads},
+        command_bar, foot_bar, hover_card, menu, mini_bar, radius, shell, shell::extensions,
         site_controls, toast,
     };
     // outer = inner + inset, where the inset is a token (or two).
@@ -176,6 +232,10 @@ fn a_corner_inside_another_is_concentric() {
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
     assert_eq!(
+        shell::composer::CARD_RADIUS,
+        shell::composer::PAGE_RADIUS + shell::composer::PAGE_INSET
+    );
+    assert_eq!(
         hover_card::RADIUS,
         hover_card::BUTTON_RADIUS + hover_card::BUTTON_INSET
     );
@@ -192,20 +252,15 @@ fn a_corner_inside_another_is_concentric() {
         shell::REVEAL_RADIUS,
         shell::PLATE_RADIUS + shell::PLATE_INSET
     );
-    assert_eq!(
-        recent_downloads::PREVIEW_RADIUS,
-        recent_downloads::PLATE_RADIUS
-            - (recent_downloads::COLUMN_X - recent_downloads::PLATE_INSET)
-    );
     // The toast's chips sit as far in from its top as its corner needs, to half a point.
     let inset = (toast::HEIGHT - toast::CHIP_HEIGHT) / 2.;
     assert!(
         (toast::RADIUS - toast::CHIP_RADIUS - inset).abs() < 0.5,
         "{inset}"
     );
-    // ilo's menu: its rows are controls, and its panel is theirs and its padding.
-    assert_eq!(menu::ROW_RADIUS, radius::CONTROL);
-    assert_eq!(menu::RADIUS, radius::CONTROL + menu::PADDING);
+    // ilo's menu: its panel is its rows' corner and its padding, quiet rows or not.
+    assert_eq!(menu::RADIUS, menu::ROW_RADIUS + menu::PADDING);
+    assert_eq!(menu::QUIET_RADIUS, menu::QUIET_ROW_RADIUS + menu::PADDING);
     // A pill's corners are half its height.
     assert_eq!(extensions::BADGE_RADIUS, extensions::BADGE_HEIGHT / 2.);
 }
@@ -535,8 +590,8 @@ fn type_is_on_the_scale() {
             super::shell::recent_downloads::NAME_SIZE,
         ),
         (
-            "shell::recent_downloads::AGE_SIZE",
-            super::shell::recent_downloads::AGE_SIZE,
+            "shell::recent_downloads::DETAIL_SIZE",
+            super::shell::recent_downloads::DETAIL_SIZE,
         ),
         (
             "shell::side_panel::HEADER_TEXT",

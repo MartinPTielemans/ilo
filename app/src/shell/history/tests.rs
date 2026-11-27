@@ -9,12 +9,14 @@ use gpui::{
 };
 
 use super::HOLD;
-use crate::shell::{Folders, HistoryPage, NAV_SIZE, NAV_TOP, Page, Shell, recorder::Recorder};
+use crate::shell::{
+    CONTROLS_PLATE, CONTROLS_TOP, Folders, HistoryPage, Page, Shell, recorder::Recorder,
+};
 
-/// Back, forward and reload in the 228 pt sidebar a window starts with (Arc 1.170).
-const BACK_X: f32 = 122.;
-const FORWARD_X: f32 = 156.;
-const RELOAD_X: f32 = 190.;
+/// Back's, forward's and reload's plates in the 228 pt sidebar a window starts with.
+const BACK_X: f32 = 146.;
+const FORWARD_X: f32 = 170.;
+const RELOAD_X: f32 = 194.;
 
 /// A drawn shell showing tab 10 of 10 and 11, whose page can go back but not forward.
 fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
@@ -47,7 +49,10 @@ fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<
 }
 
 fn button(x: f32) -> Point<Pixels> {
-    point(px(x + NAV_SIZE / 2.), px(NAV_TOP + NAV_SIZE / 2.))
+    point(
+        px(x + CONTROLS_PLATE / 2.),
+        px(CONTROLS_TOP + CONTROLS_PLATE / 2.),
+    )
 }
 
 fn pages() -> Vec<HistoryPage> {
@@ -266,4 +271,85 @@ fn with_no_tab_shown_the_menu_is_dimmed(cx: &mut TestAppContext) {
         .map(|item| item.1)
         .collect();
     assert_eq!(enabled, [false, false, false, false]);
+}
+
+/// A window opened on a page, its tab not yet heard of, as at launch: the empty card's field has
+/// the keyboard until the shell hears, the shell's own focus before it, as the window gave it.
+fn opened_on_a_page(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.update(|_, cx| crate::shell::bind_keys(cx));
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_space(1, cx);
+        shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+    });
+    cx.update(|window, cx| {
+        let root = shell.read(cx).focus_handle.clone();
+        window.focus(&root, cx)
+    });
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let field_focused = cx.update(|window, cx| {
+        let resting = shell
+            .read(cx)
+            .resting
+            .as_ref()
+            .expect("no field on the empty card");
+        resting.bar.read(cx).field_focus(cx).is_focused(window)
+    });
+    assert!(field_focused, "the empty card's field has no keyboard");
+    (shell, cx, host)
+}
+
+/// The page the window opened on is heard of, with somewhere to go both ways.
+fn page_heard(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| {
+        shell.set_selected(10, cx);
+        let page = Page {
+            url: "https://example.org/".into(),
+            can_go_back: true,
+            can_go_forward: true,
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+    });
+    cx.run_until_parked();
+}
+
+/// The field goes as the page shows, and the keys with the UI still go back and forward: after
+/// a click on forward, which takes no focus itself, ⌘← goes back, as history.sh's step does. They
+/// went with the field's focus, so only a click elsewhere in the window brought them back.
+#[gpui::test]
+fn after_the_empty_cards_field_goes_cmd_left_with_the_ui_goes_back(cx: &mut TestAppContext) {
+    let (shell, cx, host) = opened_on_a_page(cx);
+    page_heard(&shell, cx);
+    assert!(shell.read_with(cx, |shell, _| shell.resting.is_none()));
+    host.take();
+    cx.simulate_click(button(FORWARD_X), Modifiers::none());
+    cx.simulate_keystrokes("cmd-left");
+    cx.run_until_parked();
+    assert_eq!(calls(&host), ["forward 10", "back 10"]);
+}
+
+/// A page that took the keyboard while the field had GPUI's focus keeps it as the field goes:
+/// the shell asks the core to move no keyboard, and the keys stay the page's.
+#[gpui::test]
+fn the_field_going_leaves_the_page_its_keyboard(cx: &mut TestAppContext) {
+    let (shell, cx, host) = opened_on_a_page(cx);
+    shell.update_in(cx, |shell, window, cx| shell.page_took_keyboard(window, cx));
+    host.take();
+    page_heard(&shell, cx);
+    assert!(shell.read_with(cx, |shell, _| shell.resting.is_none()));
+    let moves = calls(&host);
+    let moves: Vec<&String> = (moves.iter())
+        .filter(|call| call.starts_with("focus") || call.contains("keyboard"))
+        .collect();
+    assert!(moves.is_empty(), "the shell moved the keyboard: {moves:?}");
+    let page = cx.update(|window, cx| shell.read(cx).page_has_keyboard(window, cx));
+    assert!(page, "the page lost the keyboard as the field went");
 }

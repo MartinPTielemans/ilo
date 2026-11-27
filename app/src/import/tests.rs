@@ -328,7 +328,7 @@ pub(crate) fn write(path: PathBuf, text: &str) -> PathBuf {
 }
 
 /// Marks a file used `ago` seconds ago.
-fn used(path: &Path, ago: u64) {
+pub(crate) fn used(path: &Path, ago: u64) {
     let file = fs::File::options().write(true).open(path).unwrap();
     file.set_modified(SystemTime::now() - Duration::from_secs(ago))
         .unwrap();
@@ -888,7 +888,7 @@ impl Browser {
     }
 
     /// The core has added the history and addresses it was given.
-    fn added(&self, cx: &mut App) {
+    pub(crate) fn added(&self, cx: &mut App) {
         for (added, then) in self.adding.take() {
             then(added, cx);
         }
@@ -1020,7 +1020,10 @@ impl Host for Browser {
 
     fn add_favorite(&self, space: u64, tab: &Tab) {
         let mut state = self.state.borrow_mut();
-        let profile = state.space(space).profile;
+        // First run adds them to the window's own Space, which this core didn't make: its first
+        // profile's.
+        let profile =
+            (state.spaces.iter().find(|each| each.id == space)).map_or(0, |each| each.profile);
         state.favorites.push((profile, tab.clone()));
     }
 
@@ -1539,18 +1542,20 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
     });
 }
 
-/// Each state's one button, the one that does what it's for, is in the host's accent: Settings'
-/// green, or the first launch's Signal. The list has none, as each browser's Import… is one of
-/// many, and an import going on by itself none until a profile hasn't opened, when it's Try Again.
-/// At the end it's Add Favorites while there are favorites to add, else Done.
+/// Each state's one button, the one that does what it's for, is the host's primary: in Settings
+/// the text colour, never green (the owner's), or the first launch's Signal. The list has none, as
+/// each browser's Import… is one of many, and an import going on by itself none until a profile
+/// hasn't opened, when it's Try Again. At the end it's Add Favorites while there are favorites to
+/// add, else Done.
 #[gpui::test]
-fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
+fn each_states_one_button_is_the_hosts_primary(cx: &mut TestAppContext) {
     let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
     let ground = Look::on(gpui::rgb(crate::palette::INK), gpui::white().into(), signal);
-    assert_eq!(ground.accent, signal);
+    assert_eq!(ground.primary, signal);
+    let settings = Look::settings(false);
     assert_eq!(
-        Look::settings(false).accent,
-        gpui::rgb(crate::palette::NO_THEME_ACCENT)
+        settings.primary, settings.on,
+        "Settings' main button is its text colour"
     );
     let primary = |view: &Entity<ImportView>, cx: &mut TestAppContext| {
         view.read_with(cx, |view, _| view.primary())
@@ -1560,7 +1565,7 @@ fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
     let host: Rc<dyn Host> = browser.clone();
     let view = cx.new(|_| ImportView::new(host, false).look(ground));
-    view.read_with(cx, |view, _| assert_eq!(view.look.accent, signal));
+    view.read_with(cx, |view, _| assert_eq!(view.look.primary, signal));
     assert_eq!(primary(&view, cx), None);
     view.update(cx, |view, cx| view.pick(0, cx));
     assert_eq!(primary(&view, cx), Some("Import"));
@@ -1893,7 +1898,7 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
             format!(
                 "{} made the profile Work for one of Arc's Spaces, and it hasn't opened in 20 \
                  seconds.",
-                env!("APP_NAME")
+                env!("PRODUCT_NAME")
             )
         );
         assert_eq!(guide.button.as_deref(), Some("Try Again"));
@@ -2607,7 +2612,7 @@ fn firefoxs_default_profile_is_the_one_it_starts_with() {
 /// A `places.sqlite` at `path` as Firefox lays one out, with its own folders, in write-ahead mode
 /// with the log kept, as while Firefox runs: what goes in stays in the log while the connection
 /// it returns is open.
-fn places_file(path: &Path) -> rusqlite::Connection {
+pub(crate) fn places_file(path: &Path) -> rusqlite::Connection {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     _ = fs::remove_file(path);
     let db = rusqlite::Connection::open(path).unwrap();
@@ -3229,7 +3234,7 @@ fn returning_with_access_still_off_says_still_no_access(cx: &mut TestAppContext)
     cx.run_until_parked();
     let still = format!(
         "Still no access. If you turned it on, quit {} and open it again.",
-        env!("APP_NAME")
+        env!("PRODUCT_NAME")
     );
     view.read_with(cx, |view, _| {
         assert_eq!(view.access(), Some(still.clone()));
@@ -4333,4 +4338,46 @@ fn every_control_in_the_import_has_a_name(cx: &mut TestAppContext) {
         "Add Favorites with none ticked doesn't say it's off"
     );
     fs::remove_dir_all(made).unwrap();
+}
+
+/// The first launch's list says what comes from the browser picked as chips: a click on one leaves
+/// out all it brings, and another brings it back; Import from … then brings the browser at once,
+/// with what was left out left out. The passwords chip asks for a file, and a click on it once one
+/// is chosen leaves it out again.
+#[gpui::test]
+fn the_guided_lists_chips_leave_out_what_they_bring(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false).guided());
+    let spaces = browser.spaces().len();
+    view.update(cx, |view, cx| {
+        view.toggle_chip(0, cx);
+        assert!(view.left_out.contains(&Kind::Spaces));
+        view.toggle_chip(0, cx);
+        assert!(view.left_out.is_empty(), "a second click brought them back");
+        view.toggle_chip(0, cx);
+    });
+    let file = home("guided-passwords").join("Arc Passwords.csv");
+    *browser.passwords_file.borrow_mut() = Some(file.clone());
+    view.update(cx, |view, cx| view.toggle_list_passwords(cx));
+    cx.run_until_parked();
+    view.update(cx, |view, cx| {
+        assert_eq!(view.list_passwords.as_deref(), Some(file.as_path()));
+        view.toggle_list_passwords(cx);
+        assert_eq!(view.list_passwords, None, "a click left the file out");
+        view.press(cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            !matches!(view.step, super::Step::List | super::Step::Pick { .. }),
+            "Import from Arc didn't bring it at once"
+        )
+    });
+    assert_eq!(
+        browser.spaces().len(),
+        spaces,
+        "Spaces came though their chip left them out"
+    );
+    fs::remove_dir_all(file.parent().unwrap()).ok();
 }

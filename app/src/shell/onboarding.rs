@@ -1,310 +1,261 @@
-//! A new profile's first launch (docs/ux-spec.md › Onboarding): ilo's intro, then one message a
-//! screen, over the whole window on the brand's ground. Only a launch with nothing to bring back
-//! starts it, and Help › Welcome to ilo plays it again, so a normal launch never draws or loads any
-//! of it. Any key or click skips the intro; Esc or Skip goes on from a step, and the last step's
-//! leaves the flow for the first Space's welcome. A page shown ends it, as the page would cover it.
-//! A step's button does what it offers, such as asking the system to make ilo the default browser,
-//! giving the first Space its colour or signing in to sync; Skip doesn't. The flow ends with the
-//! command bar up over the first Space, and a line on the card under it saying what the bar is.
+//! A new profile's first launch (spec-first-run.md, first-run-v9): one card over the desktop, in a
+//! window of its own (window.rs) that is the only one on screen until it ends, with up to seven
+//! steps, each shown only when it has something to ask. Only a launch with nothing to bring back
+//! starts it, and Help › Welcome plays it again, so a normal launch never draws or loads any of it.
+//!
+//! ↩ is a step's main button and nothing where a step has none; ⌘[ goes back; Esc only cancels a
+//! wait under way (a sign-in, an import), so it can never pass a step. The window has no close, and
+//! ⌘W closes nothing. A step's button does what it offers; passing a step, Back and Not Now set
+//! nothing. Nothing about the run is kept or sent: the stderr lines a check waits on name a step by
+//! its number, never what was picked or typed.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
-    KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba, SharedString, Subscription, Window,
-    accesskit::{Role, Toggled},
-    canvas, div, fill, point,
-    prelude::*,
-    px, rgb, size,
+    AnyElement, App, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
+    KeystrokeEvent, MouseButton, Pixels, Rgba, SharedString, Subscription, Window, accesskit::Role,
+    canvas, div, prelude::*, px, rgb,
 };
 
-use super::{
-    Command, Shell, cubic_bezier,
-    display_face::{cap_top, display_text},
-    fade_at,
-};
-use crate::account::{self, Account, AccountEvent, Status};
+use super::{Command, Shell, cubic_bezier, display_face::display_text};
+use crate::account::{self, Account, AccountEvent, Problem, Status};
 use crate::default_browser::{self, Os};
-use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, named_button, ring, stop_switch};
-use crate::theme::Theme;
-use crate::theme_picker::{SWATCHES, swatch_name};
-use crate::tokens::palette::{INK, PAPER};
-use crate::tokens::settings::PADDING;
-use crate::tokens::shell::onboarding::BUTTON_GAP;
-use crate::tokens::shell::onboarding::BUTTON_HEIGHT;
-use crate::tokens::shell::onboarding::BUTTON_INSET;
-use crate::tokens::shell::onboarding::BUTTON_RADIUS;
-use crate::tokens::shell::onboarding::BUTTON_SIZE;
-use crate::tokens::shell::onboarding::CHIP;
-use crate::tokens::shell::onboarding::CHIP_GAP;
-use crate::tokens::shell::onboarding::CHIP_HEIGHT;
-use crate::tokens::shell::onboarding::CHIP_INSET;
-use crate::tokens::shell::onboarding::CHIP_RADIUS;
-use crate::tokens::shell::onboarding::ENGINE_DOT;
-use crate::tokens::shell::onboarding::ENGINE_DOT_CENTER;
-use crate::tokens::shell::onboarding::ENGINE_ROW;
-use crate::tokens::shell::onboarding::IMPORT_HOLD;
-use crate::tokens::shell::onboarding::IMPORT_SURFACE;
-use crate::tokens::shell::onboarding::IMPORT_WIDTH;
-use crate::tokens::shell::onboarding::LINE_GAP;
-use crate::tokens::shell::onboarding::LINE_LINE;
-use crate::tokens::shell::onboarding::LINE_SIZE;
-use crate::tokens::shell::onboarding::OPT_IN_LINE;
-use crate::tokens::shell::onboarding::OPT_IN_WIDTH;
-use crate::tokens::shell::onboarding::QUIET;
-use crate::tokens::shell::onboarding::SHIFT;
+use crate::import::{ImportEvent, ImportView, Look};
+use crate::product::PRODUCT;
+use crate::settings_rows::{self, group, named_button, stop_switch};
 use crate::tokens::shell::onboarding::SIGNAL;
-use crate::tokens::shell::onboarding::SKIP_CHIP;
-use crate::tokens::shell::onboarding::SKIP_MARGIN;
-use crate::tokens::shell::onboarding::SKIP_SIZE;
-use crate::tokens::shell::onboarding::SWATCH;
-use crate::tokens::shell::onboarding::SWATCH_EDGE;
-use crate::tokens::shell::onboarding::SWATCH_GAP;
-use crate::tokens::shell::onboarding::SWATCH_PITCH;
-use crate::tokens::shell::onboarding::SWATCH_RING;
-use crate::tokens::shell::onboarding::TAGLINE_GAP;
-use crate::tokens::shell::onboarding::TAGLINE_LINE;
-use crate::tokens::shell::onboarding::TAGLINE_SIZE;
-use crate::tokens::shell::onboarding::TITLE_LINE;
-use crate::tokens::shell::onboarding::TITLE_SIZE;
-use crate::tokens::shell::onboarding::WORDMARK_SCALE;
+use crate::tokens::shell::onboarding::card as t;
+use card::Inks;
 
-/// The flow's steps, in the order they come.
+mod bring;
+mod card;
+mod exit;
+mod other_apps;
+mod resume;
+mod space;
+mod window;
+
+pub use resume::waiting as first_run_waiting;
+
+pub(super) use window::FirstRun;
+
+/// The card's steps (v9 §0), in the order they come.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Step {
-    Intro,
-    /// What comes along from another browser: the import view (crate::import), which Settings ›
-    /// Import shows too; left out when it finds no browser to import from.
-    Import,
-    /// The sites visited most in the history an import read, ticked, to make favorites (owner,
-    /// 2026-10-29); there only once an import has read them, and left out when it offers none.
-    Favorites,
-    /// Asks the system to open links with ilo; left out when it already does.
-    DefaultBrowser,
-    /// The first profile's search engine, from Settings' list; left out when it comes while the
-    /// core has none to offer, as while a policy picks it.
-    SearchEngine,
-    /// The first Space's colour, from the theme picker's swatches.
-    Color,
-    /// Signing in to sync: Settings › Sync's view (crate::account); left out in a build that names
-    /// no sync server, and once the browser is signed in.
+    /// The Welcome, which is the account: Settings › Sync's view (crate::account) behind its
+    /// Continue. Left out in a build that names no sync server, and once the browser is signed in.
     Account,
-    /// Settings' opt-in switches, both off; left out when neither is offered.
-    OptIns,
+    /// Your assistants: the rows Settings › Models has, each signing in with its maker's own
+    /// sign-in; `Just the Browser` for neither. Left out, as the threads' switch is, in a build
+    /// without the agents' server.
+    Assistant,
+    /// Bring your stuff: the import view (crate::import); left out when it finds no browser.
+    Import,
+    /// The import's second state: the sites visited most, ticked, to make favorites; there only
+    /// once an import has read them. It shares the import's place in the progress.
+    Favorites,
+    /// Your first Space: its name and its look, on the theme panel's own parts.
+    Space,
+    /// Tidy tabs: how long tabs wait before they're put away; left out until the core has the
+    /// profile's time.
+    Tidy,
+    /// Other apps: two ways in, the command with its skill and MCP, each with Settings › Other
+    /// apps' own switch, only when Claude Code or Codex is found here.
+    OtherApps,
+    /// You're woven in: the default browser and Help improve.
+    Done,
 }
 
 const STEPS: [Step; 8] = [
-    Step::Intro,
+    Step::Account,
+    Step::Assistant,
     Step::Import,
     Step::Favorites,
-    Step::DefaultBrowser,
-    Step::SearchEngine,
-    Step::Color,
-    Step::Account,
-    Step::OptIns,
+    Step::Space,
+    Step::Tidy,
+    Step::OtherApps,
+    Step::Done,
 ];
 
-/// The opt-ins the first launch offers, each Settings' own switch.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(super) enum OptIn {
-    /// Off until the user turns it on, and set only as they leave the step, so nothing is sent
-    /// while it shows (#2978).
-    DailyCount,
-    CrashReports,
-    Agents,
-}
-
-impl OptIn {
-    const ALL: [OptIn; 3] = [OptIn::DailyCount, OptIn::CrashReports, OptIn::Agents];
-
-    /// What check.sh calls it.
-    fn name(self) -> &'static str {
-        match self {
-            OptIn::DailyCount => "daily-count",
-            OptIn::CrashReports => "crash-reports",
-            OptIn::Agents => "agents",
-        }
-    }
-
-    /// Its switch's name and its one sentence: the name Settings' row has, as it's that switch.
-    fn words(self) -> (&'static str, SharedString) {
-        match self {
-            OptIn::DailyCount => (
-                "Send a daily usage count",
-                crate::daily_count::words(env!("APP_NAME")).into(),
-            ),
-            OptIn::CrashReports => (
-                "Send crash reports",
-                concat!(
-                    "When ",
-                    env!("APP_NAME"),
-                    " crashes, it sends a report of what went wrong, so it can be fixed."
-                )
-                .into(),
-            ),
-            // Settings' own line while it's off.
-            OptIn::Agents => (
-                "Let agents use the browser",
-                "They work in tabs of their own, which you can watch, and never see your \
-                 passwords, cookies or autofill."
-                    .into(),
-            ),
-        }
-    }
-}
-
 impl Step {
+    /// The step's number in the design, what its stderr lines and check.sh call it: never a pick.
+    fn number(self) -> &'static str {
+        match self {
+            Step::Account => "1",
+            Step::Assistant => "2",
+            Step::Import => "3",
+            Step::Favorites => "3b",
+            Step::Space => "4",
+            Step::Tidy => "5",
+            Step::OtherApps => "6",
+            Step::Done => "7",
+        }
+    }
+
+    /// The step's place in the design, 1 to 7, the favorites in the import's: what ⌘Q keeps.
+    fn place(self) -> u8 {
+        match self {
+            Step::Account => 1,
+            Step::Assistant => 2,
+            Step::Import | Step::Favorites => 3,
+            Step::Space => 4,
+            Step::Tidy => 5,
+            Step::OtherApps => 6,
+            Step::Done => 7,
+        }
+    }
+
+    /// The step's heading and its one line.
+    fn message(self, os: Os) -> (SharedString, SharedString) {
+        let (title, line): (SharedString, SharedString) = match self {
+            Step::Account => (
+                PRODUCT.into(),
+                "Sign in to keep your Spaces on every device.".into(),
+            ),
+            Step::Assistant => (
+                "Your assistants".into(),
+                format!("{PRODUCT} has none of its own. Bring yours.").into(),
+            ),
+            Step::Import => (
+                "Bring your stuff".into(),
+                format!("From a browser on {}.", here(os)).into(),
+            ),
+            Step::Favorites => ("Your favorites".into(), "Click one to leave it out.".into()),
+            Step::Space => ("Your first Space".into(), "".into()),
+            Step::Tidy => (
+                "Tidy tabs".into(),
+                "Tabs you leave go to the Library. Pinned tabs stay.".into(),
+            ),
+            Step::OtherApps => (
+                "Other apps".into(),
+                "Agents you run elsewhere can browse here, in tabs of their own.".into(),
+            ),
+            // The one weaving word on the card's own copy (v9 §1).
+            Step::Done => ("You're woven in.".into(), "".into()),
+        };
+        (title, line)
+    }
+
+    /// The split steps: controls in a column at the left, the picture's plane at the right. Only a
+    /// step whose picture is in, so no blank plane is ever shown: v9 splits Assistant, Space and
+    /// Tidy, and until each one's picture lands its own column is centred as Bring your stuff's is.
+    fn split(self) -> bool {
+        Self::PICTURED.contains(&self)
+    }
+
+    /// The steps whose picture is in; none has landed yet.
+    const PICTURED: &[Step] = &[];
+}
+
+/// The switches' rows on the card. On is the text's ink with a knob of the card's, as Settings'
+/// are: no green on a control. A row's second line is text-2, as Look::on's mix over the card's
+/// see-through ground would all but vanish.
+fn switch_look(inks: Inks) -> Look {
+    Look {
+        knob_on: inks.fill(true),
+        detail: inks.text_2(),
+        ..Look::on(inks.group(), inks.text(1.), inks.text(1.))
+    }
+}
+
+/// What the computer is called in a line.
+/// A row across the card at `y`, its content centred.
+fn welcome_centred(y: f32) -> gpui::Div {
+    card::at(0., y).w(px(t::WIDTH)).flex().justify_center()
+}
+
+/// A row of buttons across the card at `y`, centred, the foot's gap between them.
+fn welcome_buttons(y: f32) -> gpui::Div {
+    welcome_centred(y).items_center().gap(px(t::FOOT_GAP))
+}
+
+/// The line under the Welcome's button, `gap` below it, its parts `between` apart.
+fn welcome_line(gap: f32, between: f32, inks: Inks) -> gpui::Div {
+    let [height, _, _, _] = t::SMALL_BUTTON;
+    div()
+        .mt(px(gap))
+        .min_h(px(height))
+        .flex()
+        .justify_center()
+        .items_center()
+        .gap(px(between))
+        .text_size(px(t::BUTTON_TEXT))
+        .text_color(inks.text_2())
+}
+
+fn here(os: Os) -> &'static str {
+    match os {
+        Os::Mac => "this Mac",
+        _ => "this computer",
+    }
+}
+
+/// What the Welcome shows of the account (v9 §3), each a cut inside the same card.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Welcome {
+    /// Sign in or sign up, or Not Now.
+    Form,
+    /// The sign-in window is open, where the address, the code and the passkey are the server's.
+    SigningIn,
+    /// A first device's recovery words, shown once.
+    Words,
+    /// Waiting for a signed-in device to add this one.
+    Approve,
+    /// No device is asked now: one declined, none answered in time, or the user stopped asking.
+    Again,
+    /// The recovery words' field.
+    Restore,
+    /// Another device added this one, which says so before going on.
+    Syncing,
+}
+
+/// A switch the card shows, each Settings' own.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(super) enum Switch {
+    /// Other apps' command, with its skill, added or removed at once.
+    Command,
+    /// Other apps' MCP: each program found connected or disconnected at once.
+    Mcp,
+    /// Help improve: the daily usage count and crash reports together, off until the user turns it
+    /// on, and set only as the last step is left, so nothing is sent while it shows (#2978).
+    Help,
+}
+
+impl Switch {
     /// What check.sh calls it.
     fn name(self) -> &'static str {
         match self {
-            Step::Intro => "intro",
-            Step::Import => "import",
-            Step::Favorites => "favorites",
-            Step::DefaultBrowser => "default-browser",
-            Step::SearchEngine => "search-engine",
-            Step::Color => "color",
-            Step::Account => "account",
-            Step::OptIns => "opt-ins",
+            Switch::Command => "command",
+            Switch::Mcp => "mcp",
+            Switch::Help => "help-improve",
         }
     }
 
-    /// The step's one message on `os`: its title, its line and its button's words.
-    fn message(self, os: Os) -> (&'static str, gpui::SharedString, &'static str) {
-        let (title, line, button) = match self {
-            Step::Intro => ("", "", ""),
-            // The import view's own buttons are the step's.
-            Step::Import => (
-                "Bring your stuff.",
-                "Spaces, pinned tabs, folders and favorites from the browser you used.",
-                "",
+    /// Its row's name and words.
+    fn words(self) -> (SharedString, SharedString) {
+        match self {
+            Switch::Command => (
+                format!("The {} command", crate::agents::cli::LINK).into(),
+                "Stays out of the way until an agent needs a page.".into(),
             ),
-            // Worked out from the pages the import read, here; the button is Continue while none
-            // is ticked (favorites_button).
-            Step::Favorites => {
-                let here = match os {
-                    Os::Mac => "this Mac",
-                    _ => "this computer",
-                };
-                let line =
-                    format!("From your history, worked out on {here}. Nothing is sent anywhere.");
-                return ("Your favorites.", line.into(), "Add Favorites");
-            }
-            // What the system does and its way back are Settings' row's, each system's own. A
-            // Flatpak can't set it, so the step says where the desktop does, and goes on.
-            Step::DefaultBrowser => {
-                let line = format!(
-                    "Links from other apps open here. {}",
-                    default_browser::detail(os, false)
-                );
-                let button = match default_browser::offers(os, false) {
-                    true => "Make Default",
-                    false => "Continue",
-                };
-                let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
-                return (title, line.into(), button);
-            }
-            // The engine that searches until one is picked is already the filled dot, so the line
-            // needn't name it.
-            Step::SearchEngine => (
-                "Pick a search engine.",
-                "What you type that isn't an address searches with it. You can change it later in \
-                 Settings.",
-                "Continue",
+            Switch::Mcp => (
+                "MCP".into(),
+                "Always in an app's tool list. Needs no terminal.".into(),
             ),
-            Step::Color => (
-                "Pick a colour for your first Space.",
-                "The window takes it. Each Space can have its own, from its name in the sidebar.",
-                "Continue",
+            Switch::Help => (
+                format!("Help improve {PRODUCT}").into(),
+                "An anonymous use count a day and crash reports.".into(),
             ),
-            // Its button only while signed out; the view's own buttons are the step's after.
-            Step::Account => (
-                "Your Spaces on every computer.",
-                "Spaces, bookmarks and passwords sync encrypted end to end, and \
-                 Settings has it too.",
-                "Sign In",
-            ),
-            Step::OptIns => (
-                "Up to you.",
-                "Each stays off until you turn it on, and Settings has it too.",
-                "Continue",
-            ),
-        };
-        (title, line.into(), button)
-    }
-}
-
-/// The intro's timeline (*Ours*, docs/ux-spec.md › Motion › Intro), in seconds from its first
-/// frame, each part's start and length. The strokes draw on the check's ease-in-out, as a pen's
-/// would, the stems from their feet and the ring from its top, the way a hand writes "ilo"; the dot
-/// lands last, in the ink, and takes the green, and then the line comes.
-const STEM_I: (f32, f32) = (0.2, 0.4);
-const STEM_L: (f32, f32) = (0.32, 0.48);
-const RING: (f32, f32) = (0.48, 0.62);
-const DOT: (f32, f32) = (1.1, 0.24);
-const SIGNAL_IN: (f32, f32) = (1.34, 0.3);
-const TAGLINE_IN: (f32, f32) = (1.64, 0.4);
-/// The intro holds this long from its first frame, then the first step comes.
-const INTRO_END: f32 = 3.4;
-/// With Reduce Motion, the wordmark and its line fade in whole together, and hold.
-const STILL_FADE: f32 = 0.4;
-const STILL_END: f32 = 2.;
-/// A step comes in as the one before leaves, the icon picker's tabs' 200 ms ease-out.
-const STEP_MOTION: f32 = 0.2;
-/// The flow fades from over the first Space at the end, on the scroll edge's curve.
-const END_FADE: f32 = 0.2;
-
-/// How much of each part of the wordmark and its line is drawn, from 0 to 1.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) struct Drawn {
-    pub stem_i: f32,
-    pub stem_l: f32,
-    pub ring: f32,
-    pub dot: f32,
-    pub signal: f32,
-    pub tagline: f32,
-}
-
-impl Drawn {
-    /// The intro `t` seconds in, or `still`, under Reduce Motion, all of it fading in at once.
-    pub(super) fn at(t: f32, still: bool) -> Drawn {
-        // Each part's curve, exactly at its ends, so a part not yet started isn't drawn at all.
-        let along = |(start, length): (f32, f32), curve: fn(f32) -> f32| match (t - start) / length
-        {
-            x if x <= 0. => 0.,
-            x if x >= 1. => 1.,
-            x => curve(x),
-        };
-        if still {
-            let fade = along((0., STILL_FADE), fade);
-            return Drawn {
-                stem_i: 1.,
-                stem_l: 1.,
-                ring: 1.,
-                dot: 1.,
-                signal: 1.,
-                tagline: fade,
-            };
-        }
-        Drawn {
-            stem_i: along(STEM_I, ease_in_out),
-            stem_l: along(STEM_L, ease_in_out),
-            ring: along(RING, ease_in_out),
-            dot: along(DOT, ease_out),
-            signal: along(SIGNAL_IN, ease_in_out),
-            tagline: along(TAGLINE_IN, fade),
         }
     }
-
-    /// Whether it's all there.
-    fn done(&self) -> bool {
-        self.tagline >= 1.
-    }
 }
+
+/// How long the exit takes where the host doesn't grow first run's window.
+#[cfg(test)]
+const END_FADE: f32 = crate::tokens::shell::onboarding::exit::CROSS_FADE;
 
 /// The account isn't signed in, only waiting perhaps for the sign-in window, as the core said last,
 /// or before it has said.
@@ -312,27 +263,29 @@ fn signed_out(state: &account::State) -> bool {
     matches!(state.status, Status::SignedOut | Status::SigningIn)
 }
 
-/// The check draw's curve, CSS's ease-in-out.
+/// The card's arrival curve, ARRIVE.
+fn arrive(x: f32) -> f32 {
+    let [x1, y1, x2, y2] = t::ARRIVE;
+    cubic_bezier(x1, y1, x2, y2, x.clamp(0., 1.))
+}
+
+/// The progress knot's and the entry's draw: ease-in-out.
 fn ease_in_out(x: f32) -> f32 {
-    cubic_bezier(0.42, 0., 0.58, 1., x)
+    cubic_bezier(0.42, 0., 0.58, 1., x.clamp(0., 1.))
 }
 
-/// The scroll edge's fade, as the empty card's line comes.
-fn fade(x: f32) -> f32 {
-    fade_at(0., 1., x, 1.)
-}
-
-/// The row motion's ease-out, as a dot settling into place.
-fn ease_out(x: f32) -> f32 {
-    cubic_bezier(0., 0., 0.58, 1., x)
+fn lerp(from: f32, to: f32, at: f32) -> f32 {
+    from + (to - from) * at
 }
 
 /// The import view the first launch shows, and what it tells the flow.
 pub(super) struct Importing {
     pub(super) view: Entity<ImportView>,
-    /// What the last import that finished said, for the flow's quiet line.
+    /// What the last import that finished said.
     pub(super) said: Option<gpui::SharedString>,
     _events: Subscription,
+    /// The card draws the view's state itself (bring.rs), so it draws again as the view changes.
+    _drawn: Subscription,
 }
 
 /// The account step's view, and what it tells the flow.
@@ -342,79 +295,229 @@ struct Signing {
     _synced: Subscription,
 }
 
-/// The flow while it shows.
+/// The card while it shows.
 pub(super) struct Onboarding {
-    /// The steps this launch shows, in order: STEPS but for those already done.
+    /// The steps this run shows, in order: those of STEPS with something to ask.
     steps: Vec<Step>,
     pub(super) step: Step,
-    /// The swatch picked at the colour step, if one is.
-    pub(super) picked: Option<usize>,
-    /// The search engines offered, each its keyword and name, and the profile's default's keyword,
-    /// read until the core has them: a new profile's load after the flow starts.
-    engines: (Vec<(SharedString, SharedString)>, SharedString),
-    /// The engine picked at its step, the default's until the user moves it. Nothing is set until
-    /// Continue.
-    engine: Option<usize>,
-    /// The system it runs on, for the default browser's step.
+    /// Your first Space's name and look, once its step has come.
+    pub(super) space: Option<space::SpaceEditor>,
+    /// The system it runs on.
     os: Os,
-    /// The opt-in switch last turned, and when, for its knob's slide.
-    switched: Option<(OptIn, Instant)>,
+    /// The switch last turned, and when, for its knob's slide.
+    switched: Option<(Switch, Instant)>,
     /// That switch's knob has slid all the way, which check.sh hears once.
     slid: bool,
-    /// ⇥ put the keyboard on the opt-ins' switches, which it leaves with them (onboarding_layer).
-    on_switches: bool,
-    /// The intro holds the keyboard itself, as does a step left with no control, so an assistive
-    /// app, which follows the keyboard, reads each by its title and line as it comes (#3151).
+    /// The step's dialog, which holds the keyboard where a step has nothing for it to rest on.
     focus: gpui::FocusHandle,
-    /// ⇥'s stops at the step's button and at its corner's Skip or Back, which ↩ and Space press.
+    /// ⇥'s stops: the main button, the trailing bare button (Skip, Not Now, Just the Browser),
+    /// Back, the step's own choice, and a row's button.
     continue_stop: gpui::FocusHandle,
     skip_stop: gpui::FocusHandle,
-    /// The stop of the step's choice, where its keyboard rests as it comes: its swatches or its
-    /// engines (onboarding_rest).
+    back_stop: gpui::FocusHandle,
     first_stop: gpui::FocusHandle,
+    row_stop: gpui::FocusHandle,
+    /// The Welcome's Use Recovery Words, beside its other buttons.
+    words_stop: gpui::FocusHandle,
     /// The step that last took the keyboard as it came.
     focused_step: Option<Step>,
-    /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
+    /// Where the switches' rows and knobs are drawn (opt_in_frame).
     frames: Frames,
-    /// Where the step's button is drawn, once the step has settled (button_frame).
+    /// Where the step shown draws its controls, by name (Shell::place).
+    pub(super) places: Places,
+    /// Its last frame asked for another: something moves.
+    pub(super) drawing: bool,
+    /// Where the step's main button is drawn, once the step has settled (button_frame).
     pub(super) button: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// GPUI's clock, which the flow's motion and the intro's hold are timed by: the real one in the
-    /// app, and in a test the one its timers run on, so the two never part (#3248).
+    /// Where the foot's Skip is drawn, once the step has settled (skip_frame).
+    pub(super) skip: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// GPUI's clock, which the card's motion is timed by: the real one in the app, and in a test
+    /// the one its timers run on.
     clock: gpui::BackgroundExecutor,
-    /// When the step came, which its motion runs from.
+    /// When the step came, which its fade runs from.
     pub(super) since: Instant,
-    /// The step before, leaving as this one comes, and how far into it it was when it left.
-    leaving: Option<(Step, f32)>,
-    /// When the last step was left, for the flow's fade.
+    /// When the entry began, while it plays (v9 §2).
+    entry: Option<Instant>,
+    /// The card's size and corners the host last shaped the window to, so it's told only of a
+    /// change: on the entry's frames, and once as it ends. The exit draws its card by it, a frame
+    /// behind (`exit::behind`).
+    shaped: Option<(f32, f32, f32)>,
+    /// Whether the exit has drawn a frame of its grow, past the content's fade.
+    growing: bool,
+    /// Help › Welcome plays the card again, which keeps no step to resume at.
+    replay: bool,
+    /// The assistants whose Sign In was pressed, whose rows then say what the press learned.
+    pressed: Vec<crate::agents::runner::Cli>,
+    /// The assistants whose Sign In waits for the look its press started, to sign in once it ends.
+    signing: Vec<crate::agents::runner::Cli>,
+    /// The progress knot's fraction as it last left, the one it's going to, and when it set off.
+    progress: (f32, f32, Instant),
+    /// When the last step was left, for the card's fade.
     pub(super) ending: Option<Instant>,
+    /// The host's answer, once the exit has asked, to whether it grows first run's window.
+    grows: Option<bool>,
     /// Light or dark where check.sh says, else the window's.
     light: Option<bool>,
     /// The step has come all the way and said so.
     settled: bool,
-    /// Keys in this window go on from a step, while the flow shows.
+    /// Keys in first run's window, while the card shows.
     keys: Option<gpui::Subscription>,
-    /// The flow has given the window's keyboard to the UI.
+    /// First run's window has been on screen, so a step can take its keyboard.
     keyboard: bool,
-    /// Wakes the window at the intro's end, which holds still until then.
-    hold: Option<gpui::Task<()>>,
     /// The account step's view, while the step is offered.
     account: Option<Signing>,
-    /// The daily usage count's switch as turned at the opt-ins step, None while untouched: it's
-    /// set as the step is left (onboarding_next), so turned on and off again it sends nothing.
-    count: Option<bool>,
+    /// The account came back as one that exists (asking for its words or another device's
+    /// approval), so the steps about a new profile's things are left out.
+    returning: bool,
+    /// When another device added this one, while the Welcome says its Spaces are syncing.
+    syncing: Option<Instant>,
+    /// The assistant step's rows follow the Agents, as a sign-in under way changes them.
+    _assistants: Option<Subscription>,
+    /// The assistants' rows the preview shows, as it has no Agents to read.
+    shown_assistants: Option<Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>>,
+    /// Help improve as turned at the last step, None while untouched: it's set as the step is left.
+    help: Option<bool>,
+    /// When the command's line to paste was last copied, which Copy Line says for a moment.
+    copied: Option<Instant>,
+    /// The tidy step's times, while the core has the profile's.
+    pub(super) tidy: Option<Tidy>,
+    /// The default browser's row: shown when the browser wasn't the default as the card began.
+    default_row: bool,
+    /// Bring your stuff's motion: the flight, the strands as each kind is written, All here.
+    bring: bring::BringMotion,
+}
+
+/// Tidy tabs' bar: the build's times, each with the card's word for it, the profile's own as the
+/// card began, and the one the bar is at, set only as Next goes on, as a shorter time puts tabs
+/// away at once.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Tidy {
+    pub(super) stops: Vec<(f64, &'static str)>,
+    was: f64,
+    pub(super) at: usize,
+}
+
+impl Tidy {
+    /// Settings' `offered` times that have a word, at the one nearest `was`; None with none.
+    fn of(was: f64, offered: &[f64]) -> Option<Tidy> {
+        let stops: Vec<(f64, &'static str)> = (offered.iter())
+            .filter_map(|&seconds| Some((seconds, stop_words(seconds)?)))
+            .collect();
+        // Never is past every time.
+        let far = |seconds: f64| if seconds < 0. { f64::MAX } else { seconds };
+        let at = (0..stops.len()).min_by(|&a, &b| {
+            let off = |at: usize| (far(stops[at].0) - far(was)).abs();
+            off(a).total_cmp(&off(b))
+        })?;
+        Some(Tidy { stops, was, at })
+    }
+
+    /// The time the bar is at, in seconds.
+    fn seconds(&self) -> f64 {
+        self.stops[self.at].0
+    }
+}
+
+/// The card's word for a time of Settings' (v9 §7).
+fn stop_words(seconds: f64) -> Option<&'static str> {
+    let day = 24. * 3600.;
+    Some(match seconds {
+        _ if seconds < 0. => "Never",
+        _ if seconds == day / 2. => "12 hours",
+        _ if seconds == day => "24 hours",
+        _ if seconds == 7. * day => "7 days",
+        _ if seconds == 30. * day => "30 days",
+        _ => return None,
+    })
 }
 
 impl Onboarding {
-    /// Seconds since `at` on the flow's clock.
+    /// Seconds since `at` on the card's clock.
     fn secs_since(&self, at: Instant) -> f32 {
         self.clock.now().saturating_duration_since(at).as_secs_f32()
+    }
+
+    /// The steps the progress counts: each that exists, the favorites in the import's place.
+    fn slots(&self) -> Vec<Step> {
+        (self.steps.iter().copied())
+            .filter(|&step| step != Step::Favorites)
+            .collect()
+    }
+
+    /// How far the progress knot is drawn at `step`: its index over the last index.
+    fn fraction(&self, step: Step) -> f32 {
+        let step = match step {
+            Step::Favorites => Step::Import,
+            step => step,
+        };
+        let slots = self.slots();
+        let last = slots.len().saturating_sub(1);
+        let at = slots.iter().position(|&each| each == step).unwrap_or(0);
+        match last {
+            0 => 1.,
+            _ => at as f32 / last as f32,
+        }
+    }
+
+    /// The progress knot's fraction now, 500 ms along its way to the step's; at once when `still`.
+    fn progress_now(&self, still: bool) -> f32 {
+        let (from, to, since) = self.progress;
+        match still {
+            true => to,
+            false => lerp(
+                from,
+                to,
+                ease_in_out(self.secs_since(since) / t::PROGRESS_MOTION),
+            ),
+        }
+    }
+
+    /// Moves to `step`, its content coming in with a cut and a fade, the progress knot setting off.
+    fn show(&mut self, step: Step, still: bool) {
+        let now = self.clock.now();
+        self.progress = (self.progress_now(still), self.fraction(step), now);
+        self.step = step;
+        self.since = now;
+        self.settled = false;
+    }
+
+    /// How long a step's content takes to come.
+    fn fade(still: bool) -> f32 {
+        if still { t::STILL_FADE } else { t::STEP_FADE }
+    }
+
+    /// The entry's length.
+    fn entry_length(still: bool) -> f32 {
+        let [grow_at, grow_for] = t::ENTRY_GROW;
+        let [rest_from, rest_for] = t::ENTRY_REST;
+        match still {
+            true => t::STILL_FADE,
+            false => grow_at + grow_for.max(rest_from + rest_for),
+        }
+    }
+
+    /// Ends the entry where it is, with the step shown whole.
+    fn end_entry(&mut self) {
+        if self.entry.take().is_some() {
+            let shown = Duration::from_secs_f32(t::STEP_FADE);
+            let now = self.clock.now();
+            self.since = now.checked_sub(shown).unwrap_or(now);
+            self.progress = (self.progress.1, self.progress.1, now);
+        }
     }
 }
 
 impl Shell {
-    /// Starts the flow at the intro in this window, which shows no page. `appearance` is check.sh's
-    /// "light" or "dark", else the window's own.
+    /// Starts the card at its first step in first run's window, opening it unless it's open.
+    /// `appearance` is check.sh's "light" or "dark", else the window's own.
     pub fn start_onboarding(&mut self, appearance: Option<&str>, cx: &mut Context<Self>) {
+        self.begin_onboarding(appearance, false, cx);
+    }
+
+    /// Starts the card, as first run or, `replay`, as Help › Welcome plays it again: a replay
+    /// neither resumes at a kept step nor keeps one, so one quit halfway never opens first run by
+    /// itself at the next launch.
+    fn begin_onboarding(&mut self, appearance: Option<&str>, replay: bool, cx: &mut Context<Self>) {
         // Once a window, as an import under way in it goes on; played again, it lists the browsers
         // anew.
         match &mut self.importing {
@@ -426,10 +529,12 @@ impl Shell {
                 let view = cx.new(|_| ImportView::new(self.browser.import_host(), false).guided());
                 let events =
                     cx.subscribe(&view, |shell, _, event, cx| shell.import_event(event, cx));
+                let drawn = cx.observe(&view, |_, _, cx| cx.notify());
                 self.importing = Some(Importing {
                     view,
                     said: None,
                     _events: events,
+                    _drawn: drawn,
                 });
             }
         }
@@ -437,52 +542,82 @@ impl Shell {
             let view = importing.view.read(cx);
             !view.is_empty() || view.running().is_some()
         });
-        let default_browser = self.browser.is_default_browser();
-        // A new profile's engines load after the flow starts, so the step is planned before the
-        // core has them, and onboarding_next reads them until it does.
-        let engines = self.browser.search_engines(self.space);
-        let engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
-        let opt_ins = !self.opt_ins(cx).is_empty();
+        let tidy = (self.browser.archive_after(self.space))
+            .and_then(|(was, offered)| Tidy::of(was, &offered));
         let account = self.signing(cx);
+        // Claude Code or Codex found here by the folder or file each makes in the user's home, a
+        // stat once as the card starts, which runs nothing (floor 1). Only with the command
+        // connected does that look also ask the login shell, so then the card keeps to what's held.
+        self.browser.start_agents(cx);
+        let found_apps = crate::agents::global(cx).is_some_and(|agents| {
+            if !agents.read(cx).is_connected(crate::agents::Client::Command) {
+                agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+            }
+            !agents.read(cx).skill_programs().is_empty()
+        });
         let steps: Vec<Step> = STEPS
             .into_iter()
             .filter(|&step| match step {
+                Step::Account => account.is_some(),
+                Step::Assistant => self.browser.threads(cx).is_some(),
                 Step::Import => import,
                 // An import begun brings it in (import_event).
                 Step::Favorites => false,
-                Step::DefaultBrowser => !default_browser,
-                Step::SearchEngine => true,
-                Step::Account => account.is_some(),
-                Step::OptIns => opt_ins,
-                _ => true,
+                Step::Space => true,
+                Step::Tidy => tidy.is_some(),
+                Step::OtherApps => found_apps,
+                Step::Done => true,
             })
             .collect();
-        let names: Vec<&str> = steps.iter().map(|step| step.name()).collect();
+        // A run left under way resumes at its step, or the next that this launch shows; one out
+        // of range is past every step but the last, which always shows.
+        let kept = if replay { None } else { resume::read(cx) };
+        let first = match kept {
+            Some(kept) => (steps.iter().copied())
+                .find(|step| step.place() >= kept)
+                .unwrap_or(Step::Done),
+            None => steps[0],
+        };
+        if !replay {
+            resume::keep(first.place(), cx);
+        }
+        let numbers: Vec<&str> = steps.iter().map(|step| step.number()).collect();
         // check.sh waits for these lines.
         log!("browser: onboarding started");
-        log!("browser: onboarding steps {}", names.join(" "));
-        log!("browser: onboarding step intro");
-        self.onboarding = Some(Onboarding {
+        log!("browser: onboarding steps {}", numbers.join(" "));
+        log!("browser: onboarding step {}", first.number());
+        let now = cx.background_executor().now();
+        let mut onboarding = Onboarding {
             steps,
-            step: Step::Intro,
-            picked: None,
-            engines,
-            engine,
+            step: first,
+            space: None,
             os: self.browser.os(),
             switched: None,
             slid: false,
-            on_switches: false,
             focus: cx.focus_handle(),
             continue_stop: cx.focus_handle().tab_stop(true),
             skip_stop: cx.focus_handle().tab_stop(true),
+            back_stop: cx.focus_handle().tab_stop(true),
             first_stop: cx.focus_handle().tab_stop(true),
+            row_stop: cx.focus_handle().tab_stop(true),
+            words_stop: cx.focus_handle().tab_stop(true),
             focused_step: None,
             frames: Frames::default(),
+            places: Places::default(),
+            drawing: false,
             button: Rc::default(),
+            skip: Rc::default(),
             clock: cx.background_executor().clone(),
-            since: cx.background_executor().now(),
-            leaving: None,
+            since: now,
+            entry: Some(now),
+            shaped: None,
+            growing: false,
+            replay,
+            pressed: Vec::new(),
+            signing: Vec::new(),
+            progress: (0., 0., now),
             ending: None,
+            grows: None,
             light: appearance.and_then(|name| match name {
                 "light" => Some(true),
                 "dark" => Some(false),
@@ -491,21 +626,70 @@ impl Shell {
             settled: false,
             keys: None,
             keyboard: false,
-            hold: None,
             account,
-            count: None,
+            returning: matches!(
+                account::synced(cx).status,
+                Status::NeedsSecret | Status::Pairing
+            ),
+            syncing: None,
+            _assistants: (crate::agents::global(cx)).map(|agents| {
+                cx.observe(&agents, |shell, _, cx| {
+                    shell.onboarding_sign_in_looked(cx);
+                    cx.notify();
+                })
+            }),
+            shown_assistants: None,
+            help: None,
+            copied: None,
+            tidy,
+            default_row: !self.browser.is_default_browser(),
+            bring: Default::default(),
+        };
+        let fraction = onboarding.fraction(first);
+        onboarding.progress = (fraction, fraction, now);
+        self.onboarding = Some(onboarding);
+        // Opened outside this update, as the window draws the shell's card as it opens.
+        let shell = cx.entity();
+        cx.defer(move |cx| {
+            let open = (shell.read(cx).first_run).filter(|handle| {
+                let handle: gpui::AnyWindowHandle = (*handle).into();
+                cx.windows().contains(&handle)
+            });
+            let Some(handle) = open.or_else(|| FirstRun::open(shell.clone(), cx)) else {
+                log!("browser: first run's window didn't open");
+                return;
+            };
+            shell.update(cx, |shell, cx| {
+                shell.first_run = Some(handle);
+                if shell.onboarding.is_some() {
+                    shell.browser.show_first_run(handle.into(), cx);
+                }
+            });
         });
         cx.notify();
     }
 
-    /// Settings › Sync's view for the account step, following the account as the core says it is;
-    /// none in a build that names no server, or with the browser signed in already.
+    /// First run's window has the keyboard, with the card in it.
+    pub(super) fn first_run_key(&self, cx: &App) -> bool {
+        self.onboarding.is_some()
+            && (self.first_run).is_some_and(|handle| cx.active_window() == Some(handle.into()))
+    }
+
+    /// First run is showing, so the browser window it opened at launch waits for it to end.
+    pub fn first_run_open(&self) -> bool {
+        self.onboarding.is_some()
+    }
+
+    /// Settings › Sync's view for the Welcome, following the account as the core says it is; none
+    /// in a build that names no server, or with the browser syncing already. An account still
+    /// waiting for its words or another device's approval, as a ⌘Q there leaves it, has the
+    /// Welcome again, which goes on from there.
     fn signing(&mut self, cx: &mut Context<Self>) -> Option<Signing> {
         let synced = account::synced(cx);
         let host = self
             .browser
             .account_host()
-            .filter(|_| signed_out(&synced))?;
+            .filter(|_| synced.status != Status::On)?;
         account::bind_keys(cx);
         let view = cx.new(|cx| {
             let mut view = Account::new(host, cx).as_step();
@@ -514,13 +698,19 @@ impl Shell {
         });
         let events = cx.subscribe(&view, |shell, _, event, cx| match event {
             AccountEvent::Finished if shell.onboarding_on(Step::Account) => {
-                shell.onboarding_next("account", cx)
+                shell.onboarding_signed_in(cx)
             }
             AccountEvent::Finished => {}
         });
         let synced = cx.observe_global::<account::Synced>(|shell, cx| {
+            let state = account::synced(cx);
+            // An account that asks for its words or another device's approval exists already.
+            if matches!(state.status, Status::NeedsSecret | Status::Pairing)
+                && let Some(onboarding) = shell.onboarding.as_mut()
+            {
+                onboarding.returning = true;
+            }
             if let Some(view) = shell.account_view() {
-                let state = account::synced(cx);
                 view.update(cx, |view, cx| view.set_state(state, cx));
             }
             cx.notify();
@@ -532,19 +722,79 @@ impl Shell {
         })
     }
 
+    /// The account is set up. One another device added says its Spaces are syncing for a moment
+    /// first (v9 §3.4); a first device goes on at once from its words.
+    fn onboarding_signed_in(&mut self, cx: &mut Context<Self>) {
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        if !onboarding.returning {
+            return self.onboarding_next(cx);
+        }
+        let now = onboarding.clock.now();
+        onboarding.syncing = Some(now);
+        let hold = onboarding
+            .clock
+            .timer(Duration::from_secs_f32(t::SYNCING_HOLD));
+        cx.spawn(async move |shell, cx| {
+            hold.await;
+            shell
+                .update(cx, |shell, cx| {
+                    let held = (shell.onboarding.as_mut())
+                        .filter(|onboarding| onboarding.syncing == Some(now))
+                        .is_some_and(|onboarding| onboarding.syncing.take().is_some());
+                    if held && shell.onboarding_on(Step::Account) {
+                        shell.onboarding_next(cx);
+                    }
+                })
+                .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// What the Welcome shows of the account, as its view says it is.
+    fn welcome_shows(&self, cx: &gpui::App) -> Welcome {
+        if (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.syncing.is_some()) {
+            return Welcome::Syncing;
+        }
+        let Some(view) = self.account_view() else {
+            return Welcome::Form;
+        };
+        let view = view.read(cx);
+        let state = view.state();
+        if view.keeping_words() {
+            return Welcome::Words;
+        }
+        if view.entering().is_some() {
+            return Welcome::Restore;
+        }
+        match state.status {
+            Status::SignedOut => Welcome::Form,
+            Status::SigningIn => Welcome::SigningIn,
+            Status::Pairing => Welcome::Approve,
+            // It asks the others as it shows, once.
+            Status::NeedsSecret if state.problem.is_none() && !view.asked() => Welcome::Approve,
+            Status::NeedsSecret => Welcome::Again,
+            Status::FirstDevice => Welcome::Words,
+            Status::On => Welcome::Syncing,
+        }
+    }
+
     fn account_view(&self) -> Option<Entity<Account>> {
         let signing = self.onboarding.as_ref()?.account.as_ref()?;
         Some(signing.view.clone())
     }
 
-    /// The flow shows `step`, and isn't ending.
+    /// The card shows `step`, and isn't ending.
     fn onboarding_on(&self, step: Step) -> bool {
         self.onboarding
             .as_ref()
             .is_some_and(|o| o.step == step && o.ending.is_none())
     }
 
-    /// The account's recovery words show at its step, which show once, so only Done goes on.
+    /// The account's recovery words show at the Welcome, which show once, so only their own
+    /// button goes on.
     fn keeping_words(&self, cx: &gpui::App) -> bool {
         self.onboarding_on(Step::Account)
             && self
@@ -552,141 +802,216 @@ impl Shell {
                 .is_some_and(|view| view.read(cx).keeping_words())
     }
 
-    /// Help › Welcome to ilo: the flow again, here if the window shows no page, which GPUI can't
-    /// draw over, else in a new window as ⌘N's, which shows none.
+    /// Help › Welcome: the card again from its first step, in its own window over this one.
     pub(super) fn welcome_again(&mut self, cx: &mut Context<Self>) {
-        match self.selected {
-            0 => self.start_onboarding(None, cx),
-            _ => self.browser.welcome_window(cx),
-        }
+        self.begin_onboarding(None, true, cx);
     }
 
-    /// Goes on from the step shown, to the next or out of the flow after the last, `how` saying
-    /// what did it for check.sh.
-    pub(super) fn onboarding_next(&mut self, how: &str, cx: &mut Context<Self>) {
+    /// Goes on from the step shown, to the next or out of the card after the last. Its line for
+    /// check.sh says the step's number alone, never what was picked: the check drives the key.
+    pub(super) fn onboarding_next(&mut self, cx: &mut Context<Self>) {
         // The favorites come only while an import has some to offer.
         let favorites = self.importing.as_ref().is_some_and(|importing| {
-            importing
-                .view
-                .read(cx)
-                .suggested()
-                .is_some_and(|tabs| !tabs.is_empty())
+            (importing.view.read(cx).suggested()).is_some_and(|tabs| !tabs.is_empty())
         });
-        // The core reads the account after the flow may have started, and it can be signed in by
+        // The core reads the account after the card may have started, and it can be signed in by
         // then.
         let signed_in = !signed_out(&account::synced(cx));
-        let engines = (self.onboarding.as_ref())
-            .filter(|o| o.engines.0.is_empty() && o.steps.contains(&Step::SearchEngine))
-            .map(|_| self.browser.search_engines(self.space));
+        let still = crate::motion::still(cx);
         let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
             return;
         };
+        onboarding.end_entry();
         let step = onboarding.step;
-        log!("browser: onboarding left {} via {how}", step.name());
-        // The count's switch is set as its step is left, whichever way: nothing is sent while the
-        // step shows, and turned on and off again it's as it was (#2978).
-        let count = (step == Step::OptIns)
-            .then(|| onboarding.count.take())
+        log!("browser: onboarding left {}", step.number());
+        // Help improve is set as its step is left, whichever way: nothing is sent while the step
+        // shows, and turned on and off again it's as it was (#2978).
+        let help = (step == Step::Done)
+            .then(|| onboarding.help.take())
             .flatten();
         if !favorites {
-            onboarding
-                .steps
-                .retain(|&each| each != Step::Favorites || each == step);
+            (onboarding.steps).retain(|&each| each != Step::Favorites || each == step);
         }
         if signed_in {
-            onboarding
-                .steps
-                .retain(|&each| each != Step::Account || each == step);
+            (onboarding.steps).retain(|&each| each != Step::Account || each == step);
         }
-        if let Some(engines) = engines {
-            onboarding.engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
-            onboarding.engines = engines;
+        // A returning account's Spaces come back through sync, so what a new profile is asked
+        // about them is left out (v9 §0).
+        if onboarding.returning {
+            onboarding.steps.retain(|&each| {
+                !matches!(
+                    each,
+                    Step::Import | Step::Favorites | Step::Space | Step::Tidy
+                ) || each == step
+            });
         }
         let at = onboarding.steps.iter().position(|&each| each == step);
-        // With none to offer when its turn comes, the search engine's step is left out.
-        if at.and_then(|at| onboarding.steps.get(at + 1)) == Some(&Step::SearchEngine)
-            && onboarding.engines.0.is_empty()
-        {
-            onboarding.steps.retain(|&each| each != Step::SearchEngine);
-        }
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
-                let elapsed = onboarding.secs_since(onboarding.since);
-                onboarding.leaving = Some((step, elapsed));
-                onboarding.step = next;
-                onboarding.since = onboarding.clock.now();
-                onboarding.settled = false;
-                log!("browser: onboarding step {}", next.name());
+                onboarding.show(next, still);
+                if !onboarding.replay {
+                    resume::keep(next.place(), cx);
+                }
+                log!("browser: onboarding step {}", next.number());
             }
-            None => onboarding.ending = Some(onboarding.clock.now()),
+            // Ended, there's nothing to resume, whether or not a quit then closes the card.
+            None => {
+                onboarding.ending = Some(onboarding.clock.now());
+                // Asked here at the press, never from a draw, so a host that grows the window
+                // has a turn to before the grow's first frame; never with Reduce Motion.
+                if !still {
+                    onboarding.grows = Some(self.browser.grows_first_run());
+                }
+                if !onboarding.replay {
+                    resume::clear(cx);
+                }
+            }
         }
-        if let Some(on) = count.filter(|&on| self.browser.daily_count(cx) != Some(on)) {
-            // check.sh reads this line; the first count, with first set, goes from here.
-            log!(
-                "browser: onboarding daily-count set {}",
-                if on { "on" } else { "off" }
-            );
-            self.browser.set_daily_count(on, cx);
+        if let Some(on) = help {
+            if self.browser.daily_count(cx).is_some_and(|kept| kept != on) {
+                self.browser.set_daily_count(on, cx);
+            }
+            if self
+                .browser
+                .crash_reports(cx)
+                .is_some_and(|kept| kept != on)
+            {
+                self.browser.set_crash_reports(on, cx);
+            }
         }
         cx.notify();
     }
 
-    /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
-    pub fn onboarding_count_on(&mut self, cx: &mut Context<Self>) {
-        self.onboarding_switch(OptIn::DailyCount, cx);
+    /// Back to the step before the one shown, its line saying the step's number alone. What was
+    /// picked stays picked.
+    fn onboarding_back(&mut self, cx: &mut Context<Self>) {
+        let still = crate::motion::still(cx);
+        let signed_in = !signed_out(&account::synced(cx));
+        let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
+            return;
+        };
+        let step = onboarding.step;
+        // The favorites come after the import has written, so there's no going back over it.
+        if step == Step::Favorites {
+            return;
+        }
+        if step == Step::Space {
+            self.space_leave(cx);
+        }
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        // Signed in since, the Welcome has nothing to ask.
+        if signed_in {
+            (onboarding.steps).retain(|&each| each != Step::Account || each == step);
+        }
+        let at = onboarding.steps.iter().position(|&each| each == step);
+        let Some(before) = (at.and_then(|at| at.checked_sub(1)))
+            .and_then(|at| onboarding.steps.get(at))
+            .copied()
+            .map(|before| match before {
+                Step::Favorites => Step::Import,
+                before => before,
+            })
+        else {
+            return;
+        };
+        onboarding.end_entry();
+        log!("browser: onboarding left {}", step.number());
+        onboarding.show(before, still);
+        if !onboarding.replay {
+            resume::keep(before.place(), cx);
+        }
+        log!("browser: onboarding step {}", before.number());
+        cx.notify();
     }
 
-    /// Goes on through the flow to the step check.sh calls `name`, for the preview's captures.
-    pub fn onboarding_to(&mut self, name: &str, cx: &mut Context<Self>) {
-        while let Some(onboarding) = self.onboarding.as_ref()
-            && onboarding.ending.is_none()
-            && onboarding.step.name() != name
-        {
-            self.onboarding_next("preview", cx);
+    /// Shows the assistants' step with `rows`, each as a press would leave it, for the preview's
+    /// captures: the preview has no Agents for them to come from.
+    pub fn onboarding_show_assistants(
+        &mut self,
+        rows: Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            let rows = rows.into_iter();
+            let rows = rows.map(|(cli, shown)| (cli, card_words(cli, shown, true)));
+            onboarding.shown_assistants = Some(rows.collect());
+            cx.notify();
         }
     }
 
-    /// The step's button: what it offers, then on, as Skip goes.
+    /// Turns Help improve on at the last step, for the preview's captures.
+    pub fn onboarding_count_on(&mut self, cx: &mut Context<Self>) {
+        self.onboarding_switch(Switch::Help, cx);
+    }
+
+    /// Starts the card in `appearance` at `step`, its number (1 to 7, or 3b), for the preview,
+    /// past the entry. The Space step's transparency shows on a host without glass too, so it can
+    /// be looked at anywhere.
+    pub fn onboarding_at(&mut self, appearance: Option<&str>, step: &str, cx: &mut Context<Self>) {
+        if step == Step::Space.number() {
+            self.blurred = true;
+        }
+        self.start_onboarding(appearance, cx);
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            onboarding.end_entry();
+        }
+        self.onboarding_to(step, cx);
+    }
+
+    /// Goes on through the card to the step numbered `number`, for the preview's captures.
+    pub fn onboarding_to(&mut self, number: &str, cx: &mut Context<Self>) {
+        while let Some(onboarding) = self.onboarding.as_ref()
+            && onboarding.ending.is_none()
+            && onboarding.step.number() != number
+        {
+            self.onboarding_next(cx);
+        }
+    }
+
+    /// The step's main button: what it offers, then on.
     fn onboarding_continue(&mut self, how: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let signed_in = self.assistants_signed_in(cx);
         let Some(onboarding) = self.onboarding.as_ref().filter(|o| o.ending.is_none()) else {
             return;
         };
-        match (onboarding.step, onboarding.picked) {
+        match onboarding.step {
             // The import's button does what its view's state is for; the view says when it has
             // read what it brings, which goes on.
-            (Step::Import, _) => {
+            // Import brings the kinds on; with none on it's dimmed, and ↩ does nothing (v9 §5).
+            Step::Import => {
                 log!("browser: onboarding import button via {how}");
-                if let Some(importing) = self.importing.as_ref() {
-                    importing.view.update(cx, |view, cx| view.press(cx));
+                // Stalled, the step's button is Try Again.
+                if (self.bring_view()).is_some_and(|view| view.read(cx).bring_stalled()) {
+                    self.bring_try_again(cx);
+                    return cx.notify();
+                }
+                let ready = (self.bring_view()).is_some_and(|view| view.read(cx).bring_ready());
+                if ready {
+                    self.bring_import(cx);
                 }
                 return cx.notify();
             }
-            // Signed in, the view says so and the flow goes on (signing); until then it stays.
-            (Step::Account, _) => {
-                if let Some(view) = self.account_view()
-                    && view.read(cx).state().status == Status::SignedOut
-                {
-                    log!("browser: onboarding sign in via {how}");
-                    view.update(cx, |view, cx| view.sign_in(window, cx));
+            // Signed in, the view says so and the card goes on (signing); until then it stays.
+            Step::Account => {
+                let Some(view) = self.account_view() else {
+                    return;
+                };
+                match self.welcome_shows(cx) {
+                    Welcome::Form => {
+                        log!("browser: onboarding sign in via {how}");
+                        view.update(cx, |view, cx| view.sign_in(window, cx));
+                    }
+                    Welcome::Words => view.update(cx, |view, cx| view.words_kept(cx)),
+                    Welcome::Restore => view.update(cx, |view, cx| view.keep_words(cx)),
+                    _ => {}
                 }
-                return;
+                return cx.notify();
             }
-            (Step::DefaultBrowser, _) if default_browser::offers(onboarding.os, false) => {
-                self.browser.make_default_browser(cx)
-            }
-            // Only a pick that isn't the default already: the default stays the core's fallback,
-            // which a recommended policy outranks, rather than becoming the user's choice.
-            (Step::SearchEngine, _) => {
-                let (engines, default) = &onboarding.engines;
-                let picked = (onboarding.engine)
-                    .and_then(|at| engines.get(at))
-                    .filter(|(keyword, _)| keyword != default);
-                if let Some((keyword, name)) = picked.cloned() {
-                    self.browser
-                        .set_search_engine(self.space, &keyword, &name, cx);
-                }
-            }
-            (Step::Favorites, _) => {
+            // With nobody signed in the step has no main button, so ↩ does nothing there.
+            Step::Assistant if !signed_in => return,
+            Step::Favorites => {
                 let (ticked, space) = (self.favorites_ticked(cx), self.space);
                 if let Some(importing) = self.importing.as_ref() {
                     importing
@@ -694,22 +1019,97 @@ impl Shell {
                         .update(cx, |view, _| view.add_offered(space, &ticked));
                 }
             }
-            (Step::Color, Some(picked)) => {
-                let color = SWATCHES[picked];
-                // check.sh reads this line.
-                log!("browser: onboarding picked color {color:06x}");
-                self.theme_changed(self.space, Theme::of_color(color), true, cx);
+            Step::Space => self.space_keep(cx),
+            // Set only if it moved, as Settings sets it, which puts away at once the tabs that have
+            // waited that long.
+            Step::Tidy => {
+                if let Some(tidy) = onboarding.tidy.as_ref().filter(|t| t.seconds() != t.was) {
+                    let seconds = tidy.seconds();
+                    self.browser.set_archive_after(self.space, seconds, cx);
+                }
             }
             _ => {}
         }
-        self.onboarding_next(how, cx);
+        self.onboarding_next(cx);
+    }
+
+    /// Just the Browser: the threads' switch off, and on. Nothing else, so Other apps' switch is
+    /// as it was.
+    fn onboarding_just_the_browser(&mut self, cx: &mut Context<Self>) {
+        if self.browser.threads(cx) == Some(true) {
+            let browser = self.browser.clone();
+            // Outside this update, as the host reads the shell as it turns threads off.
+            cx.defer(move |cx| browser.set_threads(false, cx));
+        }
+        self.onboarding_next(cx);
+    }
+
+    /// A row's Sign In: nothing of the assistant's program runs before it. A program the browser
+    /// already knows signs in at once; else the press looks for that one alone, and it signs in
+    /// as the look ends (`onboarding_sign_in_looked`).
+    fn onboarding_sign_in(&mut self, cli: crate::agents::runner::Cli, cx: &mut Context<Self>) {
+        use crate::agents::ready::Ready;
+        let (Some(agents), Some(onboarding)) =
+            (crate::agents::global(cx), self.onboarding.as_mut())
+        else {
+            return;
+        };
+        if !onboarding.pressed.contains(&cli) {
+            onboarding.pressed.push(cli);
+        }
+        let known = agents.read(cx).found(cli) == Ready::SignedOut;
+        if !known && !onboarding.signing.contains(&cli) {
+            onboarding.signing.push(cli);
+        }
+        agents.update(cx, |agents, cx| match known {
+            true => agents.sign_in(cli, cx),
+            false => agents.look_up_assistant(cli, cx),
+        });
+        cx.notify();
+    }
+
+    /// Signs in each assistant whose press waited on its look, now that the look has found it
+    /// signed out; one found missing or signed in already is left as the look found it.
+    fn onboarding_sign_in_looked(&mut self, cx: &mut Context<Self>) {
+        use crate::agents::ready::Ready;
+        let (Some(agents), Some(onboarding)) =
+            (crate::agents::global(cx), self.onboarding.as_mut())
+        else {
+            return;
+        };
+        let found = |cli| agents.read(cx).found(cli);
+        let (ended, waiting): (Vec<_>, Vec<_>) =
+            (onboarding.signing.iter()).partition(|&&cli| found(cli) != Ready::Unknown);
+        onboarding.signing = waiting;
+        let sign_in: Vec<_> = (ended.into_iter())
+            .filter(|&cli| found(cli) == Ready::SignedOut)
+            .collect();
+        if !sign_in.is_empty() {
+            cx.defer(move |cx| {
+                agents.update(cx, |agents, cx| {
+                    sign_in.into_iter().for_each(|cli| agents.sign_in(cli, cx))
+                })
+            });
+        }
+    }
+
+    /// Someone is signed in on a row of the assistant step.
+    fn assistants_signed_in(&self, cx: &gpui::App) -> bool {
+        use crate::agents::runner::Cli;
+        use crate::agents::sign_in::Offer;
+        match crate::agents::global(cx) {
+            Some(agents) => {
+                let agents = agents.read(cx);
+                (Cli::ALL.iter()).any(|&cli| agents.assistant_row(cli).offer == Offer::SignedIn)
+            }
+            None => (self.onboarding.as_ref())
+                .and_then(|onboarding| onboarding.shown_assistants.as_ref())
+                .is_some_and(|rows| rows.iter().any(|(_, row)| row.offer == Offer::SignedIn)),
+        }
     }
 
     /// What the import view says: an import's Spaces are in, so the step holds on them a moment and
-    /// goes on while the rest runs; or it ended, which the flow's quiet line then says; or the user
-    /// is done with it, which goes on too. Until its Spaces are in, the step stays, as the view may
-    /// ask the user for Full Disk Access, wait for a profile that hasn't opened, or stop, and a
-    /// passwords file's end offers to delete the file.
+    /// goes on while the rest runs; or it ended; or the user is done with it, which goes on too.
     fn import_event(&mut self, event: &ImportEvent, cx: &mut Context<Self>) {
         if let Some(importing) = self.importing.as_mut() {
             importing.said = match event {
@@ -717,39 +1117,22 @@ impl Shell {
                 _ => importing.said.take(),
             };
         }
-        let step = self.onboarding.as_ref().map(|onboarding| onboarding.step);
-        let on_it = step == Some(Step::Import);
+        let on_it = self.onboarding_on(Step::Import);
         if let Some(onboarding) = self.onboarding.as_mut().filter(|_| on_it)
             && *event == ImportEvent::Started
             && !onboarding.steps.contains(&Step::Favorites)
         {
-            let at = onboarding
-                .steps
-                .iter()
-                .position(|&each| each == Step::Import);
-            onboarding
-                .steps
-                .insert(at.map_or(0, |at| at + 1), Step::Favorites);
+            let at = (onboarding.steps.iter()).position(|&each| each == Step::Import);
+            (onboarding.steps).insert(at.map_or(0, |at| at + 1), Step::Favorites);
         }
         match event {
-            // The step holds on the Spaces once they're in, as they tick, then goes on by itself.
-            ImportEvent::Placed if on_it => {
-                let hold = std::time::Duration::from_secs_f32(IMPORT_HOLD);
-                cx.spawn(async move |shell, cx| {
-                    cx.background_executor().timer(hold).await;
-                    shell
-                        .update(cx, |shell, cx| {
-                            let step = shell.onboarding.as_ref().map(|onboarding| onboarding.step);
-                            if step == Some(Step::Import) {
-                                shell.onboarding_next("import", cx);
-                            }
-                        })
-                        .ok();
-                })
-                .detach();
+            // Its kinds draw in as each is written, and once all are, the card goes on (bring.rs).
+            ImportEvent::Finished(_) if on_it => {
+                self.bring_heard(cx);
+                cx.notify();
             }
-            ImportEvent::Done if on_it => self.onboarding_next("import", cx),
-            ImportEvent::Skipped if on_it => self.onboarding_next("skip", cx),
+            ImportEvent::Done if on_it => self.onboarding_next(cx),
+            ImportEvent::Skipped if on_it => self.onboarding_next(cx),
             _ => cx.notify(),
         }
     }
@@ -760,230 +1143,275 @@ impl Shell {
             .map_or_else(Vec::new, |importing| importing.view.read(cx).ticked())
     }
 
-    /// The flow's quiet line about the import: what it's doing, or what it brought in.
-    pub(super) fn import_line(&self, cx: &gpui::App) -> Option<gpui::SharedString> {
-        let importing = self.importing.as_ref()?;
-        importing
-            .view
-            .read(cx)
-            .running()
-            .or_else(|| importing.said.clone())
-    }
-
-    /// The opt-ins offered, each with whether it's on.
-    pub(super) fn opt_ins(&self, cx: &gpui::App) -> Vec<(OptIn, bool)> {
-        let on = |opt_in| match opt_in {
-            OptIn::DailyCount => {
-                let kept = self.browser.daily_count(cx)?;
+    /// The switches `step` offers, each with whether it's on.
+    pub(super) fn switches(&self, step: Step, cx: &gpui::App) -> Vec<(Switch, bool)> {
+        let switches: &[Switch] = match step {
+            Step::OtherApps => &[Switch::Command, Switch::Mcp],
+            Step::Done => &[Switch::Help],
+            _ => &[],
+        };
+        let agents = crate::agents::global(cx);
+        let on = |switch| match switch {
+            Switch::Command => Some(other_apps::command(agents.as_ref()?.read(cx)).on),
+            Switch::Mcp => Some(other_apps::mcp(agents.as_ref()?.read(cx)).on),
+            // Offered while either of its settings is; shown as turned, else on only where both
+            // are kept on.
+            Switch::Help => {
+                let (count, crashes) =
+                    (self.browser.daily_count(cx), self.browser.crash_reports(cx));
+                if count.is_none() && crashes.is_none() {
+                    return None;
+                }
+                let kept = count.unwrap_or(true) && crashes.unwrap_or(true);
                 Some(
-                    self.onboarding
-                        .as_ref()
-                        .and_then(|o| o.count)
+                    (self.onboarding.as_ref())
+                        .and_then(|o| o.help)
                         .unwrap_or(kept),
                 )
             }
-            OptIn::CrashReports => self.browser.crash_reports(cx),
-            OptIn::Agents => self.browser.agents(cx),
         };
-        OptIn::ALL
-            .into_iter()
-            .filter_map(|opt_in| Some((opt_in, on(opt_in)?)))
+        (switches.iter())
+            .filter_map(|&switch| Some((switch, on(switch)?)))
             .collect()
     }
 
-    /// Turns an opt-in's switch, which is Settings' own, so it's set at once.
-    pub(super) fn onboarding_switch(&mut self, opt_in: OptIn, cx: &mut Context<Self>) {
-        let Some(&(_, on)) = self.opt_ins(cx).iter().find(|(each, _)| *each == opt_in) else {
+    /// Turns a switch of the step shown. Other apps' are Settings' own, so they're set at once;
+    /// Help improve is set as its step is left.
+    pub(super) fn onboarding_switch(&mut self, switch: Switch, cx: &mut Context<Self>) {
+        let Some(step) = self.onboarding.as_ref().map(|onboarding| onboarding.step) else {
             return;
         };
-        // check.sh reads this line.
-        log!(
-            "browser: onboarding {} {}",
-            opt_in.name(),
-            if on { "off" } else { "on" }
-        );
-        // After this update, as turning agents off ends their ask, which reads every Shell (#2459).
-        let browser = self.browser.clone();
-        cx.defer(move |cx| match opt_in {
-            OptIn::DailyCount => {}
-            OptIn::CrashReports => browser.set_crash_reports(!on, cx),
-            OptIn::Agents => browser.set_agents(!on, cx),
-        });
+        let switches = self.switches(step, cx);
+        let Some(&(_, on)) = switches.iter().find(|(each, _)| *each == switch) else {
+            return;
+        };
+        if matches!(switch, Switch::Command | Switch::Mcp) {
+            let other = (switches.iter()).any(|&(each, on)| each != switch && on);
+            self.onboarding_way(switch, on, other, cx);
+        }
         if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.switched = Some((opt_in, onboarding.clock.now()));
+            onboarding.switched = Some((switch, onboarding.clock.now()));
             onboarding.slid = false;
-            if opt_in == OptIn::DailyCount {
-                onboarding.count = Some(!on);
+            if switch == Switch::Help {
+                onboarding.help = Some(!on);
             }
         }
         cx.notify();
     }
 
-    /// Picks swatch `index` at the colour step.
-    /// Picks the search engine at `index`, which sets nothing until Continue.
-    fn onboarding_pick_engine(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(onboarding) = self.onboarding.as_mut() {
-            let last = onboarding.engines.0.len().saturating_sub(1);
-            onboarding.engine = Some(index.min(last));
+    /// Puts Tidy tabs' bar at stop `at`, stopping at either end. Nothing is set until Next.
+    pub(super) fn onboarding_tidy(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(tidy) = self.onboarding.as_mut().and_then(|o| o.tidy.as_mut()) else {
+            return;
+        };
+        let at = at.min(tidy.stops.len() - 1);
+        if tidy.at != at {
+            tidy.at = at;
             cx.notify();
         }
     }
 
-    fn onboarding_pick(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.picked = Some(index.min(SWATCHES.len() - 1));
-            cx.notify();
+    /// Moves Tidy tabs' bar `by` stops along.
+    fn onboarding_tidy_by(&mut self, by: isize, cx: &mut Context<Self>) {
+        let at = (self.onboarding.as_ref()).and_then(|o| Some(o.tidy.as_ref()?.at));
+        if let Some(at) = at {
+            self.onboarding_tidy(at.saturating_add_signed(by), cx);
         }
     }
 
-    /// A key in the window: any skips the intro, and in a step Esc skips it and return is its
-    /// button; at the colour step the arrows go along the swatches. A shortcut still does its own
-    /// thing first.
+    /// A key in first run's window. Any key during the entry ends it. ↩ is the main button, but
+    /// never from a field, whose ↩ is its own (and an input method's, which confirms the text
+    /// first); ⌘[ goes back; Esc cancels a wait and nothing else; ⌘W does nothing.
     fn onboarding_key(
         &mut self,
         event: &KeystrokeEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((step, picked, engine)) =
-            (self.onboarding.as_ref()).map(|o| (o.step, o.picked, o.engine))
-        else {
-            return;
-        };
         let key = &event.keystroke;
         if ["shift", "control", "alt", "platform", "function"].contains(&key.key.as_str()) {
             return;
         }
-        // The account's fields keep their own ↩ and Esc, and its words go only with Done.
-        let field = event
-            .context_stack
-            .iter()
-            .any(|context| context.contains("AccountField"));
-        if step == Step::Account && (field || self.keeping_words(cx)) {
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        // The exit has the keyboard to itself: no key presses a step's button as it plays.
+        if onboarding.ending.is_some() {
+            return;
+        }
+        if onboarding.entry.is_some() {
+            onboarding.end_entry();
+            return cx.notify();
+        }
+        let step = onboarding.step;
+        let modifiers = key.modifiers;
+        if modifiers.secondary(cx) {
+            if key.key == "[" && !modifiers.shift && !modifiers.alt {
+                self.onboarding_back(cx);
+            }
+            return;
+        }
+        let field = (event.context_stack.iter())
+            .any(|context| context.contains("AccountField") || context.contains("TextInput"));
+        if field {
             return;
         }
         match (step, key.key.as_str()) {
-            (Step::Intro, _) => self.onboarding_next("key", cx),
-            (Step::Import, "escape") => self.import_escape("escape", cx),
-            (_, "escape") => self.onboarding_next("escape", cx),
-            // From none picked, → starts at the first and ← at the last.
-            (Step::Color, "right") => self.onboarding_pick(picked.map_or(0, |at| at + 1), cx),
-            (Step::Color, "left") => {
-                self.onboarding_pick(picked.map_or(SWATCHES.len(), |at| at.max(1)) - 1, cx)
-            }
-            // ↑ and ↓ move the engine's pick, as they do the import's list's.
-            (Step::SearchEngine, "down") => {
-                self.onboarding_pick_engine(engine.map_or(0, |at| at + 1), cx)
-            }
-            (Step::SearchEngine, "up") => {
-                self.onboarding_pick_engine(engine.map_or(0, |at| at.saturating_sub(1)), cx)
-            }
-            // ↩ is the import's button for the state its view shows, and ↑ ↓ move its list's pick.
-            (Step::Import, "enter") if !key.modifiers.modified() => {
-                self.onboarding_continue("return", window, cx)
-            }
-            (Step::Import, "up" | "down") => {
-                let by = if key.key == "up" { -1 } else { 1 };
-                if let Some(importing) = self.importing.as_ref() {
-                    importing.view.update(cx, |view, cx| view.move_pick(by, cx));
-                }
-            }
-            (Step::Import, _) => {}
-            // ⇥ and ⇧⇥ go along the step's stops: the swatches, the opt-ins' switches, its button
-            // and Skip, the window's only stops. Space turns the switch the keyboard is on, as
-            // Settings' does, and ↩ stays Continue there (#2985).
-            (_, "tab") => {
-                if let Some(onboarding) = self.onboarding.as_mut() {
-                    onboarding.on_switches = step == Step::OptIns;
-                }
-                if key.modifiers.shift {
-                    window.focus_prev(cx)
-                } else {
-                    window.focus_next(cx)
-                }
-            }
-            // On Skip, ↩ is Skip's press, its click. On the step's button it's still the step's ↩,
-            // which the button leaves to this.
-            (_, "enter") if !key.modifiers.modified() && !self.onboarding_skip_keyed(window) => {
+            (_, "escape") => self.onboarding_escape(cx),
+            // Along the palettes, from none chosen → starting at the first and ← at the last.
+            (Step::Space, "right") => self.space_palette_by(1, cx),
+            (Step::Space, "left") => self.space_palette_by(-1, cx),
+            (Step::Tidy, "left" | "down") => self.onboarding_tidy_by(-1, cx),
+            (Step::Tidy, "right" | "up") => self.onboarding_tidy_by(1, cx),
+            (_, "tab") => match modifiers.shift {
+                true => window.focus_prev(cx),
+                false => window.focus_next(cx),
+            },
+            // On a bare button or a row's, ↩ is that button's press, its click.
+            (_, "enter") if !modifiers.modified() && !self.onboarding_other_keyed(window) => {
                 self.onboarding_continue("return", window, cx)
             }
             _ => {}
         }
     }
 
-    /// The keyboard is on the step's Skip, which takes ↩ and Space as its press.
-    fn onboarding_skip_keyed(&self, window: &Window) -> bool {
-        (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.skip_stop.is_focused(window))
+    /// Esc: cancels a wait under way, an import or an assistant's sign-in, and otherwise does
+    /// nothing, so it can never pass a step or lose the recovery words.
+    fn onboarding_escape(&mut self, cx: &mut Context<Self>) {
+        use crate::agents::runner::Cli;
+        use crate::agents::sign_in::Offer;
+        match self.onboarding.as_ref().map(|onboarding| onboarding.step) {
+            // The sign-in window, or the wait for another device to add this one.
+            Some(Step::Account)
+                if matches!(
+                    self.welcome_shows(cx),
+                    Welcome::SigningIn | Welcome::Approve
+                ) =>
+            {
+                if let Some(view) = self.account_view() {
+                    view.update(cx, |view, cx| view.cancel(cx));
+                }
+            }
+            Some(Step::Import) => {
+                if let Some(importing) = self.importing.as_ref()
+                    && importing.view.read(cx).running().is_some()
+                {
+                    importing.view.update(cx, |view, cx| view.escape(cx));
+                    cx.notify();
+                }
+            }
+            Some(Step::Assistant) => {
+                if let Some(agents) = crate::agents::global(cx) {
+                    agents.update(cx, |agents, _| {
+                        for cli in Cli::ALL {
+                            if agents.assistant_row(cli).offer == Offer::Cancel {
+                                agents.cancel_sign_in(cli);
+                            }
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
     }
 
-    /// The step shown has its button: all but the intro do, but the account's goes once it's
-    /// signing or signed in, and the import's in a state with none (import_guide).
+    /// The keyboard is on a bare button or a row's button, which take ↩ and Space as their press.
+    fn onboarding_other_keyed(&self, window: &Window) -> bool {
+        (self.onboarding.as_ref()).is_some_and(|onboarding| {
+            [
+                &onboarding.skip_stop,
+                &onboarding.back_stop,
+                &onboarding.row_stop,
+                &onboarding.words_stop,
+            ]
+            .iter()
+            .any(|stop| stop.is_focused(window))
+        })
+    }
+
+    /// The step shown has a main button: the Welcome while it asks to sign in, the assistants once
+    /// someone is signed in, the import in a state with one, and every other step.
     fn onboarding_has_button(&self, step: Step, cx: &gpui::App) -> bool {
         match step {
-            Step::Intro => false,
-            Step::Import => (self.import_guide(cx))
-                .and_then(|guide| guide.button)
-                .is_some_and(|words| !words.is_empty()),
-            Step::Account => (self.account_view())
-                .is_some_and(|view| view.read(cx).state().status == Status::SignedOut),
+            Step::Import => (self.bring_view()).is_some_and(|view| view.read(cx).bring_offers()),
+            Step::Account => matches!(
+                self.welcome_shows(cx),
+                Welcome::Form | Welcome::Words | Welcome::Restore
+            ),
+            Step::Assistant => self.assistants_signed_in(cx),
             _ => true,
         }
     }
 
-    /// Where the keyboard rests as the step shown comes: on a control, never on the step's
-    /// dialog, as the dialog pattern has it. Orca keeps a dialog it's on as its place when a key
-    /// leaves it, and then drops the next step's arrival as already its place, saying nothing of it
-    /// (#3498). The colour's and the engine's choice are the step, so it rests on them; any other
-    /// rests on its button, the opt-ins' too, as a switch there is a yes to sending something that
-    /// a stray Space mustn't give. Only the intro and a step left with no control rest on their
-    /// dialog.
+    /// Where the keyboard rests as the step shown comes: on its choice where the choice is the
+    /// step, on its main button where it has one, else on the step's dialog, so nothing is focused
+    /// and ↩ does nothing (v9 §4). Your first Space rests on Next, its arrows going along the
+    /// palettes.
     fn onboarding_rest(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
-            Step::Color | Step::SearchEngine => onboarding.first_stop.clone(),
+            Step::Tidy => onboarding.first_stop.clone(),
             step if self.onboarding_has_button(step, cx) => onboarding.continue_stop.clone(),
             _ => onboarding.focus.clone(),
         })
     }
 
-    /// The flow over the whole window while it shows, stepping its motion; none otherwise, at no
-    /// cost but the check.
+    /// The card in first run's `window` while it shows, stepping its motion; none once it has
+    /// ended, as the window goes.
     pub(super) fn onboarding_layer(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let rest = self.onboarding_rest(cx);
+        let glass = self.blurred;
+        let still = crate::motion::still(cx);
+        // The grown card ends as the browser window draws most of itself: its tint, with the card
+        // the pages lie in over it.
+        let grown_fill = crate::palette::composite(self.window_tint(), self.palette.page);
+        let viewport = window.viewport_size();
+        let viewport = (f32::from(viewport.width), f32::from(viewport.height));
         let onboarding = self.onboarding.as_mut()?;
-        // The switches go with their step, and a keyboard left on one would leave the shell's own
-        // keys, ⌘T among them, with nowhere to go off the Mac, so it goes back to the shell.
-        let left = onboarding.step != Step::OptIns || onboarding.ending.is_some();
-        // So do the step and its stops as the flow ends.
-        let held = onboarding.focus.is_focused(window)
-            || onboarding.continue_stop.is_focused(window)
-            || onboarding.skip_stop.is_focused(window)
-            || onboarding.first_stop.is_focused(window);
-        if (left && std::mem::take(&mut onboarding.on_switches))
-            || (onboarding.ending.is_some() && held)
-        {
-            window.focus(&self.focus_handle, cx);
-        }
-        // A page shown covers it, so it has ended.
-        let ended = onboarding
-            .ending
-            .is_some_and(|at| onboarding.secs_since(at) >= END_FADE);
-        if ended || self.selected != 0 {
+        let light = onboarding.light.unwrap_or_else(|| {
+            matches!(
+                window.appearance(),
+                gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
+            )
+        });
+        let inks = Inks::of(light);
+        let exiting = onboarding.exit_clock(window.is_visible());
+        let ended = exiting.is_some_and(|at| onboarding.exit_ended(at, still));
+        if ended {
+            // A grown exit ends with the browser window whole under a card and glass faded out,
+            // so its last frame draws no card, as the cross-fade's doesn't.
+            if onboarding.grown(still) {
+                self.browser.reveal_first_run(1., 0.);
+            }
             self.onboarding = None;
             // check.sh waits for this line.
             log!("browser: onboarding done");
-            // In: the first Space with the command bar up, as ⌘T has it, once this frame is drawn.
-            // Not for a quit, whose closing window can draw the frame the fade ends in.
-            if ended && self.selected == 0 && !super::quit_gone_ahead() {
-                self.in_hint = true;
-                cx.defer_in(window, |shell, _, cx| {
-                    shell.run(Command::NewTab, "onboarding", cx)
-                });
+            // The window goes and the browser window comes, once this frame is drawn, with the
+            // first Space and the command bar up, as ⌘T has it. Not for a quit, whose closing
+            // window can draw the frame the fade ends in.
+            let first_run = self.first_run;
+            let shell = cx.entity();
+            let quit = super::quit_gone_ahead();
+            if !quit {
+                self.show_hint(cx);
             }
+            cx.defer(move |cx| {
+                // Outside the shell's update, as the host draws the browser window, and with it
+                // the shell, before putting it on screen.
+                if let Some(handle) = first_run {
+                    let browser = shell.read(cx).browser.clone();
+                    browser.end_first_run(handle.into(), cx);
+                }
+                if !quit {
+                    shell.update(cx, |shell, cx| shell.run(Command::NewTab, "onboarding", cx));
+                }
+            });
+            #[cfg(test)]
+            exit::DRAWN.with_borrow_mut(|drawn| drawn.push(None));
             return None;
         }
         if onboarding.keys.is_none() {
@@ -994,23 +1422,38 @@ impl Shell {
                 }
             }));
         }
-        // A window that opens with no page gives its keyboard to Chromium's view, so the flow's
-        // keys would never reach it. By the flow's first frame on screen the window is key, and
-        // the keyboard stays the UI's. Deferred, as AppKit tells GPUI the change at once.
-        if window.is_visible() && !std::mem::replace(&mut onboarding.keyboard, true) {
-            cx.defer_in(window, |shell, _, cx| shell.take_keyboard(cx));
+        if window.is_visible() {
+            onboarding.keyboard = true;
         }
-        // Each step takes the keyboard as it comes, from the window or from the step before, so an
-        // assistive app reads it; never from a field that has it.
+        // The entry plays from the first frame the window is seen, and ends on its own.
+        let entry = match onboarding.entry {
+            Some(_) if !onboarding.keyboard => {
+                onboarding.entry = Some(onboarding.clock.now());
+                Some(0.)
+            }
+            Some(at) => Some(onboarding.secs_since(at)),
+            None => None,
+        };
+        let entry = entry.filter(|&at| at < Onboarding::entry_length(still));
+        if entry.is_none() {
+            onboarding.end_entry();
+        }
+        // Each step takes the keyboard as it comes, so an assistive app reads it; never from a
+        // field that has it.
         let resting = window.focused(cx).is_none_or(|focus| {
-            focus == self.focus_handle
-                || focus == onboarding.focus
-                || focus == onboarding.continue_stop
-                || focus == onboarding.skip_stop
-                || focus == onboarding.first_stop
+            [
+                &onboarding.focus,
+                &onboarding.continue_stop,
+                &onboarding.skip_stop,
+                &onboarding.back_stop,
+                &onboarding.first_stop,
+                &onboarding.row_stop,
+            ]
+            .contains(&&focus)
         });
         if let Some(rest) = rest
             && onboarding.keyboard
+            && entry.is_none()
             && onboarding.ending.is_none()
             && resting
             && onboarding.focused_step != Some(onboarding.step)
@@ -1018,109 +1461,120 @@ impl Shell {
             onboarding.focused_step = Some(onboarding.step);
             window.focus(&rest, cx);
         }
-        let still = cx.reduce_motion();
-        let elapsed = onboarding.secs_since(onboarding.since);
         let step = onboarding.step;
-        let came = match step {
-            Step::Intro => Drawn::at(elapsed, still).done(),
-            _ => elapsed >= STEP_MOTION,
-        };
+        let fade = Onboarding::fade(still);
+        let elapsed = onboarding.secs_since(onboarding.since);
+        let came = entry.is_none() && elapsed >= fade;
         if came && !std::mem::replace(&mut onboarding.settled, true) {
             // check.sh waits for this line before it captures the step.
-            log!("browser: onboarding step {} settled", step.name());
+            log!("browser: onboarding step {} settled", step.number());
         }
-        if step == Step::Intro && elapsed >= if still { STILL_END } else { INTRO_END } {
-            self.onboarding_next("time", cx);
-            return self.onboarding_layer(window, cx);
-        }
-        let onboarding = self.onboarding.as_mut()?;
-        let motion = (elapsed / STEP_MOTION).min(1.);
-        if motion >= 1. {
-            onboarding.leaving = None;
-        }
-        // Frames while something moves; the intro's hold waits on a timer instead.
-        let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
-        let sliding = onboarding
-            .switched
-            .is_some_and(|(_, at)| onboarding.secs_since(at) < SLIDE);
+        let sliding = (onboarding.switched)
+            .is_some_and(|(_, at)| onboarding.secs_since(at) < settings_rows::SLIDE);
         // check.sh captures a turned switch on this line, with its knob at the end of its slide.
-        if let Some((opt_in, _)) = onboarding.switched
+        if onboarding.switched.is_some()
             && !sliding
             && !std::mem::replace(&mut onboarding.slid, true)
         {
-            log!("browser: onboarding {} slid", opt_in.name());
+            log!("browser: onboarding switch slid");
         }
-        if !came || onboarding.leaving.is_some() || ending.is_some() || sliding {
+        let progressing =
+            !still && onboarding.secs_since(onboarding.progress.2) < t::PROGRESS_MOTION;
+        let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
+        let bringing = onboarding.bring.moving;
+        onboarding.drawing =
+            !came || entry.is_some() || ending.is_some() || sliding || progressing || bringing;
+        if onboarding.drawing {
             window.request_animation_frame();
-        } else if step == Step::Intro && onboarding.hold.is_none() {
-            let end = if still { STILL_END } else { INTRO_END };
-            let left = Duration::from_secs_f32((end - elapsed).max(0.));
-            onboarding.hold = Some(cx.spawn(async move |shell, cx| {
-                cx.background_executor().timer(left).await;
-                // A timer can end a little before the flow's clock does, as Windows' do (#1026),
-                // so the frame it wakes waits again for what's left.
-                shell
-                    .update(cx, |shell, cx| {
-                        if let Some(onboarding) = shell.onboarding.as_mut() {
-                            onboarding.hold = None;
-                        }
-                        cx.notify()
-                    })
-                    .ok();
-            }));
         }
-        let light = onboarding.light.unwrap_or_else(|| {
-            matches!(
-                window.appearance(),
-                gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
-            )
-        });
-        let leaving = onboarding.leaving;
-        let colors = Colors::of(light);
-        // The step comes from the right as the one before leaves to the left, but for a fade with
-        // Reduce Motion. The intro, first, is simply there.
-        let eased = ease_out(motion);
-        let shift = if still || leaving.is_none() {
-            0.
-        } else {
-            SHIFT
+        // Each frame says again where its controls are.
+        onboarding.places.borrow_mut().clear();
+        // The entry (v9 §2): the plate holds the knot drawing itself, then grows to the card as
+        // the knot settles at its place and the rest fades in. With Reduce Motion, a fade.
+        let (width, height) = (t::WIDTH, t::HEIGHT);
+        let full = (0., 0., width, height, t::RADIUS);
+        let (plate, card_opacity, content_opacity, entry_knot) = match entry {
+            None => (full, 1., (elapsed / fade).min(1.), None),
+            Some(at) if still => {
+                let shown = (at / t::STILL_FADE).min(1.);
+                (full, shown, shown, None)
+            }
+            Some(at) => {
+                let [plate, plate_radius] = t::ENTRY_PLATE;
+                let [grow_at, grow_for] = t::ENTRY_GROW;
+                let [rest_from, rest_for] = t::ENTRY_REST;
+                let grown = arrive((at - grow_at) / grow_for);
+                let (w, h) = (lerp(plate, width, grown), lerp(plate, height, grown));
+                let rested = ((at - grow_at - rest_from) / rest_for).clamp(0., 1.);
+                let drawn = ease_in_out(at / t::ENTRY_DRAW);
+                // The knot lands at the Welcome's place, or where there is none, fades with
+                // the plate's growth.
+                let [knot, knot_top] = t::WELCOME_KNOT;
+                let (to_size, to_y, fades) = match step {
+                    Step::Account => (knot, knot_top + knot / 2., false),
+                    _ => (t::ENTRY_KNOT, height / 2., true),
+                };
+                let size = lerp(t::ENTRY_KNOT, to_size, grown);
+                let y = lerp(height / 2., to_y, grown);
+                let knot = (size, width / 2. - size / 2., y - size / 2., drawn);
+                let knot = (knot, if fades { 1. - grown } else { 1. });
+                (
+                    (
+                        (width - w) / 2.,
+                        (height - h) / 2.,
+                        w,
+                        h,
+                        lerp(plate_radius, t::RADIUS, grown),
+                    ),
+                    1.,
+                    rested,
+                    Some(knot),
+                )
+            }
         };
-        let coming = self
-            .step_content(step, elapsed, still, colors, window, cx)
-            .left(px(shift * (1. - eased)))
-            .opacity(if leaving.is_some() { eased } else { 1. });
-        let gone = leaving.map(|(step, at)| {
-            self.step_content(step, at, still, colors, window, cx)
-                .left(px(-shift * eased))
-                .opacity(1. - eased)
-        });
-        // The recovery words show once, so only their Done goes on from them.
-        // At the import, the corner says what Esc does in the state its view shows.
-        let corner = match step {
-            Step::Import => self
-                .import_guide(cx)
-                .map_or(Corner::Skip, |guide| guide.corner),
-            _ => Corner::Skip,
+        // As the window grows, the card fills it, shaped each frame (first-run v9 §10).
+        let exit = exiting.map(|at| exit::frame(at, onboarding.grown(still), viewport));
+        let plate = exit.as_ref().map_or(plate, |exit| exit.plate);
+        let (_, _, w, h, radius) = plate;
+        let shape = (w, h, radius);
+        let before = onboarding.shaped.replace(shape);
+        let growing =
+            exiting.is_some_and(|at| at > crate::tokens::shell::onboarding::exit::CONTENT);
+        let grow_starts = growing && !std::mem::replace(&mut onboarding.growing, growing);
+        if before != Some(shape) {
+            self.browser.shape_first_run(w, h, radius);
+        }
+        // Said on each grown frame, not only as it changes: until the window's first frame of its
+        // own, Chromium may put it back whole (host_set_first_run_reveal).
+        if let Some(exit) = exit.as_ref().filter(|_| growing && onboarding.grown(still)) {
+            self.browser.reveal_first_run(exit.window, exit.glass);
+        }
+        // The glass is the system's and reaches the screen a frame after the card drawn with it,
+        // so the exit draws the card in the shape its glass was given the frame before, and fill
+        // and glass grow together. The grow's first shape follows the glass still through the
+        // content's fade and lands at once (f0053), so that frame's card is drawn in it.
+        let plate = match (&exit, before) {
+            (Some(_), Some(before)) if !grow_starts => exit::behind(before, viewport),
+            _ => plate,
         };
-        let skip = (step != Step::Intro && !self.keeping_words(cx) && corner != Corner::None)
-            .then(|| self.skip_button(corner == Corner::Back, colors, cx));
-        // The import under way, or what it brought, quiet at the bottom left once its step is left.
-        let import_line = (step != Step::Import && step != Step::Intro)
-            .then(|| self.import_line(cx))
-            .flatten()
-            .map(|said| {
-                div()
-                    .absolute()
-                    .left(px(SKIP_MARGIN))
-                    .bottom(px(SKIP_MARGIN))
-                    .h(px(CHIP_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .text_size(px(SKIP_SIZE))
-                    .text_color(colors.ink(QUIET))
-                    .child(said)
-            });
-        let opacity = ending.map_or(1., |at| fade_at(1., 0., at, END_FADE));
+        if step == Step::Space {
+            self.space_editor(light, window, cx);
+        }
+        let content = self.step_content(step, inks, entry.is_some(), window, cx);
+        let onboarding = self.onboarding.as_ref()?;
+        let entry_knot = entry_knot.map(|((size, x, y, drawn), opacity)| {
+            card::at(x, y)
+                .opacity(opacity)
+                .child(card::knot(size, drawn, inks.text(1.)))
+        });
+        let opacity = exit.as_ref().map_or(1., |exit| exit.card);
+        let content_opacity = content_opacity * exit.as_ref().map_or(1., |exit| exit.content);
+        let fill = exit.as_ref().map_or(inks.fill(glass), |exit| {
+            exit::crossed(inks.fill(glass), grown_fill, exit.tint)
+        });
+        #[cfg(test)]
+        exit::DRAWN.with_borrow_mut(|drawn| drawn.push(Some((plate, fill, shape))));
+        let ends_entry = onboarding.entry.is_some();
         Some(
             div()
                 .id("onboarding")
@@ -1128,506 +1582,1027 @@ impl Shell {
                 .top_0()
                 .left_0()
                 .size_full()
-                .bg(colors.ground)
-                .occlude()
-                .opacity(opacity)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|shell, _, _, cx| {
-                        if shell
-                            .onboarding
-                            .as_ref()
-                            .is_some_and(|o| o.step == Step::Intro)
-                        {
-                            shell.onboarding_next("click", cx);
-                        }
-                    }),
-                )
-                .children(gone)
-                .child(coming)
-                .children(skip)
-                .children(import_line)
+                .opacity(opacity * card_opacity)
+                .font_family(crate::face::UI)
+                // A press on the card away from its controls moves the window, as it has no title
+                // bar; each control stops its own press, or the move would take its click.
+                // Not while it leaves, when the card may be the whole window.
+                .when(exiting.is_none(), |card| {
+                    card.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+                })
+                .child(card::plate(plate, fill, inks.rim()))
+                .child(match exit.as_ref().map(|exit| exit.offset) {
+                    // Centred in the window as the card is, however the host has grown it.
+                    Some((left, top)) => card::at(left, top)
+                        .w(px(t::WIDTH))
+                        .h(px(t::HEIGHT))
+                        .opacity(content_opacity)
+                        .child(content),
+                    None => div()
+                        .absolute()
+                        .inset_0()
+                        .opacity(content_opacity)
+                        .child(content),
+                })
+                .children(entry_knot)
+                // While the card leaves, a click presses nothing on it and moves no window.
+                .when(exiting.is_some(), |card| {
+                    card.child(
+                        div()
+                            .id("onboarding-exit")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                    )
+                })
+                // While the entry plays, a click anywhere ends it and presses nothing under it.
+                .when(ends_entry, |card| {
+                    card.child(
+                        div()
+                            .id("onboarding-entry")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|shell, _, _, cx| {
+                                    cx.stop_propagation();
+                                    if let Some(onboarding) = shell.onboarding.as_mut() {
+                                        onboarding.end_entry();
+                                    }
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                })
                 .into_any_element(),
         )
     }
 
-    /// A step's message, centred in the window, `t` seconds into it.
+    /// A step on the card.
     fn step_content(
+        &mut self,
+        step: Step,
+        inks: Inks,
+        entering: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        // Bring your stuff draws what the import view has, over the whole card.
+        let bring = matches!(step, Step::Import | Step::Favorites)
+            .then(|| self.bring_now(window, cx))
+            .flatten();
+        let Some(onboarding) = self.onboarding.as_ref() else {
+            return div().id("onboarding-step");
+        };
+        let os = onboarding.os;
+        let still = crate::motion::still(cx);
+        let progress = onboarding.progress_now(still);
+        let first = onboarding.steps.first() == Some(&step);
+        let focus = onboarding.focus.clone();
+        let (title, line) = match (step, self.bring_words(bring.as_ref())) {
+            // While an import runs its line names the kind being written, then All here.
+            (Step::Import, Some(words)) => (step.message(os).0, words),
+            _ => step.message(os),
+        };
+        let whole = matches!(step, Step::Import | Step::Favorites);
+        let said = (title.clone(), line.clone());
+        let body = match step {
+            Step::Account => self.welcome(inks, entering, window, cx),
+            Step::Done => self.done(inks, first, cx),
+            _ => {
+                let (controls, trail, skip, back) =
+                    self.step_parts(step, bring.as_ref(), inks, window, cx);
+                let (controls, over) = match whole {
+                    true => (div().into_any_element(), Some(controls)),
+                    false => (controls, None),
+                };
+                let span = card::foot_span(step);
+                let back = back.filter(|_| !first).map(|back| back.into_any_element());
+                let mut trail_parts = Vec::new();
+                trail_parts.extend(skip);
+                trail_parts.extend(trail);
+                // Your first Space's editor starts under its heading, as the mock's does.
+                let top = match step {
+                    Step::Space => t::SPACE_EDITOR[0],
+                    _ => t::BODY_TOP,
+                };
+                let column = match step.split() {
+                    true => span.1 - span.0,
+                    false => card::column(step),
+                };
+                let body = match step.split() {
+                    true => card::at(span.0, top).w(px(column)),
+                    false => card::at((t::WIDTH - column) / 2., top).w(px(column)),
+                };
+                let [foot_top, _] = t::FOOT;
+                div()
+                    .size_full()
+                    .children(step.split().then(|| {
+                        (card::plane(inks).relative()).children(self.place(step, "plane"))
+                    }))
+                    .child(card::heading((title, line), !step.split(), inks, cx))
+                    .child(
+                        body.h(px(foot_top - top - t::FOOT_GAP))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .flex()
+                            .flex_col()
+                            .text_size(px(crate::tokens::text::BODY))
+                            .text_color(inks.text(1.))
+                            .children(self.place(step, "column"))
+                            .child(controls),
+                    )
+                    .children(over)
+                    .child(card::foot(span, back, Some(progress), trail_parts, inks))
+            }
+        };
+        // A screen reader reads the step as a dialog called by its title, with its line.
+        let named = self.a11y;
+        div()
+            .id(("onboarding-step", step as usize))
+            .absolute()
+            .inset_0()
+            .track_focus(&focus)
+            .when(named, |content| {
+                let (title, line) = said;
+                content
+                    .role(Role::Dialog)
+                    .aria_label(title)
+                    .when(!line.is_empty(), |content| content.aria_description(line))
+            })
+            .child(body)
+    }
+
+    /// A step's controls, its main button, its Skip and its Back.
+    fn step_parts(
+        &mut self,
+        step: Step,
+        bring: Option<&crate::import::Bring>,
+        inks: Inks,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (
+        AnyElement,
+        Option<AnyElement>,
+        Option<AnyElement>,
+        Option<gpui::Stateful<gpui::Div>>,
+    ) {
+        let _ = window;
+        let running = matches!(
+            bring.map(|bring| &bring.state),
+            Some(crate::import::Bringing::Running { .. })
+        );
+        let stoppable = matches!(
+            bring.map(|bring| &bring.state),
+            Some(crate::import::Bringing::Running {
+                stoppable: true,
+                done: false,
+                ..
+            })
+        );
+        let controls = match step {
+            Step::Assistant => self.assistant_rows(step, inks, cx).into_any_element(),
+            Step::Import => self.bring_controls(bring, inks, cx),
+            Step::Favorites => self.bring_tiles(bring, inks, cx),
+            Step::Space => self.space_controls(inks).into_any_element(),
+            Step::Tidy => div()
+                .flex()
+                .flex_col()
+                .children(self.tidy_card(inks, cx))
+                .children(self.broom_row(inks, cx))
+                .into_any_element(),
+            Step::OtherApps => self.other_apps_ways(inks, cx),
+            _ => div().into_any_element(),
+        };
+        let signed_in = self.assistants_signed_in(cx);
+        let ticked = self.favorites_ticked(cx).len();
+        let words: Option<SharedString> = match step {
+            Step::Assistant if !signed_in => None,
+            Step::Import if running => None,
+            Step::Import => Some("Import".into()),
+            Step::Favorites if ticked > 0 => Some(format!("Add {ticked}").into()),
+            _ => Some("Next".into()),
+        };
+        let ready = (step != Step::Import)
+            || (self.bring_view()).is_some_and(|view| view.read(cx).bring_ready());
+        let main = words.map(|words| {
+            (self.main(step, words, inks, cx))
+                .when(!ready, |main| main.opacity(t::BRING_OFF))
+                .into_any_element()
+        });
+        // While an import can still leave everything out, a quiet Cancel stands for the foot; Esc
+        // is the same (v9 §5).
+        let main = main.or_else(|| {
+            (step == Step::Import && stoppable).then(|| {
+                card::quiet("onboarding-cancel", "Cancel".into(), inks)
+                    .when(self.a11y, |control| named_button(control, "Cancel"))
+                    .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_escape(cx)))
+                    .relative()
+                    .children(self.place(step, "cancel"))
+                    .into_any_element()
+            })
+        });
+        // Neither assistant is the foot's quiet button, not a third row (v9 §4).
+        let main = main.or_else(|| {
+            (step == Step::Assistant).then(|| {
+                card::quiet(
+                    "onboarding-just-the-browser",
+                    "Just the Browser".into(),
+                    inks,
+                )
+                .when(self.a11y, |control| {
+                    named_button(control, "Just the Browser")
+                })
+                .when_some(self.step_stop(step, |o| &o.skip_stop), |control, stop| {
+                    control.track_focus(&stop).focus_from_keys_only()
+                })
+                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_just_the_browser(cx)))
+                .relative()
+                .children(self.place(step, "just-the-browser"))
+                .into_any_element()
+            })
+        });
+        let skip_label = match step {
+            Step::Import if !running => Some("Skip"),
+            Step::Favorites if ticked > 0 => Some("Skip"),
+            _ => None,
+        };
+        let skip = skip_label.map(|label| {
+            let frame = (self.onboarding.as_ref())
+                .filter(|onboarding| onboarding.step == step)
+                .map(|onboarding| skip_frame(onboarding.skip.clone(), onboarding.settled));
+            card::bare("onboarding-skip", label.into(), inks)
+                .when(self.a11y, |control| named_button(control, label))
+                .when_some(self.step_stop(step, |o| &o.skip_stop), |control, stop| {
+                    control.track_focus(&stop).focus_from_keys_only()
+                })
+                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_next(cx)))
+                .relative()
+                .children(self.place(step, "skip"))
+                .children(frame)
+                .into_any_element()
+        });
+        // None shows while the import runs; the favorites come after the import has written.
+        let back = match step {
+            Step::Favorites => None,
+            Step::Import if running => None,
+            _ => Some(self.back(step, inks, cx)),
+        };
+        (controls, main, skip, back)
+    }
+
+    /// A step's handle for a stop, while it's the step shown: the one leaving has none.
+    fn step_stop(
         &self,
         step: Step,
-        t: f32,
-        still: bool,
-        colors: Colors,
+        which: impl Fn(&Onboarding) -> &gpui::FocusHandle,
+    ) -> Option<gpui::FocusHandle> {
+        (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| which(onboarding).clone())
+    }
+
+    /// The foot's Back.
+    fn back(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        card::bare("onboarding-back", "Back".into(), inks)
+            .when(self.a11y, |control| named_button(control, "Back"))
+            .when_some(self.step_stop(step, |o| &o.back_stop), |control, stop| {
+                control.track_focus(&stop).focus_from_keys_only()
+            })
+            .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_back(cx)))
+            .relative()
+            .children(self.place(step, "back"))
+    }
+
+    /// The step's main button with `words`.
+    fn main(
+        &self,
+        step: Step,
+        words: SharedString,
+        inks: Inks,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let drawn = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
+        let control = div()
+            .id("onboarding-continue")
+            .when(self.a11y, |control| named_button(control, words.clone()))
+            .when_some(
+                self.step_stop(step, |o| &o.continue_stop),
+                |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+            )
+            // ↩ on it is the step's ↩, which goes on as the key goes down (onboarding_key).
+            .on_click(cx.listener(|shell, event: &ClickEvent, window, cx| {
+                let returned = matches!(
+                    event,
+                    ClickEvent::Keyboard(KeyboardClickEvent {
+                        button: KeyboardButton::Enter,
+                        ..
+                    })
+                );
+                if !returned {
+                    shell.onboarding_continue("button", window, cx)
+                }
+            }))
+            .child(words)
+            .children(drawn.map(|(at, settled)| button_frame(at, settled)))
+            .children(self.place(step, "main"));
+        let key = super::key_name("enter", super::OFF_THE_MAC);
+        card::main_button(control, Some(key.into()), inks)
+    }
+
+    /// The Welcome (v9 §3): the knot, the name and its line, then the account as it is: the form
+    /// (Continue opens the sign-in window, where the address, the code and the passkey are the
+    /// server's page's), a first device's words, another device's approval, or the words' field;
+    /// Not Now at the bottom where the step can be passed.
+    fn welcome(
+        &mut self,
+        inks: Inks,
+        entering: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let layer = div()
-            .absolute()
-            .top_0()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center();
-        // A screen reader reads the step shown as a dialog called by its title, with its line, and
-        // the step leaving under it, still drawn as it slides, as nothing.
-        let named = self.a11y
-            && (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.step == step);
-        if step == Step::Intro {
-            let drawn = Drawn::at(t, still);
-            return layer.child(
-                div()
-                    .id("onboarding-intro")
+        if let Some(view) = self.account_view() {
+            // The switches' look: its second lines in text-2, its signed-in dot in the ink.
+            let look = switch_look(inks);
+            view.update(cx, |view, cx| {
+                view.set_look(look, cx);
+                // Signed in, it asks nothing more (the devices' list is Settings').
+                if view.state().status != Status::On {
+                    view.showing(window, cx);
+                }
+            });
+        }
+        let shows = self.welcome_shows(cx);
+        let body = match shows {
+            Welcome::Form | Welcome::SigningIn | Welcome::Syncing => {
+                self.welcome_form(shows, inks, entering, cx)
+            }
+            Welcome::Words => self.welcome_words(inks, cx),
+            Welcome::Approve | Welcome::Again | Welcome::Restore => {
+                self.welcome_approve(shows, inks, cx)
+            }
+        };
+        let bottom = match shows {
+            Welcome::Words => Some(
+                self.main(Step::Account, "I've Saved Them".into(), inks, cx)
+                    .into_any_element(),
+            ),
+            Welcome::Form | Welcome::SigningIn | Welcome::Again | Welcome::Restore => {
+                Some(self.welcome_not_now(inks, cx).into_any_element())
+            }
+            Welcome::Approve | Welcome::Syncing => None,
+        };
+        let [_, foot_height] = t::FOOT;
+        div().size_full().child(body).children(bottom.map(|bottom| {
+            welcome_centred(t::WELCOME_NOT_NOW - foot_height / 2.)
+                .h(px(foot_height))
+                .items_center()
+                .child(bottom)
+        }))
+    }
+
+    /// Not Now: on without an account, closing a sign-in window still open, so nothing signs in
+    /// behind the card.
+    fn welcome_not_now(&self, inks: Inks, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        card::bare("onboarding-not-now", "Not Now".into(), inks)
+            .when(self.a11y, |control| named_button(control, "Not Now"))
+            .when_some(
+                self.step_stop(Step::Account, |o| &o.skip_stop),
+                |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| {
+                if shell.welcome_shows(cx) == Welcome::SigningIn
+                    && let Some(view) = shell.account_view()
+                {
+                    view.update(cx, |view, cx| view.cancel(cx));
+                }
+                shell.onboarding_next(cx)
+            }))
+            .relative()
+            .children(self.place(Step::Account, "not-now"))
+    }
+
+    /// The form, its knot, name and line, and Continue; while the sign-in window is open, what to
+    /// do there and Cancel; once another device has added this one, that its Spaces are syncing.
+    fn welcome_form(
+        &self,
+        shows: Welcome,
+        inks: Inks,
+        entering: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let os = self.onboarding.as_ref().map_or(Os::Mac, |o| o.os);
+        let (name, line) = Step::Account.message(os);
+        let problem = (self.account_view())
+            .and_then(|view| view.read(cx).state().problem)
+            .filter(|_| shows == Welcome::Form);
+        let line: SharedString = match (shows, problem) {
+            (Welcome::Syncing, _) => "Your Spaces are syncing.".into(),
+            (_, Some(problem)) => account::problem_text(problem).into(),
+            _ => line,
+        };
+        let [knot, knot_top] = t::WELCOME_KNOT;
+        let [name_top, name_size, name_line] = t::WELCOME_NAME;
+        let [_, line_size, line_line] = t::LINE;
+        let [column, column_top] = t::WELCOME_COLUMN;
+        let [new_gap, new_words_gap] = t::WELCOME_NEW;
+        let [button_height, _, button_size] = t::WELCOME_BUTTON;
+        let column_items: Vec<AnyElement> = match shows {
+            // One sign-in window both signs in and makes an account (account.rs sign_in, the
+            // core's one call), so there's no Sign Up of its own.
+            Welcome::Form => vec![
+                card::welcome_button(self.main(Step::Account, "Continue".into(), inks, cx))
+                    .into_any_element(),
+            ],
+            Welcome::SigningIn => {
+                let cancel = card::bare("onboarding-cancel", "Cancel".into(), inks)
+                    .when(self.a11y, |control| named_button(control, "Cancel Sign In"))
                     .when_some(
-                        (self.onboarding.as_ref()).map(|onboarding| onboarding.focus.clone()),
-                        |intro, focus| intro.track_focus(&focus),
+                        self.step_stop(Step::Account, |o| &o.row_stop),
+                        |control, stop| control.track_focus(&stop).focus_from_keys_only(),
                     )
-                    .when(named, |intro| {
-                        intro
-                            .role(Role::Dialog)
-                            .aria_label(env!("APP_NAME"))
-                            .aria_description("a good tool.")
-                    })
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        if let Some(view) = shell.account_view() {
+                            view.update(cx, |view, cx| view.cancel(cx));
+                        }
+                    }))
+                    .relative()
+                    .children(self.place(Step::Account, "cancel"));
+                vec![
+                    div()
+                        .h(px(button_height))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(button_size))
+                        .text_color(inks.text_2())
+                        .child(account::FINISH_SIGN_IN)
+                        .into_any_element(),
+                    welcome_line(new_gap, new_words_gap, inks)
+                        .child(cancel)
+                        .into_any_element(),
+                ]
+            }
+            _ => Vec::new(),
+        };
+        div()
+            .size_full()
+            .when(!entering, |welcome| {
+                welcome.child(
+                    card::at((t::WIDTH - knot) / 2., knot_top)
+                        .child(card::whole_knot(knot, inks.text(1.))),
+                )
+            })
+            .child(
+                welcome_centred(name_top)
+                    .child(display_text(name, name_size, name_line, cx).text_color(inks.text(1.))),
+            )
+            .child(
+                welcome_centred(t::WELCOME_LINE)
+                    .text_size(px(line_size))
+                    .line_height(px(line_line))
+                    .text_color(inks.text_2())
+                    .child(line),
+            )
+            .child(
+                card::at((t::WIDTH - column) / 2., column_top)
+                    .w(px(column))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .flex()
                     .flex_col()
-                    .items_center()
-                    .child(wordmark(drawn, colors))
-                    .child(
-                        display_text("a good tool.", TAGLINE_SIZE, TAGLINE_LINE, cx)
-                            .mt(px(TAGLINE_GAP - cap_top(TAGLINE_SIZE, TAGLINE_LINE)))
-                            .text_color(colors.ink(QUIET))
-                            .opacity(drawn.tagline),
-                    ),
-            );
-        }
-        let os = self
-            .onboarding
-            .as_ref()
-            .map_or(Os::Mac, |onboarding| onboarding.os);
-        let (title, line, button) = step.message(os);
-        let switches = (step == Step::OptIns).then(|| self.opt_in_rows(colors, cx));
-        let engines = (step == Step::SearchEngine).then(|| self.engine_rows(colors, cx));
-        let favorites = (step == Step::Favorites)
-            .then(|| self.favorite_tiles(colors, window, cx))
-            .flatten();
-        let account = (step == Step::Account)
-            .then(|| self.account_view())
-            .flatten();
-        // Add 7 Favorites, as many as are ticked, else Continue, as ↩ then adds none.
-        let add_favorites = (self.importing.as_ref())
-            .map(|importing| importing.view.read(cx).add_favorites_title());
-        let button = match step {
-            Step::Favorites if self.favorites_ticked(cx).is_empty() => "Continue",
-            Step::Favorites => add_favorites.as_deref().unwrap_or(button),
-            Step::Account if !self.onboarding_has_button(step, cx) => "",
-            _ => button,
-        };
-        // The import's words, button and corner follow the state its view shows (guide).
-        let guide = (step == Step::Import)
-            .then(|| self.import_guide(cx))
-            .flatten();
-        let (title, line, button): (SharedString, SharedString, SharedString) = match guide {
-            Some(guide) => (
-                guide.title.into(),
-                guide.line.into(),
-                guide.button.unwrap_or_default().into(),
-            ),
-            None => (title.into(), line, button.into()),
-        };
-        let swatches = (step == Step::Color).then(|| {
-            let picked = self
-                .onboarding
-                .as_ref()
-                .and_then(|onboarding| onboarding.picked);
-            swatch_row(picked, self.first_stop(step), colors, self.a11y, cx)
-        });
-        let chip = |keys: String, fill: Rgba| {
-            div()
-                .h(px(CHIP_HEIGHT))
-                .px(px(CHIP_INSET))
-                .flex()
-                .items_center()
-                .rounded(px(CHIP_RADIUS))
-                .bg(fill)
-                .child(keys)
-        };
-        // A view of Settings' own, its boxes a little into the ink from the ground, in the ink, as
-        // Settings' are.
-        let look = Look::on(
-            colors.ground.blend(colors.ink(IMPORT_SURFACE)),
-            colors.ink(1.),
-            rgb(SIGNAL),
-        );
-        let embedded = |view: gpui::AnyView| {
-            div()
-                .mt(px(BUTTON_GAP))
-                .w(px(IMPORT_WIDTH))
-                .text_size(px(crate::tokens::text::BODY))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(view)
-        };
-        let import = (step == Step::Import)
-            .then(|| {
-                self.importing
-                    .as_ref()
-                    .map(|importing| importing.view.clone())
-            })
-            .flatten()
-            .map(|view| {
-                view.update(cx, |view, cx| view.set_look(look, cx));
-                embedded(view.into())
-            });
-        // Under the step's Sign In, its server's line close by, as it names where Sign In goes.
-        let signed_out = !button.is_empty();
-        let account = account.map(|view| {
-            view.update(cx, |view, cx| view.set_look(look, cx));
-            embedded(view.into()).when(signed_out, |body| body.mt(px(LINE_GAP)))
-        });
-        let drawn = (self.onboarding.as_ref())
-            .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
-        let said = (title.clone(), line.clone());
-        // Only the step shown's: the one leaving, drawn under it, has none.
-        let stops = (self.onboarding.as_ref())
-            .filter(|onboarding| onboarding.step == step)
-            .map(|onboarding| {
-                (
-                    onboarding.continue_stop.clone(),
-                    onboarding.skip_stop.clone(),
-                )
-            });
-        let button = (!button.is_empty()).then(|| {
-            div()
-                .id("onboarding-continue")
-                .when(self.a11y, |control| named_button(control, button.clone()))
-                .when_some(stops.clone(), |control, (stop, _)| {
-                    control.track_focus(&stop).focus_from_keys_only()
-                })
-                .focus_visible(ring(look.ink))
-                .relative()
-                .mt(px(BUTTON_GAP))
-                .h(px(BUTTON_HEIGHT))
-                .px(px(BUTTON_INSET))
-                .flex()
-                .items_center()
-                .gap(px(CHIP_GAP))
-                .rounded(px(BUTTON_RADIUS))
-                .bg(rgb(SIGNAL))
-                .text_color(rgb(PAPER))
-                .text_size(px(BUTTON_SIZE))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                // The dialog's Delete darkens as much under the pointer.
-                .hover(|style| style.opacity(0.9))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                // ↩ on it is the step's ↩, which goes on as the key goes down (onboarding_key).
-                .on_click(cx.listener(|shell, event: &ClickEvent, window, cx| {
-                    let returned = matches!(
-                        event,
-                        ClickEvent::Keyboard(KeyboardClickEvent {
-                            button: KeyboardButton::Enter,
-                            ..
-                        })
-                    );
-                    if !returned {
-                        shell.onboarding_continue("button", window, cx)
-                    }
-                }))
-                .child(button)
-                .child(chip(
-                    super::key_name("enter", super::OFF_THE_MAC),
-                    with_alpha(PAPER, CHIP),
-                ))
-                .children(drawn.map(|(at, settled)| button_frame(at, settled)))
-        });
-        let focus = (self.onboarding.as_ref())
-            .filter(|onboarding| onboarding.step == step)
-            .map(|onboarding| onboarding.focus.clone());
-        layer.child(
-            div()
-                .id(("onboarding-step", step as usize))
-                .when_some(focus, |content, focus| content.track_focus(&focus))
-                .when(named, |content| {
-                    let (title, line) = said;
-                    content
-                        .role(Role::Dialog)
-                        .aria_label(title)
-                        .aria_description(line)
-                })
-                .flex()
-                .flex_col()
-                .items_center()
-                // The import's words run as wide as its view, as its states' lines are longer.
-                .max_w(px(if step == Step::Import {
-                    IMPORT_WIDTH
-                } else {
-                    480.
-                }))
-                .child(display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(colors.ink(1.)))
-                .child(
-                    div()
-                        .mt(px(LINE_GAP))
-                        .text_center()
-                        .text_size(px(LINE_SIZE))
-                        .line_height(px(LINE_LINE))
-                        .text_color(colors.ink(QUIET))
-                        .child(line),
-                )
-                .children(swatches)
-                .children(switches)
-                .children(engines)
-                .children(favorites)
-                .children(import)
-                .children(button)
-                .children(account),
-        )
+                    .text_size(px(crate::tokens::text::BODY))
+                    .text_color(inks.text(1.))
+                    .children(column_items),
+            )
     }
 
-    /// The opt-ins offered in one box, as Settings' Privacy has them: a row each of its name over
-    /// its sentence, wrapping in the box, and Settings' switch in the green at the box's right edge,
-    /// centred on the row. A click anywhere on a row, the switch included, turns it.
-    fn opt_in_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(onboarding) = self.onboarding.as_ref() else {
+    /// A first device's recovery words (v9 §3.3), shown once: in columns on a plate to write
+    /// down, Copy, and the note on where a copy went while it's there. Their main button is at
+    /// the bottom (welcome).
+    fn welcome_words(&self, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(view) = self.account_view() else {
             return div();
         };
-        let switched = onboarding
-            .switched
-            .map(|(turned, at)| (turned, onboarding.secs_since(at)));
-        // Where they're drawn is kept once the step has come, not while it slides in.
-        let settled = onboarding.step == Step::OptIns && onboarding.settled;
-        let frames = onboarding.frames.clone();
-        // The import step's boxes, the ink a little over the ground.
-        let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
-        let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
-        let rows = self.opt_ins(cx).into_iter().map(|(opt_in, on)| {
-            let slid = match switched {
-                Some((turned, since)) if turned == opt_in => (since / SLIDE).min(1.),
-                _ => 1.,
-            };
-            let (name, sentence) = opt_in.words();
-            // Its text may take the row's width but the switch's, so a long sentence wraps rather
-            // than pushing the switch out of the row, where a click on it would miss (#1286).
-            let words = div()
-                .flex_1()
-                .min_w_0()
-                .line_height(px(OPT_IN_LINE))
-                .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name))
-                .child(div().text_color(colors.ink(QUIET)).child(sentence));
-            let control = div()
-                .relative()
-                .flex_none()
-                .ml(px(PADDING))
-                .child(
-                    stop_switch(&look, "switch", name, on, slid, look.accent, self.a11y)
-                        // A press is its row's click; here only Space, as ↩ is the step's Continue.
-                        .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
-                            if matches!(
-                                event,
-                                ClickEvent::Keyboard(KeyboardClickEvent {
-                                    button: KeyboardButton::Space,
-                                    ..
-                                })
-                            ) {
-                                shell.onboarding_switch(opt_in, cx);
-                            }
-                        })),
-                )
-                .child(opt_in_frame(frames.clone(), opt_in, "switch", settled));
-            let row = div()
-                .id(opt_in.name())
-                .relative()
-                .p(px(PADDING))
-                .flex()
-                .items_center()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |shell, _, _, cx| shell.onboarding_switch(opt_in, cx)))
-                .child(words)
-                .child(control)
-                .child(opt_in_frame(frames.clone(), opt_in, "row", settled));
-            div().child(row)
-        });
-        div()
-            .mt(px(BUTTON_GAP))
-            .w(px(OPT_IN_WIDTH))
-            .text_size(px(crate::tokens::text::BODY))
-            .text_color(look.ink)
-            .child(group(&look, rows))
-    }
-
-    /// The search engines offered in the opt-ins' box, a row each of a radio's dot and the engine's
-    /// name, the one picked filled in the green and its name medium. A click on a row picks it, and
-    /// the list is one stop for ⇥, its arrows moving the pick, as the swatches are.
-    fn engine_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let Some(onboarding) = self.onboarding.as_ref() else {
-            return div().into_any_element();
+        let now = cx.background_executor().now();
+        let (words, (copied, noted)) = {
+            let view = view.read(cx);
+            let words = view
+                .shown_words()
+                .map(<[String]>::to_vec)
+                .unwrap_or_default();
+            (words, view.copied(now))
         };
-        let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
-        let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
-        let a11y = self.a11y;
-        let rows = (onboarding.engines.0.iter().enumerate()).map(|(index, (_, name))| {
-            let on = onboarding.engine == Some(index);
-            let dot = div()
-                .flex_none()
-                .size(px(ENGINE_DOT))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .map(|dot| match on {
-                    true => dot.bg(rgb(SIGNAL)).child(
-                        div()
-                            .size(px(ENGINE_DOT_CENTER))
-                            .rounded_full()
-                            .bg(rgb(PAPER)),
-                    ),
-                    false => dot.border_1().border_color(colors.ink(QUIET)),
-                });
-            let toggled = match on {
-                true => Toggled::True,
-                false => Toggled::False,
-            };
-            let row = div()
-                .id(("onboarding-engine", index))
-                .when(a11y, |row| {
-                    row.role(Role::RadioButton)
-                        .aria_label(name.clone())
-                        .aria_toggled(toggled)
-                        .when(on, |row| row.aria_active_descendant())
-                })
-                .h(px(ENGINE_ROW))
-                .px(px(PADDING))
-                .flex()
-                .items_center()
-                .gap(px(PADDING))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(
-                    cx.listener(move |shell, _, _, cx| shell.onboarding_pick_engine(index, cx)),
-                )
-                .child(dot)
-                .child(
-                    div()
-                        .when(on, |name| name.font_weight(gpui::FontWeight::MEDIUM))
-                        .child(name.clone()),
-                );
-            div().child(row)
-        });
-        // The ring is the box's own, as a button's is, drawn over its plate: on a frame round it,
-        // the box would cover it.
-        group(&look, rows)
-            .id("onboarding-engines")
-            .when(a11y, |list| {
-                list.role(Role::RadioGroup).aria_label("Search engine")
-            })
-            .tab_index(0)
-            .when_some(self.first_stop(Step::SearchEngine), |list, stop| {
-                list.track_focus(&stop)
-            })
-            .focus_from_keys_only()
-            .focus_visible(ring(colors.ink(1.)))
-            .mt(px(BUTTON_GAP))
-            .w(px(OPT_IN_WIDTH))
-            .text_size(px(crate::tokens::text::BODY))
-            .text_color(look.ink)
-            .into_any_element()
-    }
-
-    /// The favorites offered, as the import view's tiles at its width, on the flow's ground, a
-    /// click ticking or unticking one. Tiles like the favorites they become say where they go.
-    fn favorite_tiles(
-        &self,
-        colors: Colors,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::Div> {
-        let look = Look::on(
-            colors.ground.blend(colors.ink(IMPORT_SURFACE)),
-            colors.ink(1.),
-            rgb(SIGNAL),
-        );
-        let view = self.importing.as_ref()?.view.clone();
-        let tiles = view.update(cx, |view, cx| {
-            view.set_look(look, cx);
-            view.favorite_tiles(window, cx)
-        })?;
-        Some(
+        let [x, y, width, radius] = t::WORDS_PLATE;
+        let [down, across] = t::WORDS_PADDING;
+        let [columns, line, size, number] = t::WORDS_GRID;
+        let columns = columns as usize;
+        let rows = words.len().div_ceil(columns);
+        let mono = crate::face::mono(&cx.text_system().all_font_names());
+        // Down each column, as they're written down.
+        let column = |c: usize| {
             div()
-                .mt(px(BUTTON_GAP))
-                .w(px(IMPORT_WIDTH))
+                .flex_1()
                 .flex()
                 .flex_col()
-                .items_center()
-                .text_size(px(crate::tokens::text::BODY))
-                .child(div().w_full().child(tiles)),
-        )
-    }
-
-    /// Skip, quiet at the window's bottom right, with Esc's chip.
-    /// What the import view shows the first launch for its state, while the step has one.
-    fn import_guide(&self, cx: &gpui::App) -> Option<Guide> {
-        self.onboarding.as_ref()?;
-        let importing = self.importing.as_ref()?;
-        Some(importing.view.read(cx).guide())
-    }
-
-    /// The stop of the choice of `step`, while it's the step shown: the one leaving, drawn under
-    /// it, has none.
-    fn first_stop(&self, step: Step) -> Option<gpui::FocusHandle> {
-        (self.onboarding.as_ref())
-            .filter(|onboarding| onboarding.step == step)
-            .map(|onboarding| onboarding.first_stop.clone())
-    }
-
-    /// Esc at the import: the view's own first, back from a browser's choices or the wait for
-    /// access, or Cancel while its import can stop; else it skips the step.
-    fn import_escape(&mut self, how: &str, cx: &mut Context<Self>) {
-        let left = (self.importing.as_ref())
-            .is_some_and(|importing| importing.view.update(cx, |view, cx| view.escape(cx)));
-        match left {
-            true => cx.notify(),
-            false => self.onboarding_next(how, cx),
-        }
-    }
-
-    /// The corner's Skip, or at a state of the import with somewhere to go back to, Back.
-    fn skip_button(
-        &self,
-        back: bool,
-        colors: Colors,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let chip = div()
-            .h(px(CHIP_HEIGHT))
-            .px(px(CHIP_INSET))
-            .flex()
-            .items_center()
-            .rounded(px(CHIP_RADIUS))
-            .bg(colors.ink(SKIP_CHIP))
-            .child("esc");
-        let stop = (self.onboarding.as_ref()).map(|onboarding| onboarding.skip_stop.clone());
-        div()
-            .id("onboarding-skip")
+                .children((0..rows).filter_map(|r| {
+                    let index = c * rows + r;
+                    let word = words.get(index)?;
+                    Some(
+                        div()
+                            .h(px(line))
+                            .flex()
+                            .child(
+                                div()
+                                    .w(px(number))
+                                    .text_color(inks.text(t::TEXT_3))
+                                    .child(format!("{}", index + 1)),
+                            )
+                            .child(word.clone()),
+                    )
+                }))
+        };
+        let copy_words = if copied { "Copied" } else { "Copy" };
+        let copy = card::small("onboarding-copy", copy_words.into(), inks)
             .when(self.a11y, |control| {
-                named_button(control, if back { "Back" } else { "Skip" })
+                named_button(
+                    control,
+                    match copied {
+                        true => "Recovery Words Copied",
+                        false => "Copy Recovery Words",
+                    },
+                )
             })
-            .when_some(stop, |control, stop| {
-                control.track_focus(&stop).focus_from_keys_only()
-            })
-            .rounded(px(CHIP_RADIUS))
-            .focus_visible(ring(colors.ink(1.)))
-            .absolute()
-            .right(px(SKIP_MARGIN))
-            .bottom(px(SKIP_MARGIN))
-            .flex()
-            .items_center()
-            .gap(px(CHIP_GAP))
-            .text_size(px(SKIP_SIZE))
-            .text_color(colors.ink(QUIET))
-            // A step brighter under the pointer, as a quiet control does.
-            .hover(move |style| style.text_color(colors.ink(1.)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |shell, _, _, cx| match back {
-                true => shell.import_escape("back", cx),
-                false => shell.onboarding_next("skip", cx),
+            .when_some(
+                self.step_stop(Step::Account, |o| &o.row_stop),
+                |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| {
+                if let Some(view) = shell.account_view() {
+                    view.update(cx, |view, cx| view.copy_words(cx));
+                }
             }))
-            .child(if back { "Back" } else { "Skip" })
-            .child(chip)
+            .relative()
+            .children(self.place(Step::Account, "copy"));
+        let [_, line_size, line_line] = t::LINE;
+        div()
+            .size_full()
+            .child(card::heading(
+                (
+                    "Your recovery words".into(),
+                    "The only way back in if you lose every device. Shown once.".into(),
+                ),
+                true,
+                inks,
+                cx,
+            ))
+            .child(
+                card::at(x, y)
+                    .w(px(width))
+                    .rounded(px(radius))
+                    .bg(inks.field())
+                    .py(px(down))
+                    .px(px(across))
+                    .flex()
+                    .font_family(mono)
+                    .text_size(px(size))
+                    .line_height(px(line))
+                    .text_color(inks.text(1.))
+                    .children((0..columns).map(column)),
+            )
+            .child(welcome_centred(t::WORDS_COPY).child(copy))
+            .when(noted, |words| {
+                words.child(
+                    welcome_centred(t::WORDS_NOTE)
+                        .text_size(px(line_size))
+                        .line_height(px(line_line))
+                        .text_color(inks.text_2())
+                        .child(account::COPIED_NOTE),
+                )
+            })
+    }
+
+    /// A known account on a new device (v9 §3.4): Approve this Mac with the code a signed-in
+    /// device shows, while it waits; once none is asked, why, with Ask Again; and the recovery
+    /// words' field, Use Recovery Words' way instead.
+    fn welcome_approve(&self, shows: Welcome, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(view) = self.account_view() else {
+            return div();
+        };
+        let os = self.onboarding.as_ref().map_or(Os::Mac, |o| o.os);
+        let (state, entering) = {
+            let view = view.read(cx);
+            (view.state().clone(), view.entering())
+        };
+        let [knot, knot_top] = t::WELCOME_KNOT;
+        let [code_top, code_size, code_line] = t::APPROVE_CODE;
+        let [_, line_size, line_line] = t::LINE;
+        let [column, _] = t::WELCOME_COLUMN;
+        let [gap, _] = t::WELCOME_NEW;
+        let title: SharedString = match shows {
+            Welcome::Restore => "Enter your recovery words".into(),
+            _ => format!("Approve {}", here(os)).into(),
+        };
+        let line: SharedString = match shows {
+            Welcome::Approve => "Check that a signed-in device shows:".into(),
+            _ => "".into(),
+        };
+        let said_line = |text: SharedString| {
+            welcome_centred(t::APPROVE_LINE)
+                .text_size(px(line_size))
+                .line_height(px(line_line))
+                .text_color(inks.text_2())
+                .child(text)
+        };
+        let use_words = card::bare("onboarding-use-words", "Use Recovery Words".into(), inks)
+            .when(self.a11y, |control| {
+                named_button(control, "Use Recovery Words")
+            })
+            .when_some(
+                self.step_stop(Step::Account, |o| &o.words_stop),
+                |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| {
+                if let Some(view) = shell.account_view() {
+                    view.update(cx, |view, cx| view.enter_words(cx));
+                }
+            }))
+            .relative()
+            .children(self.place(Step::Account, "use-words"));
+        let mut parts: Vec<AnyElement> = Vec::new();
+        match shows {
+            Welcome::Approve => {
+                // The code once a device has answered, the build's blanks until then.
+                let code = match state.code.is_empty() {
+                    true => card::heading_text("––– –––", code_size, code_line, cx)
+                        .text_color(inks.text(t::TEXT_3)),
+                    false => {
+                        card::heading_text(account::grouped(&state.code), code_size, code_line, cx)
+                            .text_color(inks.text(1.))
+                    }
+                };
+                parts.push(welcome_centred(code_top).child(code).into_any_element());
+                parts.push(said_line("Waiting…".into()).into_any_element());
+                parts.push(
+                    welcome_buttons(t::APPROVE_BUTTONS)
+                        .child(use_words)
+                        .into_any_element(),
+                );
+            }
+            Welcome::Again => {
+                let why = state
+                    .problem
+                    .map_or(account::ASK_ANOTHER, account::problem_text);
+                let again = card::quiet("onboarding-ask-again", "Ask Again".into(), inks)
+                    .when(self.a11y, |control| named_button(control, "Ask Again"))
+                    .when_some(
+                        self.step_stop(Step::Account, |o| &o.row_stop),
+                        |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+                    )
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        if let Some(view) = shell.account_view() {
+                            view.update(cx, |view, cx| view.ask_again(cx));
+                        }
+                    }))
+                    .relative()
+                    .children(self.place(Step::Account, "ask-again"));
+                parts.push(said_line(why.into()).into_any_element());
+                parts.push(
+                    welcome_buttons(t::APPROVE_BUTTONS)
+                        .child(again)
+                        .child(use_words)
+                        .into_any_element(),
+                );
+            }
+            Welcome::Restore => {
+                let [field_top, field_height, field_radius, field_inset] = t::RESTORE_FIELD;
+                let refused = entering.as_ref().is_some_and(|(_, refused)| *refused);
+                let why = match (refused, state.problem) {
+                    (true, _) => Some(account::REFUSED_WORDS),
+                    (false, Some(Problem::WrongWords)) => {
+                        Some(account::problem_text(Problem::WrongWords))
+                    }
+                    _ => None,
+                };
+                let field = entering.map(|(input, _)| {
+                    div()
+                        .h(px(field_height))
+                        .px(px(field_inset))
+                        .flex()
+                        .items_center()
+                        .rounded(px(field_radius))
+                        .bg(inks.field())
+                        .key_context("AccountField")
+                        .on_action(cx.listener(|shell, _: &account::Keep, _, cx| {
+                            let Some(view) = shell.account_view() else {
+                                return;
+                            };
+                            let field = view.read(cx).open_field();
+                            if crate::dismissal::submits(&field, cx) {
+                                view.update(cx, |view, cx| view.keep_words(cx));
+                            }
+                        }))
+                        .on_action(cx.listener(|shell, _: &account::Leave, window, cx| {
+                            let Some(view) = shell.account_view() else {
+                                return;
+                            };
+                            let field = view.read(cx).open_field();
+                            if crate::dismissal::Close::escape_from(&field, cx).is_some() {
+                                view.update(cx, |view, cx| view.leave_field(window, cx));
+                            }
+                        }))
+                        .text_size(px(crate::tokens::text::BODY))
+                        .text_color(inks.text(1.))
+                        .relative()
+                        .children(self.place(Step::Account, "words-field"))
+                        .child(input)
+                });
+                parts.push(
+                    card::at((t::WIDTH - column) / 2., field_top)
+                        .w(px(column))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .flex()
+                        .flex_col()
+                        .gap(px(gap / 2.))
+                        .children(field)
+                        .child(card::welcome_button(self.main(
+                            Step::Account,
+                            "Restore".into(),
+                            inks,
+                            cx,
+                        )))
+                        .into_any_element(),
+                );
+                parts.extend(why.map(|why| said_line(why.into()).into_any_element()));
+            }
+            _ => {}
+        }
+        div()
+            .size_full()
+            .child(
+                card::at((t::WIDTH - knot) / 2., knot_top)
+                    .child(card::whole_knot(knot, inks.text(1.))),
+            )
+            .child(card::heading_at(
+                (title, line),
+                true,
+                t::APPROVE_HEADING,
+                inks,
+                cx,
+            ))
+            .children(parts)
+    }
+
+    /// You're woven in (v9 §9): the knot whole, the heading, the default browser's row and Help
+    /// improve, then Start Browsing on the foot's line, Back at its start.
+    fn done(&mut self, inks: Inks, first: bool, cx: &mut Context<Self>) -> gpui::Div {
+        let os = self.onboarding.as_ref().map_or(Os::Mac, |o| o.os);
+        let (title, _) = Step::Done.message(os);
+        let [knot, knot_top] = t::DONE_KNOT;
+        let [_, _, size, height] = t::HEADING;
+        let [group_top, group_width] = t::DONE_GROUP;
+        let [foot_top, foot_height] = t::FOOT;
+        let mut rows: Vec<AnyElement> = Vec::new();
+        let shown = self.onboarding.as_ref().is_some_and(|o| o.default_row);
+        if shown {
+            rows.push(self.default_row(os, inks, cx).into_any_element());
+        }
+        rows.extend(
+            (self.switch_list(Step::Done, inks, cx).into_iter()).map(IntoElement::into_any_element),
+        );
+        let main = self
+            .main(Step::Done, "Start Browsing".into(), inks, cx)
+            .into_any_element();
+        let back = (!first).then(|| self.back(Step::Done, inks, cx));
+        div()
+            .size_full()
+            .child(
+                card::at((t::WIDTH - knot) / 2., knot_top)
+                    .child(card::whole_knot(knot, inks.text(1.))),
+            )
+            .child(
+                card::at(0., t::DONE_HEADING)
+                    .w(px(t::WIDTH))
+                    .flex()
+                    .justify_center()
+                    .child(card::heading_text(title, size, height, cx).text_color(inks.text(1.))),
+            )
+            .when(!rows.is_empty(), |done| {
+                done.child(
+                    card::at((t::WIDTH - group_width) / 2., group_top).child(card::rows(
+                        rows,
+                        group_width,
+                        inks,
+                    )),
+                )
+            })
+            .child(
+                card::at(0., foot_top)
+                    .w(px(t::WIDTH))
+                    .h(px(foot_height))
+                    .flex()
+                    .justify_center()
+                    .child(main),
+            )
+            .children(back.map(|back| {
+                card::at(t::FOOT_SIDE, foot_top)
+                    .h(px(foot_height))
+                    .child(back)
+            }))
+    }
+
+    /// The default browser's row: Make Default while the system can be asked, a check disc once the
+    /// browser is the default; where the system can't be asked, where the desktop sets it.
+    fn default_row(&self, os: Os, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
+        let is = self.browser.is_default_browser();
+        let offers = default_browser::offers(os, false);
+        let (name, words): (SharedString, SharedString) = match is {
+            true => (
+                "Default browser".into(),
+                format!("{PRODUCT} is your default browser.").into(),
+            ),
+            false if offers => (
+                format!("Make {PRODUCT} your default browser").into(),
+                "Links from other apps open here.".into(),
+            ),
+            false => (
+                format!("Make {PRODUCT} your default browser").into(),
+                default_browser::detail(os, false).into(),
+            ),
+        };
+        let end = match (is, offers) {
+            (true, _) => Some(card::check_disc(inks).into_any_element()),
+            (false, true) => Some(
+                card::quiet("onboarding-make-default", "Make Default".into(), inks)
+                    .when(self.a11y, |control| named_button(control, "Make Default"))
+                    .when_some(
+                        self.step_stop(Step::Done, |o| &o.row_stop),
+                        |control, stop| control.track_focus(&stop).focus_from_keys_only(),
+                    )
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.browser.make_default_browser(cx);
+                        cx.notify();
+                    }))
+                    .relative()
+                    .children(self.place(Step::Done, "make-default"))
+                    .into_any_element(),
+            ),
+            (false, false) => None,
+        };
+        card::row(name, words, end, inks)
+    }
+
+    /// A row each of the step's switches: its name over its words, and Settings' switch at the
+    /// end. A click anywhere on a row, the switch included, turns it.
+    fn switch_list(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> Vec<gpui::Div> {
+        let Some(onboarding) = self.onboarding.as_ref() else {
+            return Vec::new();
+        };
+        let switched =
+            (onboarding.switched).map(|(turned, at)| (turned, onboarding.secs_since(at)));
+        let settled = onboarding.step == step && onboarding.settled;
+        let frames = onboarding.frames.clone();
+        let look = switch_look(inks);
+        let a11y = self.a11y;
+        (self.switches(step, cx).into_iter())
+            .map(|(switch, on)| {
+                let slid = match switched {
+                    Some((turned, since)) if turned == switch => {
+                        (since / settings_rows::SLIDE).min(1.)
+                    }
+                    _ => 1.,
+                };
+                let (name, words) = switch.words();
+                let control = div()
+                    .relative()
+                    .flex_none()
+                    .child(
+                        stop_switch(&look, "switch", name.clone(), on, slid, look.on, a11y)
+                            // A press is its row's click; here only Space, as ↩ is the step's.
+                            .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                                if matches!(
+                                    event,
+                                    ClickEvent::Keyboard(KeyboardClickEvent {
+                                        button: KeyboardButton::Space,
+                                        ..
+                                    })
+                                ) {
+                                    shell.onboarding_switch(switch, cx);
+                                }
+                            })),
+                    )
+                    .child(opt_in_frame(frames.clone(), switch, "switch", settled))
+                    .into_any_element();
+                div()
+                    .id(switch.name())
+                    .relative()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(
+                        cx.listener(move |shell, _, _, cx| shell.onboarding_switch(switch, cx)),
+                    )
+                    .child(card::row(name, words, Some(control), inks))
+                    .child(opt_in_frame(frames.clone(), switch, "row", settled))
+            })
+            .map(|row| div().child(row))
+            .collect()
+    }
+
+    /// The assistants, as Settings › Models has them, in first run's form of its row (v9 §4): each
+    /// signs in with its maker's own sign-in. Without the app's Agents, as in a test's shell, the
+    /// rows the preview gave, or none.
+    fn assistant_rows(&self, step: Step, inks: Inks, cx: &mut Context<Self>) -> gpui::Div {
+        use crate::agents::runner::Cli;
+        use crate::settings_rows::{Act, first_run_row};
+        // The line in text-2 and the mark in the text's ink (v9 §1, §4): mixed over the card's
+        // see-through ground, as Look::on would, they'd all but vanish.
+        let look = Look {
+            detail: inks.text_2(),
+            glyph: inks.text(1.),
+            ..Look::on(inks.group(), inks.text(1.), rgb(SIGNAL))
+        };
+        let shell = cx.weak_entity();
+        let a11y = self.a11y;
+        let rows = crate::agents::global(cx).map(|agents| {
+            let model = agents.read(cx);
+            let pressed = (self.onboarding.as_ref()).map_or(&[][..], |o| &o.pressed[..]);
+            let shown = Cli::ALL.map(|cli| (cli, card_row(model, cli, pressed.contains(&cli))));
+            let rows = shown.map(|(cli, shown)| {
+                let (agents, shell) = (agents.clone(), shell.clone());
+                // As Settings' rows do, but for its ⋯ menu, which is Settings' own, so it opens
+                // there.
+                let act = move |act: Act, _: &mut Window, cx: &mut gpui::App| match act {
+                    Act::Get => {
+                        let url = [cli.install_page().to_string()];
+                        let open = |shell: &mut Shell, cx: &mut Context<Shell>| {
+                            shell.browser.open_at(&url, false, 0, 0, cx);
+                        };
+                        shell.update(cx, open).ok();
+                    }
+                    Act::SignIn => {
+                        shell
+                            .update(cx, |shell, cx| shell.onboarding_sign_in(cli, cx))
+                            .ok();
+                    }
+                    Act::Cancel => agents.update(cx, |agents, _| agents.cancel_sign_in(cli)),
+                    // The card draws no mark.
+                    Act::Mark => {}
+                    Act::Menu => {
+                        let open = |shell: &mut Shell, cx: &mut Context<Shell>| {
+                            shell.browser.agents_settings(cx);
+                        };
+                        shell.update(cx, open).ok();
+                    }
+                };
+                first_run_row(
+                    &look,
+                    cli,
+                    &shown,
+                    a11y,
+                    card::check_disc(inks),
+                    Rc::new(act),
+                )
+                .children(self.place(step, cli.id()))
+            });
+            group(&look, rows)
+        });
+        let rows = rows.or_else(|| {
+            let shown = self.onboarding.as_ref()?.shown_assistants.clone()?;
+            let rows = shown.iter().map(|(cli, shown)| {
+                let act = Rc::new(|_: Act, _: &mut Window, _: &mut gpui::App| {});
+                first_run_row(&look, *cli, shown, a11y, card::check_disc(inks), act)
+                    .children(self.place(step, cli.id()))
+            });
+            Some(group(&look, rows))
+        });
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .text_size(px(crate::tokens::text::BODY))
+            .text_color(look.ink)
+            .children(rows)
+    }
+
+    /// The stop of the choice of `step`, while it's the step shown.
+    fn first_stop(&self, step: Step) -> Option<gpui::FocusHandle> {
+        self.step_stop(step, |onboarding| &onboarding.first_stop)
+    }
+
+    /// Keeps where the step shown draws `name`, as much of it as shows, for a test to click it.
+    pub(super) fn place(&self, step: Step, name: &'static str) -> Option<impl IntoElement + use<>> {
+        let places = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| onboarding.places.clone())?;
+        let frame = canvas(
+            move |bounds, window, _| {
+                let shown = bounds.intersect(&window.content_mask().bounds);
+                places.borrow_mut().insert(name, shown);
+            },
+            |_, _, _, _| {},
+        );
+        Some(frame.absolute().inset_0())
     }
 }
 
@@ -1645,26 +2620,52 @@ fn button_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl Int
     .inset_0()
 }
 
-/// Where each opt-in's row and switch is drawn, by the opt-in and "row" or "switch".
-type Frames = Rc<RefCell<HashMap<(OptIn, &'static str), Bounds<Pixels>>>>;
+/// Keeps where the foot's Skip is drawn once the step has `settled`, and logs where it is as each
+/// step settles and each time it moves, as "browser: onboarding skip at x y", for check.sh to click
+/// it there.
+fn skip_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| {
+            if !settled {
+                at.set(None);
+            } else if at.replace(Some(bounds)) != Some(bounds) {
+                let centre = bounds.center();
+                log!(
+                    "browser: onboarding skip at {:.0} {:.0}",
+                    f32::from(centre.x),
+                    f32::from(centre.y)
+                );
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
+}
 
-/// Keeps where an opt-in's `part` is drawn once the step has `settled`, and logs where its switch
-/// is each time it moves, as "browser: onboarding agents at x y", for check.sh to click it there.
+/// Where the step shown draws a control, by its name (Shell::place).
+pub(super) type Places = Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>;
+
+/// Where each switch's row and knob is drawn, by the switch and "row" or "switch".
+type Frames = Rc<RefCell<HashMap<(Switch, &'static str), Bounds<Pixels>>>>;
+
+/// Keeps where a switch's `part` is drawn once the step has `settled`, and logs where its knob is
+/// each time it moves, as "browser: onboarding command at x y", for check.sh to click it there.
 fn opt_in_frame(
     frames: Frames,
-    opt_in: OptIn,
+    switch: Switch,
     part: &'static str,
     settled: bool,
 ) -> impl IntoElement {
     canvas(
         move |bounds, _, _| {
             let moved =
-                settled && frames.borrow_mut().insert((opt_in, part), bounds) != Some(bounds);
+                settled && frames.borrow_mut().insert((switch, part), bounds) != Some(bounds);
             if moved && part == "switch" {
                 let at = bounds.center();
                 log!(
                     "browser: onboarding {} at {:.0} {:.0}",
-                    opt_in.name(),
+                    switch.name(),
                     f32::from(at.x),
                     f32::from(at.y)
                 );
@@ -1676,94 +2677,14 @@ fn opt_in_frame(
     .inset_0()
 }
 
-/// The theme picker's swatches in a row, the one picked ringed in the ink, each with a hairline
-/// edge so the lightest still reads on Paper.
-/// A screen reader reads them as one choice, a radio button each called by its colour.
-fn swatch_row(
-    picked: Option<usize>,
-    first: Option<gpui::FocusHandle>,
-    colors: Colors,
-    a11y: bool,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement + use<> {
-    // Each swatch's ring and the gap inside it, on both sides.
-    let ringed = SWATCH + 4. * SWATCH_RING;
-    div()
-        .id("onboarding-swatches")
-        .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Colour"))
-        // One stop, the arrows going along it, with the swatch picked read as they move.
-        .tab_index(0)
-        .when_some(first, |row, stop| row.track_focus(&stop))
-        .focus_from_keys_only()
-        .rounded_full()
-        .focus_visible(ring(colors.ink(1.)))
-        .mt(px(SWATCH_GAP))
-        .flex()
-        .gap(px(SWATCH_PITCH - ringed))
-        .children(SWATCHES.iter().enumerate().map(|(index, &color)| {
-            let ring = if picked == Some(index) {
-                colors.ink(1.)
-            } else {
-                colors.ink(0.)
-            };
-            let toggled = match picked == Some(index) {
-                true => Toggled::True,
-                false => Toggled::False,
-            };
-            div()
-                .id(("onboarding-swatch", index))
-                .when(a11y, |swatch| {
-                    swatch
-                        .role(Role::RadioButton)
-                        .aria_label(swatch_name(color))
-                        .aria_toggled(toggled)
-                        .when(picked == Some(index), |swatch| {
-                            swatch.aria_active_descendant()
-                        })
-                })
-                .p(px(SWATCH_RING))
-                .rounded_full()
-                .border(px(SWATCH_RING))
-                .border_color(ring)
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |shell, _, _, cx| shell.onboarding_pick(index, cx)))
-                .child(
-                    div()
-                        .size(px(SWATCH))
-                        .rounded_full()
-                        .bg(rgb(color))
-                        .border_1()
-                        .border_color(colors.ink(SWATCH_EDGE)),
-                )
-        }))
-}
-
-/// The flow's two colours: the ground, and the ink drawn on it.
-#[derive(Clone, Copy)]
-struct Colors {
-    ground: Rgba,
-    ink: u32,
-}
-
-impl Colors {
-    /// Paper with Ink on it in a light appearance, the other way round in a dark one, as the
-    /// app icon's tile and stem.
-    fn of(light: bool) -> Colors {
-        match light {
-            true => Colors {
-                ground: rgb(PAPER),
-                ink: INK,
-            },
-            false => Colors {
-                ground: rgb(INK),
-                ink: PAPER,
-            },
-        }
-    }
-
-    fn ink(&self, alpha: f32) -> Rgba {
-        with_alpha(self.ink, alpha)
-    }
+/// First run's main button for the welcome card, outside the card: `button` with its label in it
+/// and `key` at its end, if it has one, in a light window's inks or a dark one's.
+pub(super) fn main_button(
+    button: gpui::Stateful<gpui::Div>,
+    key: Option<SharedString>,
+    light: bool,
+) -> gpui::Stateful<gpui::Div> {
+    card::main_button(button, key, card::Inks::of(light))
 }
 
 fn with_alpha(color: u32, alpha: f32) -> Rgba {
@@ -1773,89 +2694,46 @@ fn with_alpha(color: u32, alpha: f32) -> Rgba {
     }
 }
 
-/// The brand's wordmark (ilo-studio's brand/logo/wordmark.svg), in its own units: a box from
-/// (7, 16), 214 × 154, holding the i's dot and stem, the l's stem, and the o's ring.
-const BOX: (f32, f32, f32, f32) = (7., 16., 214., 154.);
-const DOT_AT: (f32, f32, f32) = (19., 31., 15.);
-/// Each stem's left, top and bottom; both are 24 wide with round ends.
-const STEMS: [(f32, f32, f32); 2] = [(7., 70., 170.), (67., 20., 170.)];
-const STEM_WIDTH: f32 = 24.;
-/// The ring's middle, radius and stroke.
-const RING_AT: (f32, f32, f32, f32) = (171., 120., 38., 24.);
-/// Straight stretches a whole ring is drawn in.
-const RING_STRETCHES: usize = 96;
-
-/// The wordmark, `drawn` as far as it is, at the flow's size.
-fn wordmark(drawn: Drawn, colors: Colors) -> impl IntoElement {
-    let scale = WORDMARK_SCALE;
-    let ink = colors.ink(1.);
-    let dot_color = mix(ink, rgb(SIGNAL), drawn.signal);
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let at = |x: f32, y: f32| {
-                bounds.origin + point(px((x - BOX.0) * scale), px((y - BOX.1) * scale))
-            };
-            // The stems grow up from their feet, round at both ends.
-            for ((left, top, foot), way) in STEMS.into_iter().zip([drawn.stem_i, drawn.stem_l]) {
-                let height = (foot - top) * way;
-                if height <= 0. {
-                    continue;
-                }
-                let stem = Bounds::new(
-                    at(left, foot - height),
-                    size(px(STEM_WIDTH * scale), px(height * scale)),
-                );
-                let radius = px(STEM_WIDTH.min(height) / 2. * scale);
-                window.paint_quad(fill(stem, ink).corner_radii(radius));
-            }
-            // The ring from its top, anticlockwise as a hand writes an o, with round ends, which
-            // GPUI's stroke doesn't draw, as the check's.
-            let (cx_, cy, radius, stroke) = RING_AT;
-            let stretches = (RING_STRETCHES as f32 * drawn.ring).ceil() as usize;
-            if stretches > 0 {
-                let point_at = |i: usize| {
-                    let angle = -std::f32::consts::FRAC_PI_2
-                        - std::f32::consts::TAU * drawn.ring * i as f32 / stretches as f32;
-                    at(cx_ + radius * angle.cos(), cy + radius * angle.sin())
-                };
-                let mut path = PathBuilder::stroke(px(stroke * scale));
-                path.move_to(point_at(0));
-                for i in 1..=stretches {
-                    path.line_to(point_at(i));
-                }
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, ink);
-                }
-                let width = px(stroke * scale);
-                for end in [point_at(0), point_at(stretches)] {
-                    let cap = Bounds::centered_at(end, size(width, width));
-                    window.paint_quad(fill(cap, ink).corner_radii(width / 2.));
-                }
-            }
-            // The dot lands, growing about its middle, and takes the green.
-            if drawn.dot > 0. {
-                let (x, y, radius) = DOT_AT;
-                let side = px(2. * radius * scale * drawn.dot);
-                let dot = Bounds::centered_at(at(x, y), size(side, side));
-                window.paint_quad(fill(dot, dot_color).corner_radii(side / 2.));
-            }
-        },
-    )
-    .w(px(BOX.2 * scale))
-    .h(px(BOX.3 * scale))
-}
-
-/// `from` taking on `to`, `t` of the way.
-fn mix(from: Rgba, to: Rgba, t: f32) -> Rgba {
-    let at = |a: f32, b: f32| a + (b - a) * t;
-    Rgba {
-        r: at(from.r, to.r),
-        g: at(from.g, to.g),
-        b: at(from.b, to.b),
-        a: at(from.a, to.a),
-    }
-}
-
 #[cfg(test)]
 mod tests;
+
+/// An assistant's row on the card. Until its Sign In is pressed it draws from what the browser
+/// already holds, running nothing: its maker's plan and Sign In, or the sign-in the browser knows
+/// of. Once pressed, it says what the press learned, in the card's words.
+fn card_row(
+    agents: &crate::agents::Agents,
+    cli: crate::agents::runner::Cli,
+    pressed: bool,
+) -> crate::agents::sign_in::Shown {
+    use crate::agents::{ready::Ready, sign_in::Offer};
+    let shown = agents.assistant_row(cli);
+    let known = matches!(
+        shown.offer,
+        Offer::Cancel | Offer::SignedIn | Offer::TryAgain
+    ) || agents.found(cli) == Ready::SignedIn;
+    card_words(cli, shown, pressed || known)
+}
+
+/// What an assistant's row says on the card (v9 §4), from what Settings › Models' row would:
+/// its maker's plan until `learned` is what the browser holds or a press found, then the wait,
+/// a failed or closed sign-in, or its maker's plan again once signed in, as no use is reported.
+/// Settings' own words (a missing program, a sign-in that needs a terminal) aren't the card's:
+/// its Sign In does what Settings' does.
+fn card_words(
+    cli: crate::agents::runner::Cli,
+    shown: crate::agents::sign_in::Shown,
+    learned: bool,
+) -> crate::agents::sign_in::Shown {
+    use crate::agents::sign_in::Offer;
+    let offer = match learned {
+        true => shown.offer,
+        false => Offer::SignIn,
+    };
+    let line = match offer {
+        // The wait's own line, which Settings › Models says too (FR19).
+        Offer::Cancel => shown.line,
+        Offer::TryAgain => "Sign-in didn't finish.".into(),
+        _ => format!("Your {} plan", crate::settings_rows::assistant_name(cli)),
+    };
+    crate::agents::sign_in::Shown { line, offer }
+}

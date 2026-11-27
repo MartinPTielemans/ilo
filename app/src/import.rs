@@ -20,6 +20,7 @@ pub mod app_icons;
 pub mod arc;
 pub mod ardia;
 mod arrival;
+mod bring;
 pub mod chromium;
 pub mod dia;
 pub mod extensions;
@@ -56,12 +57,16 @@ use crate::settings_rows::{
 use crate::theme::Theme;
 use crate::tokens::radius;
 use crate::tokens::settings::{
-    BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
-    CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, HEADER_GAP, ROW_X, STEP,
+    BOX_GAP, BUTTONS_TOP, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS, CONTROL_GAP,
+    DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE, GLYPH_PLATE_GAP,
+    HEADER_GAP, ROW_X, STEP,
 };
-use crate::tokens::shell::import::BADGE;
+use crate::tokens::shell::import::{
+    BADGE, KIND_CHIP_FILL, KIND_CHIP_GAP, KIND_CHIP_HEIGHT, KIND_CHIP_INSET, KIND_CHIP_LINE,
+    KIND_CHIP_TEXT, KINDS_LABEL, KINDS_LABEL_GAP, KINDS_LABEL_LINE, KINDS_TOP,
+};
 use crate::tokens::text;
+pub(crate) use bring::{Bring, Bringing, Chip};
 use found::{Address, Found, FromProfile, Page, Split, Tab};
 use plan::{Add, Counts, Existing, Plan, ProfileRef, SpaceRef, Target};
 use read::{Kind, ReadError};
@@ -639,7 +644,30 @@ pub struct ImportView {
     last_imports: Vec<(String, SystemTime)>,
     /// What the import shown came to, as Done's row says it, when something came in.
     came: Option<Came>,
+    /// What the guided list's chips leave out of the browser picked, as a click on one does.
+    left_out: Vec<Kind>,
+    /// The passwords file the guided list's chip chose, which comes with the browser picked.
+    list_passwords: Option<PathBuf>,
+    /// The browser picked whose files couldn't be read, as first run's card says it (bring.rs).
+    unread: Option<usize>,
+    /// The browser and the chips of the import first run's card began, which it draws as it runs.
+    bringing: Option<(usize, Vec<Chip>)>,
+    /// The browsers' icons at the pixels first run's card asked for them at.
+    card_icons: (u32, Vec<Option<std::sync::Arc<gpui::RenderImage>>>),
 }
+
+/// The guided list's chips, each what of a browser it brings: shown where the browser picked has
+/// any of its kinds, and a click leaves all of them out or brings them back.
+const KIND_CHIPS: [(&str, &[Kind]); 5] = [
+    (
+        "Spaces and tabs",
+        &[Kind::Spaces, Kind::Favorites, Kind::OpenTabs],
+    ),
+    ("Bookmarks", &[Kind::Bookmarks, Kind::ReadingList]),
+    ("History", &[Kind::History]),
+    ("Addresses", &[Kind::Addresses]),
+    ("Extensions", &[Kind::Extensions]),
+];
 
 /// What came in, as Done's row says it at a glance: "Chrome came in", over its counts, "1 Space ·
 /// 3 pinned tabs", and what more there is to say, such as how the passwords file went.
@@ -703,6 +731,11 @@ impl ImportView {
             import_when_read: false,
             last_imports,
             came: None,
+            left_out: Vec::new(),
+            list_passwords: None,
+            unread: None,
+            bringing: None,
+            card_icons: (0, Vec::new()),
         }
     }
 
@@ -863,15 +896,18 @@ impl ImportView {
     /// anything, as elsewhere Esc is the host's, which on the first launch's list skips the step.
     pub fn escape(&mut self, cx: &mut Context<Self>) -> bool {
         match &self.step {
+            // First run's card has no list to go back to: Esc there cancels a wait and nothing
+            // else (first-run-v9 §1).
+            Step::Pick { .. } | Step::NoAccess { .. } if self.guided => false,
+            // The card's Cancel, stalled or not: until its Spaces are in, nothing is written.
+            Step::Running { run, .. } if self.guided && !run.placed => {
+                log!("browser: import escape");
+                self.stop_bringing(cx);
+                true
+            }
             Step::Pick { .. } | Step::NoAccess { .. } => {
                 log!("browser: import escape");
                 self.back(cx);
-                true
-            }
-            // Stalled, the first launch's Esc skips the step, and the import goes on waiting.
-            Step::Running { run, .. } if self.guided && !run.placed && run.stalled.is_none() => {
-                log!("browser: import escape");
-                self.cancel(cx);
                 true
             }
             // Settings' goes back to the page from a stopped import, as Done does.
@@ -906,14 +942,21 @@ impl ImportView {
                 .map(Source::name)
                 .unwrap_or_default()
         };
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let (title, line, button, corner) = match &self.step {
             Step::List => (
-                "Bring your stuff.".to_string(),
-                format!("From the browser you used. It all stays on {here}."),
+                "Bring your stuff".to_string(),
+                format!("From a browser on {here}."),
                 (!self.sources.is_empty())
                     .then(|| format!("Import from {}", name(self.picked_row))),
                 Corner::Skip,
+            ),
+            // The list's Import reads the browser first, and the list stays until that's done.
+            Step::Pick { .. } if self.guided && self.import_when_read => (
+                "Bring your stuff".to_string(),
+                format!("From a browser on {here}."),
+                None,
+                Corner::Back,
             ),
             Step::Pick { source, .. } => (
                 format!("What comes from {}.", name(*source)),
@@ -998,8 +1041,8 @@ impl ImportView {
                 Corner::Skip,
             ),
             _ => (
-                "Bring your stuff.".to_string(),
-                format!("From the browser you used. It all stays on {here}."),
+                "Bring your stuff".to_string(),
+                format!("From a browser on {here}."),
                 None,
                 Corner::Skip,
             ),
@@ -1025,6 +1068,9 @@ impl ImportView {
 
     fn pressed(&mut self, cx: &mut Context<Self>) {
         match &self.step {
+            Step::List if self.picked_row < self.sources.len() && self.guided => {
+                self.import_picked_row(cx)
+            }
             Step::List if self.picked_row < self.sources.len() => self.pick(self.picked_row, cx),
             Step::Pick { .. } => self.import(cx),
             Step::NoAccess { .. } => self.host.open_full_disk_access(),
@@ -1047,6 +1093,55 @@ impl ImportView {
         }
     }
 
+    /// The first launch's Import from …: brings the browser picked at once, with what its chips
+    /// leave out left out and the passwords file one chose, once its files are read.
+    fn import_picked_row(&mut self, cx: &mut Context<Self>) {
+        let (left_out, file) = (self.left_out.clone(), self.list_passwords.clone());
+        self.pick(self.picked_row, cx);
+        if let Step::Pick {
+            picked, passwords, ..
+        } = &mut self.step
+        {
+            picked.retain(|kind| !left_out.contains(kind));
+            *passwords = file.map(|file| (file, true));
+        }
+        self.import(cx);
+    }
+
+    /// Leaves out what the chip `at` brings, or brings it back.
+    fn toggle_chip(&mut self, at: usize, cx: &mut Context<Self>) {
+        let (label, kinds) = KIND_CHIPS[at];
+        let on = !kinds.iter().any(|kind| self.left_out.contains(kind));
+        match on {
+            true => self.left_out.extend(kinds.iter().copied()),
+            false => self.left_out.retain(|kind| !kinds.contains(kind)),
+        }
+        // check.sh reads this line.
+        log!("browser: import chip {label} {}", !on);
+        cx.notify();
+    }
+
+    /// Asks for the passwords file the browser picked exported, which the list's Import brings
+    /// with it; once one is chosen, a click leaves it out again.
+    fn toggle_list_passwords(&mut self, cx: &mut Context<Self>) {
+        if self.list_passwords.take().is_some() {
+            log!("browser: import passwords file left out");
+            return cx.notify();
+        }
+        let view = cx.entity().downgrade();
+        let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
+            view.update(cx, |view, cx| {
+                if let Some(file) = file {
+                    log!("browser: import passwords file {}", file_name(&file));
+                    view.list_passwords = Some(file);
+                    cx.notify();
+                }
+            })
+            .ok();
+        });
+        self.host.clone().choose_file(Exported::Passwords, then, cx);
+    }
+
     /// The favorites the last import offers from the history it read, the sites visited most;
     /// none until it's read them. An import that brought favorites, as Arc's does, offers none.
     pub fn suggested(&self) -> Option<&[Tab]> {
@@ -1057,12 +1152,6 @@ impl ImportView {
     #[cfg(test)]
     pub(crate) fn offer(&mut self, tabs: Vec<Tab>) {
         self.suggested = Some(tabs);
-    }
-
-    /// The step last drawn, as check.sh reads it from the log.
-    #[cfg(test)]
-    pub(crate) fn drawn(&self) -> Option<&'static str> {
-        self.drawn
     }
 
     /// Makes `tabs` favorites of `space`, as the user ticked them.
@@ -1082,6 +1171,7 @@ impl ImportView {
             _ => read::kinds(&self.sources[source]).to_vec(),
         };
         self.crumb = Some(self.sources[source].name());
+        self.unread = None;
         self.step = Step::Pick {
             source,
             picked,
@@ -1148,6 +1238,13 @@ impl ImportView {
                 return self.wait_for_access(source, picked, again, cx);
             }
             Ok(found) => found,
+            // First run's card says so and offers Try Again, the browser still picked.
+            Err(error) if self.guided => {
+                log!("browser: import from {name} failed: {error}");
+                self.unread = Some(source);
+                self.import_when_read = false;
+                return cx.notify();
+            }
             Err(error) => {
                 log!("browser: import from {name} failed: {error}");
                 return self.finish(format!("Couldn't read {name}'s data: {error}."), cx);
@@ -1191,7 +1288,8 @@ impl ImportView {
             picked,
             again,
         };
-        self.import_when_read = false;
+        // The first launch's list imports at once, so it does once the app may read it.
+        self.import_when_read &= self.guided;
         let view = cx.entity().downgrade();
         self.host.when_active(Box::new(move |cx| {
             view.update(cx, |view, cx| {
@@ -1469,6 +1567,8 @@ impl ImportView {
     /// Brings in what was picked from what the browser's files gave, or once they have, if
     /// they're still being read.
     pub(crate) fn import(&mut self, cx: &mut Context<Self>) {
+        // What the card's chips bring, kept for them to stay as the import runs.
+        self.keep_bringing();
         let Step::Pick {
             source,
             picked,
@@ -2102,7 +2202,7 @@ impl ImportView {
     fn no_access(&self, source: usize, again: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
         let look = &self.look;
         let name = self.sources[source].name();
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let open = self
             .control("import-full-disk-access", "Open System Settings")
             .on_click(cx.listener(|view, _, _, _| view.host.open_full_disk_access()));
@@ -2131,7 +2231,7 @@ impl ImportView {
             .items_center()
             .gap(px(CONTROL_GAP))
             .child(format!("Turn on {app}"))
-            .child(switch(look, true, 1., look.accent));
+            .child(switch(look, true, 1., look.on));
         let steps = [
             step(
                 1,
@@ -2348,7 +2448,7 @@ impl ImportView {
             true => list.child(line(
                 "No browser to import from was found on this computer.",
             )),
-            false => list.child(self.browsers(cx)),
+            false => list.child(self.browsers(cx)).children(self.kind_chips(cx)),
         };
         let extensions = self.extensions_box(cx);
         let files = match self.guided {
@@ -2356,6 +2456,80 @@ impl ImportView {
             false => self.files(cx),
         };
         list.children(extensions).child(files).into_any_element()
+    }
+
+    /// What comes with the browser the guided list picked, as chips: each filled while it comes,
+    /// which a click leaves out, and the passwords file outlined, as it never comes by itself.
+    fn kind_chips(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let look = &self.look;
+        let source = self.sources.get(self.picked_row).filter(|_| self.guided)?;
+        let kinds = read::kinds(source);
+        let fill = look.ink.opacity(KIND_CHIP_FILL);
+        let chip = |id: gpui::ElementId, label: &'static str, on: bool| {
+            div()
+                .id(id)
+                .when(self.a11y, |chip| named_check(chip, label, on))
+                .relative()
+                .flex_none()
+                .h(px(KIND_CHIP_HEIGHT))
+                .px(px(KIND_CHIP_INSET))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .text_size(px(KIND_CHIP_TEXT))
+                .line_height(px(KIND_CHIP_LINE))
+                .when(on, |chip| chip.bg(fill).text_color(look.ink))
+                .when(!on, |chip| {
+                    chip.border_1().border_color(fill).text_color(look.detail)
+                })
+                .child(label)
+                .child(drawn(format!("import-chip {label}"), self.drawn_at.clone()))
+        };
+        let chips = KIND_CHIPS
+            .iter()
+            .enumerate()
+            .filter_map(|(at, (label, of))| {
+                let has: Vec<Kind> = of
+                    .iter()
+                    .copied()
+                    .filter(|kind| kinds.contains(kind))
+                    .collect();
+                if has.is_empty() {
+                    return None;
+                }
+                let on = !has.iter().any(|kind| self.left_out.contains(kind));
+                Some(
+                    chip(("import-chip", at).into(), label, on)
+                        .on_click(cx.listener(move |view, _, _, cx| view.toggle_chip(at, cx))),
+                )
+            });
+        let passwords = chip(
+            "import-chip-passwords".into(),
+            "Passwords, from a file…",
+            self.list_passwords.is_some(),
+        )
+        .on_click(cx.listener(|view, _, _, cx| view.toggle_list_passwords(cx)));
+        let label = div()
+            .text_size(px(KINDS_LABEL))
+            .line_height(px(KINDS_LABEL_LINE))
+            .text_color(look.detail)
+            .child("What comes with you");
+        // At the rows' edge, as the drawing has them.
+        let wrap = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(KIND_CHIP_GAP))
+            .children(chips)
+            .child(passwords);
+        Some(
+            div()
+                .pt(px(KINDS_TOP - BOX_GAP))
+                .flex()
+                .flex_col()
+                .gap(px(KINDS_LABEL_GAP))
+                .child(label)
+                .child(wrap),
+        )
     }
 
     /// The extensions the last import listed, under a heading that says where Add… takes each,
@@ -2397,7 +2571,7 @@ impl ImportView {
                     view.add_extension(id, cx);
                 }
             }));
-            let said = format!("{} blocks ads itself", env!("APP_NAME"));
+            let said = format!("{} blocks ads itself", env!("PRODUCT_NAME"));
             rows.push(detailed_row(
                 look,
                 self::listed(&names),
@@ -2465,13 +2639,7 @@ impl ImportView {
                         .on_click(
                             cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
                         )
-                        .child(checked_row(
-                            look,
-                            on,
-                            name.clone(),
-                            look.accent,
-                            rgb(CHECK_TICK),
-                        ))
+                        .child(checked_row(look, on, name.clone(), look.on, look.knob_on))
                 });
                 Some(group(look, rows.map(|row| div().child(row))))
             }
@@ -2627,7 +2795,8 @@ impl ImportView {
     }
 
     /// A browser's row in the guided list, which a click picks: the one picked on a plate, with
-    /// the ↩ that brings it at its end.
+    /// its tick at its end and the others' empty, neutral as the sheet's controls are; the
+    /// step's button says the one ↩ brings.
     fn guided_row(
         &self,
         index: usize,
@@ -2638,18 +2807,28 @@ impl ImportView {
     ) -> gpui::Div {
         let look = &self.look;
         let picked = index == self.picked_row;
-        let enter = picked.then(|| {
-            svg()
-                .path("icons/corner-down-left.svg")
-                .size(px(DISCLOSURE_GLYPH))
-                .text_color(look.detail)
-                .into_any_element()
-        });
+        let tick = div()
+            .flex_none()
+            .size(px(BADGE))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(picked, |tick| {
+                tick.bg(look.ink).child(
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(BADGE * 0.75))
+                        .text_color(look.surface),
+                )
+            })
+            .when(!picked, |tick| tick.border_1().border_color(look.detail))
+            .into_any_element();
         let line = (!line.is_empty()).then(|| line.into());
         let row = frame()
             .child(self.app_plate(index))
             .child(self.row_words(source, line))
-            .children(enter.map(|enter| end([enter])));
+            .child(end([tick]));
         let hovered = look.hovered;
         div().child(
             div()
@@ -2667,16 +2846,25 @@ impl ImportView {
         )
     }
 
-    /// The guided list's files, as one quiet line: a bookmarks file or a passwords file, each a
-    /// link, in the ink, to the system's open panel.
+    /// The guided list's files, as one quiet line under it: a bookmarks file or a passwords
+    /// file, each a link, in the ink, to the system's open panel.
     fn file_links(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
-        let said = "Or bring a bookmarks file or a passwords file.";
+        // With a browser found, its chips bring the passwords file, and this line a browser's
+        // bookmarks from another computer.
+        let found = !self.sources.is_empty();
+        let said = match found {
+            true => "Another computer? Bring a bookmarks file",
+            false => "Another browser or computer? Bring a bookmarks file or a passwords file.",
+        };
         let range = |part: &str| {
             let start = said.find(part).unwrap_or_default();
             start..start + part.len()
         };
-        let links = vec![range("bookmarks file"), range("passwords file")];
+        let links = match found {
+            true => vec![range("Bring a bookmarks file")],
+            false => vec![range("bookmarks file"), range("passwords file")],
+        };
         let ink = gpui::HighlightStyle {
             color: Some(look.ink.into()),
             ..Default::default()
@@ -2700,8 +2888,6 @@ impl ImportView {
         );
         div()
             .px(px(ROW_X))
-            .flex()
-            .justify_center()
             .text_size(px(text::SMALL))
             .text_color(look.detail)
             .child(text)
@@ -2726,14 +2912,18 @@ impl ImportView {
             .relative()
             .child(drawn("import-passwords".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.choose_passwords(cx)));
-        let row = row(
-            "From a file",
-            div()
-                .flex()
-                .gap(px(CONTROL_GAP))
-                .child(bookmarks)
-                .child(passwords)
-                .into_any_element(),
+        let row = crate::settings_rows::detailed_row(
+            look,
+            "Import a file",
+            "Bookmarks as HTML, passwords as CSV.",
+            Some(
+                div()
+                    .flex()
+                    .gap(px(CONTROL_GAP))
+                    .child(bookmarks)
+                    .child(passwords)
+                    .into_any_element(),
+            ),
         );
         let said = match self.sources.is_empty() {
             false => "Passwords come only from a file you export. Each browser's step says where.",
@@ -2852,7 +3042,7 @@ impl ImportView {
                 .id(("import-kind", kind as usize))
                 .when(self.a11y, |toggle| named_switch(toggle, kind.label(), on))
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle(kind, cx)))
-                .child(switch(look, on, slid, look.accent));
+                .child(switch(look, on, slid, look.on));
             let chips = (read.as_ref())
                 .filter(|_| kind == Kind::Spaces)
                 .map(|read| chips(look, &read.found.spaces));
@@ -2960,7 +3150,7 @@ impl ImportView {
                     .id("import-pick-passwords-switch")
                     .when(self.a11y, |toggle| named_switch(toggle, "Passwords", *on))
                     .on_click(cx.listener(|view, _, _, cx| view.toggle_passwords(cx)))
-                    .child(switch(look, *on, 1., look.accent));
+                    .child(switch(look, *on, 1., look.on));
                 let said = format!("**{}**, read by Chromium's importer", file_name(file));
                 (said, *on, toggle.into_any_element())
             }
@@ -3065,7 +3255,7 @@ fn access_said(again: bool) -> String {
         false => "Waiting for access…".into(),
         true => format!(
             "Still no access. If you turned it on, quit {app} and open it again.",
-            app = env!("APP_NAME")
+            app = env!("PRODUCT_NAME")
         ),
     }
 }
@@ -3483,6 +3673,7 @@ impl Render for ImportView {
         };
         let content = match &self.step {
             Step::List => self.list(cx),
+            Step::Pick { .. } if self.guided && self.import_when_read => self.list(cx),
             Step::Pick { source, .. } => self.picking(*source, cx),
             Step::Running { name, run, .. } => {
                 // Cancel while there's still something it stops, and Try Again once a profile
@@ -3583,7 +3774,7 @@ impl Render for ImportView {
                                 div()
                                     .size(px(BADGE))
                                     .rounded_full()
-                                    .bg(look.accent)
+                                    .bg(look.on)
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -3591,7 +3782,7 @@ impl Render for ImportView {
                                         svg()
                                             .path("icons/check.svg")
                                             .size(px(BADGE * 0.75))
-                                            .text_color(gpui::white()),
+                                            .text_color(look.knob_on),
                                     ),
                             );
                         let counts = (!came.counts.is_empty()).then(|| came.counts.clone());

@@ -9,56 +9,102 @@ use gpui::{
 };
 
 use crate::{
+    palette::TEXT_TERTIARY,
     passwords::Key,
     shell::{
-        Command, FOOTER_HEIGHT, Folders, NAV_PRESS_SCALE, NAV_SIZE, NAV_TOP, PRESS_TIME, Page,
-        SIDEBAR_BUTTON_X, Shell, beside::AtRest, header::nav_places, history::HOLD,
+        CONTROLS_PLATE, CONTROLS_TOP, Command, FOOTER_HEIGHT, Folders, NAV_PRESS_SCALE, NAV_SIZE,
+        PRESS_TIME, Page, Shell, WINDOW_BUTTONS, beside::AtRest, header::nav_places, history::HOLD,
         library::LIBRARY_BACK_INSET, recorder::Recorder,
     },
     site_controls::Place,
+    tokens::shell::{
+        CONTROLS_GAP, CONTROLS_GLYPH, CONTROLS_INSET, CONTROLS_SIDEBAR_GLYPH, ICON_INK,
+        PLATE_INSET, WINDOW_BUTTON_SIZE,
+    },
 };
 
-/// Back, forward and reload in the 228 pt sidebar a window starts with (Arc 1.170).
-const BACK_X: f32 = 122.;
-const FORWARD_X: f32 = 156.;
-const RELOAD_X: f32 = 190.;
+/// The plates of back, forward and reload in the 228 pt sidebar a window starts with: their
+/// glyphs' middles are 158, 182 and 206 across.
+const BACK_X: f32 = 146.;
+const FORWARD_X: f32 = 170.;
+const RELOAD_X: f32 = 194.;
 
-/// Arc's back, forward and reload keep to the sidebar's right edge, 6 in, 2 apart: at 228 where
-/// ours always were, at 347 where Arc 1.170 has them, and the sidebar button where it was.
+/// The sidebar button's plate, whose glyph starts the row's gap past the window's last button:
+/// off that button's middle, so another spacing of the window's buttons is one number.
+fn sidebar_x() -> f32 {
+    let (last, _) = WINDOW_BUTTONS[2];
+    last + WINDOW_BUTTON_SIZE / 2. + CONTROLS_GAP - (CONTROLS_PLATE - CONTROLS_SIDEBAR_GLYPH) / 2.
+}
+
+/// Where a glyph of the row's starts in its plate, and the row's ends, in from the sidebar's.
+const GLYPH_IN: f32 = (CONTROLS_PLATE - CONTROLS_GLYPH) / 2.;
+const EDGE: f32 = PLATE_INSET + CONTROLS_INSET;
+
+/// Back, forward and reload keep to the sidebar's right edge, their glyphs 14 in and 8 apart, at
+/// any width, and the sidebar button stays where it was, 8 past the window's buttons.
 #[test]
 fn back_forward_and_reload_keep_to_the_sidebars_right_edge() {
     let at = |width| nav_places(width, false, false);
     assert_eq!(
         at(228.),
-        [Some(77.), Some(BACK_X), Some(FORWARD_X), Some(RELOAD_X)]
+        [
+            Some(sidebar_x()),
+            Some(BACK_X),
+            Some(FORWARD_X),
+            Some(RELOAD_X)
+        ]
     );
-    assert_eq!(at(347.), [Some(77.), Some(241.), Some(275.), Some(309.)]);
-    let [_, _, forward, reload] = at(500.);
     assert_eq!(
-        (forward.unwrap() + 34., reload.unwrap() + 32.),
-        (reload.unwrap(), 494.)
+        at(347.),
+        [Some(sidebar_x()), Some(265.), Some(289.), Some(313.)]
+    );
+    let [_, _, forward, reload] = at(500.);
+    // Reload's glyph, 16 wide in the middle of its plate of 24.
+    assert_eq!(
+        (forward.unwrap() + 24., reload.unwrap() + 4. + 16.),
+        (reload.unwrap(), 500. - 14.)
     );
 }
 
-/// Narrower than 228 reload goes, then forward under 194, the rest still at the right edge, and
-/// back never comes nearer the sidebar button than its 13 at 228.
+/// A narrowing sidebar loses reload, then forward, each at the width where back's glyph would come
+/// nearer the sidebar button's than the row's gap; what's left stays at the right edge.
 #[test]
 fn a_narrow_sidebar_loses_reload_then_forward() {
     let at = |width| nav_places(width, false, false);
-    assert_eq!(at(227.), [Some(77.), Some(155.), Some(189.), None]);
-    assert_eq!(at(194.), [Some(77.), Some(122.), Some(156.), None]);
-    assert_eq!(at(193.), [Some(77.), Some(155.), None, None]);
-    assert_eq!(at(164.), [Some(77.), Some(126.), None, None]);
+    // Where the sidebar button's glyph ends, and the narrowest sidebar with room for `count`
+    // glyphs after it, each the row's gap after the one before.
+    let glyph_end = sidebar_x() + (CONTROLS_PLATE + CONTROLS_SIDEBAR_GLYPH) / 2.;
+    let narrowest = |count: f32| glyph_end + count * (CONTROLS_GAP + CONTROLS_GLYPH) + EDGE;
+    // How far back's glyph starts after the sidebar button's, and where the last glyph ends.
+    let gap = |width: f32| at(width)[1].unwrap() + GLYPH_IN - glyph_end;
+    let end = |width: f32| {
+        let last = at(width).into_iter().flatten().last().unwrap();
+        width - (last + GLYPH_IN + CONTROLS_GLYPH)
+    };
+    for (count, shown) in [(3., 4), (2., 3)] {
+        let width = narrowest(count);
+        let places = at(width);
+        assert_eq!(places[0], Some(sidebar_x()));
+        assert_eq!(places.iter().flatten().count(), shown, "at {width}");
+        assert_eq!((gap(width), end(width)), (CONTROLS_GAP, EDGE), "at {width}");
+        // A point narrower the last one goes, and the rest are at the edge with room to spare.
+        let places = at(width - 1.);
+        assert_eq!(places.iter().flatten().count(), shown - 1, "under {width}");
+        assert_eq!(end(width - 1.), EDGE, "under {width}");
+        assert!(gap(width - 1.) > CONTROLS_GAP, "under {width}");
+    }
 }
 
-/// In full screen, with no traffic lights, the sidebar button's glyph is centred 29.25 in (Arc
-/// 1.171), and the others keep their places, with room for all three down to the narrowest.
+/// In full screen, with no window buttons, the sidebar button's glyph starts the row, 14 in as
+/// reload's ends it, and the others keep their places, with room for all three down to the
+/// narrowest.
 #[test]
 fn in_full_screen_the_sidebar_button_moves_left() {
     let [sidebar, back, ..] = nav_places(228., true, false);
+    // Its glyph, 18 wide in the middle of its plate.
     assert_eq!(
-        (sidebar.unwrap() + NAV_SIZE / 2., back),
-        (29.25, Some(BACK_X))
+        (sidebar.unwrap() + (CONTROLS_PLATE - 18.) / 2., back),
+        (14., Some(BACK_X))
     );
     assert_eq!(nav_places(165., true, false).iter().flatten().count(), 4);
 }
@@ -90,8 +136,8 @@ fn site_controls_open_under_the_url_field(cx: &mut TestAppContext) {
         shell.set_selected(2, cx);
         shell.run(Command::SiteControls, "ui", cx);
     });
-    let button = Bounds::new(point(px(191.), px(49.)), size(px(30.), px(30.)));
-    let field = Bounds::new(point(px(8.), px(46.)), size(px(212.), px(36.)));
+    let button = Bounds::new(point(px(191.), px(47.)), size(px(30.), px(30.)));
+    let field = Bounds::new(point(px(8.), px(44.)), size(px(212.), px(36.)));
     assert_eq!(
         host.site_controls.take(),
         [(2, Place::Button { field, button })]
@@ -107,7 +153,7 @@ fn site_controls_open_at_the_corner_with_the_sidebar_hidden(cx: &mut TestAppCont
         shell.sidebar_hidden = true;
         shell.run(Command::SiteControls, "ui", cx);
     });
-    let corner = point(px(18.), px(8.));
+    let corner = point(px(8.), px(8.));
     assert_eq!(host.site_controls.take(), [(1, Place::Corner(corner))]);
 }
 
@@ -170,8 +216,8 @@ fn sidebar_buttons_name_themselves(cx: &mut TestAppContext) {
     let sidebar = move_to(
         cx,
         &host,
-        SIDEBAR_BUTTON_X + NAV_SIZE / 2.,
-        NAV_TOP + NAV_SIZE / 2.,
+        sidebar_x() + CONTROLS_PLATE / 2.,
+        CONTROLS_TOP + CONTROLS_PLATE / 2.,
     );
     assert_eq!(sidebar, ["tooltip Hide Sidebar ⌘S"]);
     assert_eq!(move_to(cx, &host, 100., 300.), ["tooltip none"]);
@@ -462,7 +508,7 @@ fn a_click_on_the_url_field_opens_the_command_bar_over_it(cx: &mut TestAppContex
     });
     cx.run_until_parked();
     cx.simulate_click(point(px(100.), px(64.)), Modifiers::none());
-    let field = Bounds::new(point(px(8.), px(46.)), size(px(212.), px(36.)));
+    let field = Bounds::new(point(px(8.), px(44.)), size(px(212.), px(36.)));
     assert_eq!(host.command_bars.take(), [Some(field)]);
     shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "ui", cx));
     assert_eq!(host.command_bars.take(), [None]);
@@ -631,7 +677,12 @@ fn back_forward_and_reload_shrink_a_little_while_held(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     host.take();
-    let at = |x: f32| point(px(x + NAV_SIZE / 2.), px(NAV_TOP + NAV_SIZE / 2.));
+    let at = |x: f32| {
+        point(
+            px(x + CONTROLS_PLATE / 2.),
+            px(CONTROLS_TOP + CONTROLS_PLATE / 2.),
+        )
+    };
     let scale = |cx: &mut VisualTestContext, x| {
         shell.read_with(cx, |shell, cx| {
             shell.nav_scale(x, cx.background_executor().now())
@@ -648,7 +699,7 @@ fn back_forward_and_reload_shrink_a_little_while_held(cx: &mut TestAppContext) {
         })
     };
     let between = |scale: f32| scale < 1. && scale > NAV_PRESS_SCALE;
-    assert_eq!(NAV_SIZE * NAV_PRESS_SCALE, NAV_SIZE - 2.);
+    assert_eq!(CONTROLS_PLATE * NAV_PRESS_SCALE, CONTROLS_PLATE - 2.);
 
     cx.simulate_mouse_down(at(BACK_X), MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
@@ -718,7 +769,7 @@ fn back_forward_and_reload_shrink_a_little_while_held(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     shell.update(cx, |shell, _| shell.held_nav = None);
-    cx.simulate_mouse_down(at(SIDEBAR_BUTTON_X), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_down(at(sidebar_x()), MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     assert!(
         shell.read_with(cx, |shell, _| shell.held_nav.is_none()),
@@ -773,13 +824,17 @@ fn developer_mode_puts_devtools_in_the_url_field(cx: &mut TestAppContext) {
     move_to(cx, &host, 100., 300.);
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
+    let named = move_to(cx, &host, 150., 64.);
+    assert!(
+        (named.iter()).any(|call| call == "tooltip Developer Tools ⌥⌘I"),
+        "{named:?}"
+    );
     host.take();
     cx.simulate_click(point(px(150.), px(64.)), Modifiers::none());
     let calls = host.take();
+    // The click ends the button's tooltip, and it doesn't come back at the release.
     assert!(
-        calls
-            .iter()
-            .any(|call| call == "tooltip Developer Tools ⌥⌘I"),
+        !(calls.iter()).any(|call| call == "tooltip Developer Tools ⌥⌘I"),
         "{calls:?}"
     );
     let calls: Vec<_> = calls
@@ -819,8 +874,8 @@ fn devtools_rests_in_the_url_field_in_developer_mode(cx: &mut TestAppContext) {
 
 /// The header's glyphs take the disabled alpha, 0.26, as it is while the host says the window isn't
 /// the one the user is in, as Arc's do, under the glyph floor that would leave the dim unseen, and
-/// 0.60 again once it is. In the user's window a disabled glyph, as back's with no history, keeps
-/// the floor. GPUI's window losing the keyboard, as it does to the window's own page on X11 and to
+/// the row's own ink again once it is. In the user's window a glyph that can't act, as back's with
+/// no history, takes the row's quietest ink, never under the floor. GPUI's window losing the keyboard, as it does to the window's own page on X11 and to
 /// its command bar or menu on the Mac, leaves them lit, and so does the command bar open over it.
 #[gpui::test]
 fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppContext) {
@@ -842,7 +897,7 @@ fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppConte
         floor > 0.26,
         "the test's Space needs a floor over 0.26, not {floor}"
     );
-    let lit = (Some(false), 0.6, floor);
+    let lit = (Some(false), ICON_INK.max(floor), TEXT_TERTIARY.max(floor));
     cx.update(|window, _| window.activate_window());
     assert_eq!(alphas(cx), lit, "not lit in the user's window");
     // The page or an overlay has the keyboard: GPUI's window isn't active, the host's still main.
@@ -865,4 +920,97 @@ fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppConte
     // Back, by a click in its page, which doesn't give GPUI's window the keys.
     set_main(true, cx);
     assert_eq!(alphas(cx), lit, "not lit once it's the user's again");
+}
+
+/// A click on the Library button ends its tooltip, and it doesn't come back until the pointer has
+/// left the button and returned: not at the release, which GPUI reports as the pointer coming onto
+/// the button again once it moved while held, and not a delay and a grace later either, over the
+/// Library the click opened.
+#[gpui::test]
+fn a_press_ends_a_buttons_tooltip_until_the_pointer_has_left(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
+    let (x, y) = (
+        LIBRARY_BACK_INSET + NAV_SIZE / 2.,
+        height - FOOTER_HEIGHT / 2.,
+    );
+    let named = |calls: &[String]| {
+        calls
+            .iter()
+            .any(|call| call.starts_with("tooltip View Library"))
+    };
+    assert!(named(&move_to(cx, &host, x, y)));
+
+    host.take();
+    cx.simulate_mouse_down(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    let held = point(px(x + 1.), px(y));
+    cx.simulate_mouse_move(held, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(held, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let calls = host.take();
+    assert!(calls.iter().any(|call| call == "tooltip none"), "{calls:?}");
+    assert!(!named(&calls), "{calls:?}");
+    cx.executor()
+        .advance_clock(crate::tooltip::DELAY + crate::tooltip::GRACE);
+    cx.run_until_parked();
+    assert!(!named(&move_to(cx, &host, x + 2., y)));
+
+    // Off it, and back once the Library the click opened, which covers it, has closed.
+    move_to(cx, &host, 120., 300.);
+    shell.update(cx, |shell, cx| {
+        shell.close_library_now();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(named(&move_to(cx, &host, x, y)));
+}
+
+/// The Library a click on its button opens covers the button, so the press that ended the
+/// tooltip is kept while the pointer stays on the button's frame, and forgotten at the first move
+/// off it, though the button under the Library isn't hovered: back on it once the Library has
+/// closed, its tooltip comes as any rest's does (#4243).
+#[gpui::test]
+fn a_press_under_the_library_is_forgotten_once_the_pointer_leaves(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
+    let (x, y) = (
+        LIBRARY_BACK_INSET + NAV_SIZE / 2.,
+        height - FOOTER_HEIGHT / 2.,
+    );
+    let named = |calls: &[String]| {
+        calls
+            .iter()
+            .any(|call| call.starts_with("tooltip View Library"))
+    };
+    let pressed =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.tip_pressed.get());
+    assert!(named(&move_to(cx, &host, x, y)));
+    cx.simulate_mouse_down(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.library.is_some()),
+        "the click opened no Library"
+    );
+    assert!(pressed(cx).is_some());
+
+    assert!(!named(&move_to(cx, &host, x + 2., y)));
+    assert!(
+        pressed(cx).is_some(),
+        "a move on the frame forgot the press"
+    );
+    move_to(cx, &host, 120., 300.);
+    assert_eq!(
+        pressed(cx),
+        None,
+        "the press outlived the pointer leaving the frame"
+    );
+    move_to(cx, &host, 140., 320.);
+
+    shell.update(cx, |shell, cx| {
+        shell.close_library_now();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(named(&move_to(cx, &host, x, y)));
 }

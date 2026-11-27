@@ -20,7 +20,14 @@ use gpui::App;
 /// Long past the end of any motion here.
 const LONG_AGO: Duration = Duration::from_secs(10);
 
-/// Whether things are to keep still: the system's Reduce Motion (`App::reduce_motion`).
+/// A token's seconds as a `Duration`, to the millisecond, so a time from the token file can be a
+/// constant: `Duration::from_secs_f32` isn't const, and 0.27 as an f32 is a little over 270 ms.
+pub const fn ms(seconds: f32) -> Duration {
+    Duration::from_millis((seconds * 1000. + 0.5) as u64)
+}
+
+/// Whether things are to keep still: the system's Reduce Motion (`App::reduce_motion`). Every
+/// motion asks here rather than read that itself; only main.rs's `set_reduce_motion` writes it.
 pub fn still(cx: &App) -> bool {
     cx.reduce_motion()
 }
@@ -56,6 +63,14 @@ mod tests {
     use gpui::TestAppContext;
 
     use super::*;
+
+    #[test]
+    fn a_tokens_seconds_are_whole_milliseconds() {
+        assert_eq!(ms(0.27), Duration::from_millis(270));
+        assert_eq!(ms(1.6), Duration::from_millis(1600));
+        assert_eq!(ms(0.04), Duration::from_millis(40));
+        assert_eq!(ms(0.), Duration::ZERO);
+    }
 
     #[gpui::test]
     fn under_reduce_motion_a_change_starts_at_its_end_and_what_comes_rests(

@@ -16,16 +16,10 @@ pub const MAX: usize = 20;
 pub const MAX_BODY: usize = 1 << 20;
 /// The most of a `what` the tool takes, once it's plain text: a sentence, not a page.
 pub const WHAT_MOST: usize = 500;
-/// The most of a `what` the question's card shows, ended at a word: one plain sentence naming the
-/// thing and the change fits, and at the sidebar's least width Deny and Allow stay in view.
-pub const WHAT_SHOWN: usize = 120;
 /// The characters of an answer's body the agent reads at most, and of all a call's together, which
 /// leaves room under the answer's cap (`tools::MAX_ANSWER`) for each request's line.
 const SHOWN: usize = 10_000;
 pub const ALL_SHOWN: usize = 11_000;
-/// The most characters of an address or a header's name or value the whole request shows. Nothing
-/// earlier bounds them, and a server takes far fewer: an address past this is no real one.
-pub const PART_SHOWN: usize = 10_000;
 /// The headers that name a method for a server to take in the sent one's place.
 const OVERRIDES: [&str; 3] = [
     "x-http-method-override",
@@ -52,44 +46,6 @@ pub struct Request {
     pub what: String,
 }
 
-/// What a change does, as the browser knows it from the method and its overrides, word for word:
-/// it never reads a meaning into the path or the body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Does {
-    Sends,
-    Changes,
-    Deletes,
-}
-
-impl Does {
-    /// The card's facts line for one change: "Changes something on tracker.example".
-    pub fn facts(self, site: &str) -> String {
-        match self {
-            Does::Sends => format!("Sends data to {site}"),
-            Does::Changes => format!("Changes something on {site}"),
-            Does::Deletes => format!("Deletes something on {site}"),
-        }
-    }
-
-    /// The facts of one of several changes, whose site the card names once.
-    pub fn short_facts(self) -> &'static str {
-        match self {
-            Does::Sends => "Sends data",
-            Does::Changes => "Changes something",
-            Does::Deletes => "Deletes something",
-        }
-    }
-
-    /// What a task's card says it waits on: "a change".
-    pub fn noun(self) -> &'static str {
-        match self {
-            Does::Sends => "data to send",
-            Does::Changes => "a change",
-            Does::Deletes => "a delete",
-        }
-    }
-}
-
 impl Request {
     /// The methods a server may take it as, which the card, its head and whether it asks all read:
     /// the one sent, then each piece of each override header's value, split at its commas, as the
@@ -102,18 +58,6 @@ impl Request {
         std::iter::once(self.method.clone())
             .chain(overrides)
             .collect()
-    }
-
-    /// What it does, the strongest of what it says: it deletes if any says DELETE, sends only
-    /// when all say POST, and changes something for anything else, a method the browser doesn't
-    /// know or an empty override included.
-    pub fn kind(&self) -> Does {
-        let says = self.says();
-        match () {
-            _ if says.iter().any(|each| each == "DELETE") => Does::Deletes,
-            _ if says.iter().all(|each| each == "POST") => Does::Sends,
-            _ => Does::Changes,
-        }
     }
 
     /// Whether it may change anything: anything but a GET or HEAD whose overrides, if it sets any,
@@ -594,21 +538,6 @@ pub fn escaped(text: &str, lines: bool) -> (String, Vec<std::ops::Range<usize>>)
         }
     }
     (shown, marks)
-}
-
-/// A sentence as the question's card shows it: whole up to WHAT_SHOWN, else cut with "…", at a
-/// word if one ends in the last quarter, else at the limit, so a sentence in a script without
-/// spaces, or with one near its start, keeps the card's width of it.
-pub fn shown(what: &str) -> String {
-    if what.chars().count() <= WHAT_SHOWN {
-        return what.to_string();
-    }
-    let cut: Vec<char> = what.chars().take(WHAT_SHOWN - 1).collect();
-    let end = (cut.iter().rposition(|c| *c == ' '))
-        .filter(|end| *end >= WHAT_SHOWN * 3 / 4)
-        .unwrap_or(cut.len());
-    let kept: String = cut[..end].iter().collect();
-    format!("{}…", kept.trim_end_matches([',', ';', ':', '、', ' ']))
 }
 
 /// The origin of an http(s) address, as "https://host[:port]" in lower case without a default
@@ -2088,7 +2017,7 @@ mod tests {
         let sent = parsed(asked).unwrap();
         assert!(sent[0].target().starts_with("POST as MERGE /_api/"));
         assert_eq!(sent[0].headers.last().unwrap().1, "application/json");
-        assert!(sent[1].changes() && sent[1].kind() == Does::Deletes && sent[1].method == "GET");
+        assert!(sent[1].changes() && sent[1].method == "GET");
         assert_eq!(sent[1].methods(), "GET as DELETE");
         assert!(!sent[2].changes());
     }
@@ -2148,86 +2077,6 @@ mod tests {
         assert_eq!(plain.target(), "POST /a");
         let same = one("DELETE", json!({ "X-HTTP-Method": "delete" }));
         assert_eq!(same.target(), "DELETE /a");
-    }
-
-    /// What the card says a change does is the stronger of the method sent and every override, as
-    /// a server may take either: a delete if any says DELETE, data to send only when all say POST,
-    /// and a change for anything else, a method the browser doesn't know included.
-    #[test]
-    fn a_change_is_the_strongest_its_method_and_overrides_say() {
-        let one = |method: &str, headers: Value| {
-            let asked = json!([{ "method": method, "path": "/a", "headers": headers,
-                                 "what": "Do it." }]);
-            parsed(asked).unwrap().remove(0).kind()
-        };
-        let none = json!({});
-        assert_eq!(one("POST", none.clone()), Does::Sends);
-        assert_eq!(one("DELETE", none.clone()), Does::Deletes);
-        for method in [
-            "PUT", "PATCH", "MERGE", "PURGE", "MKCOL", "COPY", "MOVE", "FROB",
-        ] {
-            assert_eq!(one(method, none.clone()), Does::Changes, "{method}");
-        }
-        for name in [
-            "X-HTTP-Method-Override",
-            "X-HTTP-Method",
-            "X-Method-Override",
-        ] {
-            assert_eq!(one("POST", json!({ name: "post" })), Does::Sends, "{name}");
-            for method in ["GET", "POST", "PUT", "DELETE", "MERGE"] {
-                assert_eq!(
-                    one(method, json!({ name: "DELETE" })),
-                    Does::Deletes,
-                    "{method} {name}"
-                );
-            }
-            assert_eq!(
-                one("DELETE", json!({ name: "GET" })),
-                Does::Deletes,
-                "{name}"
-            );
-            for (method, says) in [
-                ("POST", "GET"),
-                ("POST", "PUT"),
-                ("POST", "MERGE"),
-                ("POST", "FROB"),
-                ("POST", ""),
-                ("PUT", "POST"),
-                ("GET", "POST"),
-                ("GET", "PATCH"),
-            ] {
-                assert_eq!(
-                    one(method, json!({ name: says })),
-                    Does::Changes,
-                    "{method} {name}: {says}"
-                );
-            }
-        }
-        let both = json!({ "X-HTTP-Method": "POST", "X-Method-Override": "DELETE" });
-        assert_eq!(one("POST", both), Does::Deletes);
-        // A value with commas is read piece by piece, so a DELETE anywhere in it deletes.
-        for says in [
-            "POST, DELETE",
-            "DELETE, POST",
-            " get ,delete",
-            "GET,DELETE,",
-        ] {
-            assert_eq!(
-                one("POST", json!({ "X-HTTP-Method-Override": says })),
-                Does::Deletes,
-                "{says}"
-            );
-        }
-        assert_eq!(
-            one("POST", json!({ "X-HTTP-Method": "POST, POST" })),
-            Does::Sends
-        );
-        assert_eq!(
-            one("POST", json!({ "X-HTTP-Method": "POST, PUT" })),
-            Does::Changes
-        );
-        let both = json!({ "X-HTTP-Method": "POST", "X-Method-Override": "PUT" });
-        assert_eq!(one("POST", both), Does::Changes);
     }
 
     /// The head names the method sent, then every other method its overrides name, once each and
@@ -2970,40 +2819,5 @@ mod tests {
             hid("Reset the password for the whole team to Friday"),
             "Reset the password for the whole team to Friday"
         );
-    }
-
-    /// The card shows a sentence whole up to WHAT_SHOWN, and a longer one up to a word, with "…".
-    #[test]
-    fn the_card_clips_a_long_sentence_at_a_word() {
-        let whole = format!("{} end.", "x".repeat(WHAT_SHOWN - 5));
-        assert_eq!(whole.chars().count(), WHAT_SHOWN);
-        assert_eq!(shown(&whole), whole);
-        let long = "Merge the two duplicate items, keeping the older one's history and labels, then \
-                    close the newer one with a note pointing at the older one so watchers follow.";
-        let clipped = shown(long);
-        assert!(clipped.chars().count() <= WHAT_SHOWN, "{clipped}");
-        assert!(clipped.ends_with("…") && long.starts_with(clipped.trim_end_matches('…')));
-        assert!(
-            long[clipped.len() - "…".len()..].starts_with(' '),
-            "cut inside a word"
-        );
-    }
-
-    /// A sentence without a space in its last quarter keeps the card's width of it, cut at the
-    /// limit: Japanese, which has none, and one whose only space is near its start.
-    #[test]
-    fn the_card_clips_a_sentence_without_late_spaces_at_its_limit() {
-        let japanese = "重複している二件の項目をまとめ、古い方の履歴とラベルを残してから、新しい方を\
-            閉じて古い方へのメモを付けます。見ている人が古い方を追えるように、両方のリンクも更新し、\
-            関係するチームの全員に変更を伝えて、来週の会議で結果を確認します。\
-            終わったら、作業の記録を共有の場所に保存して、次の担当者に引き継ぎます。";
-        assert!(japanese.chars().count() > WHAT_SHOWN);
-        let clipped = shown(japanese);
-        assert_eq!(clipped.chars().count(), WHAT_SHOWN, "{clipped}");
-        assert!(japanese.starts_with(clipped.trim_end_matches('…')));
-
-        let early = format!("Merge {}", "x".repeat(200));
-        assert_eq!(shown(&early).chars().count(), WHAT_SHOWN);
-        assert!(shown(&early).starts_with("Merge x"));
     }
 }

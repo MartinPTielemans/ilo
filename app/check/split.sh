@@ -112,7 +112,7 @@ read_pages
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # ⌥-click on "+ New Tab" adds one too, as Dia's does.
-send click 100 154 alt
+send click 100 148 alt
 expect '^browser: command add-split via sidebar$' \
   "⌥-click on \"+ New Tab\" didn't run Add Split View"
 expect '^browser: command bar shown$' "⌥-click on \"+ New Tab\" didn't open the command bar"
@@ -478,7 +478,10 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*x[0-9]*\).*/\1/')
 height=${content#*x}
 content=${content%x*}
-[ "$child" = "$((content - 320)),$((20 + tall)) 300x32" ] ||
+# Twice the card's inset in from the pane's corner, as find.sh's, the inset being how far the
+# page's right edge is from the window's.
+page_inset=$((content - x - w))
+[ "$child" = "$((content - 300 - 2 * page_inset)),$((tall + 2 * page_inset)) 300x32" ] ||
   fail "the find bar is at ${child:-nowhere}, not at the bottom pane's corner"
 ../tools/window-screenshot.sh "$pid" "$out/split-stacked.png" || fail "no window to capture"
 send key escape
@@ -854,8 +857,8 @@ rows=$(today)
 y=$(row 2 | cut -d' ' -f2)
 send press $(row 0) alt
 send dragto 110 $(row 0 | cut -d' ' -f2) alt
-send dragto 100 $((y - 15)) alt
-send release 100 $((y - 15)) alt
+send dragto 100 $((y - 13)) alt
+send release 100 $((y - 13)) alt
 expect "^browser: dragged $c copy [0-9][0-9]* to today 0 [0-9][0-9]*\$" \
   "a row let go with ⌥ held didn't drop a copy: $(grep '^browser: dragged' "$log" | tail -1)"
 copy=$(grep "^browser: dragged $c copy " "$log" | tail -1 | cut -d' ' -f5)

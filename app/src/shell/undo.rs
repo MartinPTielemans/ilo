@@ -40,7 +40,7 @@ impl What {
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
     pub const REMOVE_TAB: What = What::said(super::rows::REMOVE_TIP, "Tab Removed");
-    pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
+    pub const DISMISS_TASK: What = What::quiet("Dismiss Thread");
     pub const PIN: What = What::quiet("Pin Tab");
     pub const UNPIN: What = What::quiet("Unpin Tab");
     pub const PIN_TABS: What = What::quiet("Pin Tabs");
@@ -73,6 +73,7 @@ impl What {
     pub const REMOVE_THEME: What = What::quiet("Remove Theme Color");
     pub const CLEAR: What = What::quiet("Clear");
     pub const SORT_BY_SITE: What = What::quiet("Sort by Site");
+    pub const SORT_TABS: What = What::quiet("Sort Tabs");
     /// Arc says it in its own words (docs/ux-spec.md › Toast), so the shell shows that toast.
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
     /// The Space leaving the switcher isn't where the eye is, at the folder it became.
@@ -139,6 +140,9 @@ pub(super) enum Prop {
     SpaceName(u64),
     SpaceIcon(u64),
     SpaceColor(u64),
+    /// Where a Space's glass sits on its Transparency bar, as `space_transparency` writes it, or
+    /// empty for none.
+    SpaceTransparency(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -268,6 +272,16 @@ pub(super) enum Edit {
         space: u64,
         rows: Vec<u64>,
     },
+    /// Takes back what Sort Tabs into Folders did in `space`, as one step: the folders it `made` go,
+    /// the tabs it `joined` to today's folders already there leave them, and today's rows are in
+    /// the order `rows` they were in. The older folders stay as they were. It's done once: the
+    /// sort's answer isn't kept to do again.
+    Unsort {
+        space: u64,
+        made: Vec<u64>,
+        joined: Vec<u64>,
+        rows: Vec<u64>,
+    },
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
@@ -375,6 +389,10 @@ impl Edit {
                 show.iter_mut().for_each(|each| id_of(each, from, to));
             }
             Edit::Close(tabs) | Edit::Order { rows: tabs, .. } => ids(tabs),
+            Edit::Unsort { joined, rows, .. } => {
+                ids(joined);
+                ids(rows);
+            }
             Edit::Repin { tabs, spot } => {
                 tabs.iter_mut().for_each(|(each, _)| id_of(each, from, to));
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -431,7 +449,10 @@ impl Edit {
                 | Prop::FolderIcon(each)
                 | Prop::SplitName(each)
                 | Prop::SplitIcon(each) => id(each),
-                Prop::SpaceName(_) | Prop::SpaceIcon(_) | Prop::SpaceColor(_) => {}
+                Prop::SpaceName(_)
+                | Prop::SpaceIcon(_)
+                | Prop::SpaceColor(_)
+                | Prop::SpaceTransparency(_) => {}
             },
             Edit::UndoClear { .. }
             | Edit::Clear(_)
@@ -721,6 +742,15 @@ impl Edit {
                 let rows = shell.order_today(space, &rows, cx)?;
                 Some(Edit::Order { space, rows })
             }
+            Edit::Unsort {
+                space,
+                made,
+                joined,
+                rows,
+            } => {
+                shell.browser.unsort_today(space, &made, &joined, &rows, cx);
+                None
+            }
             Edit::UndoDeleteSpace(space) => shell
                 .browser
                 .undo_delete_space(space, cx)
@@ -879,6 +909,11 @@ impl Shell {
             let Some(Entry { what, edit }) = stack.pop() else {
                 break false;
             };
+            // Undone once, with nothing to redo: the sort's answer isn't kept.
+            if matches!(edit, Edit::Unsort { .. }) {
+                edit.apply(self, cx);
+                break true;
+            }
             if let Some(inverse) = edit.apply(self, cx) {
                 let stack = match undoing {
                     true => &mut self.history.redo,
@@ -1479,6 +1514,7 @@ impl Shell {
                 Value::Color { color: None, .. } => What::REMOVE_THEME,
                 _ => What::CHANGE_THEME,
             },
+            Prop::SpaceTransparency(_) => What::CHANGE_THEME,
         };
         self.keep(what, before.map(|before| Edit::Set(prop, before)), cx);
     }
@@ -1756,6 +1792,9 @@ impl Shell {
                     theme,
                 }
             }
+            Prop::SpaceTransparency(id) => Value::Text(
+                (space(id)?.transparency).map_or_else(String::new, |value| format!("{value:.3}")),
+            ),
         })
     }
 
@@ -1786,8 +1825,26 @@ impl Shell {
                 {
                     self.theme_preview = None;
                 }
-                browser.set_space_theme(space, theme, cx);
+                // Its Transparency stays beside whatever theme it's given (space_transparency).
+                let kept = self.spaces.iter().find(|each| each.id == space);
+                let kept = kept.and_then(|space| space.transparency);
+                let text = crate::space_transparency::with(theme, kept);
+                browser.set_space_theme(space, &text, cx);
                 browser.set_space_color(space, *color, cx);
+                cx.notify();
+            }
+            (Prop::SpaceTransparency(space), Value::Text(value)) => {
+                let value = value.parse::<f32>().ok();
+                // The glass being made gives way to the one ⌘Z gives back.
+                if self
+                    .glass_preview
+                    .is_some_and(|(previewed, made)| previewed == space && Some(made) != value)
+                {
+                    self.glass_preview = None;
+                }
+                if let Some(kept) = self.spaces.iter().find(|each| each.id == space) {
+                    browser.set_space_theme(space, &kept.theme_text(value), cx);
+                }
                 cx.notify();
             }
             _ => {}

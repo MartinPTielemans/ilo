@@ -77,20 +77,20 @@
         </uap5:Extension>
       </Extensions>
     </Application>
-    <!-- The ilo command an agent in a terminal runs (app/src/agents/cli.rs), named as Settings ›
+    <!-- The command an agent in a terminal runs (app/src/agents/cli.rs), named as Settings ›
          Agents names its row, by an alias in the same folder, which is on the user's PATH. It
          does nothing but say it isn't added until Settings › Agents › Command line adds it,
          which writes its agent file. -->
-    <Application Id="IloCommand" Executable="bin\ilo.exe" EntryPoint="Windows.FullTrustApplication"
+    <Application Id="IloCommand" Executable="bin\@PRODUCT@.exe" EntryPoint="Windows.FullTrustApplication"
       desktop4:SupportsMultipleInstances="true">
-      <uap:VisualElements DisplayName="@NAME@ CLI" Description="@NAME@ CLI"
+      <uap:VisualElements DisplayName="The @PRODUCT@ command" Description="The @PRODUCT@ command"
         BackgroundColor="transparent" AppListEntry="none"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png" />
       <Extensions>
         <uap5:Extension Category="windows.appExecutionAlias">
           <uap5:AppExecutionAlias desktop4:Subsystem="console">
-            <uap5:ExecutionAlias Alias="@NAME@.exe" />
+            <uap5:ExecutionAlias Alias="@PRODUCT@.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
       </Extensions>

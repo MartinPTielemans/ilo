@@ -41,8 +41,14 @@ pub(super) enum Event {
     Ask { holder: bool },
     /// The user handed the tab back.
     HandBack,
+    /// The tab committed a page with no password field, one-time-code field or CAPTCHA, as the
+    /// core read it (`Agents::held_page`): the step the agent handed off is done. The browser
+    /// decides it, never the agent, and it ends a hand-off alone, as Hand Back would.
+    MovedOn,
     /// The user answered an agent's ask with Keep.
     Keep,
+    /// The user won't do the step the agent handed them now (Not Now): the tab stays theirs.
+    NotNow,
     /// HANDOFF_WAIT passed since the handoff.
     Timer,
     /// The user stopped an agent. `holder` is whether it's the agent the tab is held from.
@@ -61,7 +67,9 @@ impl Event {
     pub(super) fn way(self) -> &'static str {
         match self {
             Event::HandBack => "handed back",
+            Event::MovedOn => super::tools::MOVED_ON,
             Event::Keep => "kept",
+            Event::NotNow => "not now",
             Event::Timer => "not handed back",
             Event::Closed => "closed",
             Event::Moved => "moved",
@@ -69,6 +77,24 @@ impl Event {
             Event::Stop { .. } | Event::Gone { .. } => "",
             Event::HandOff | Event::TakeOver | Event::Passkey | Event::Ask { .. } => "",
         }
+    }
+}
+
+/// What the core read of a held tab's page once it, or a frame of it, loaded (bc_held_page): what
+/// on it is the user's to do, and nothing else of the page's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeldPage {
+    /// The page's document, which each commit changes.
+    pub document: u64,
+    pub password: bool,
+    pub one_time_code: bool,
+    pub captcha: bool,
+}
+
+impl HeldPage {
+    /// Whether a step of the user's is still on the page: a sign-in's next step keeps it.
+    pub(super) fn users_step(self) -> bool {
+        self.password || self.one_time_code || self.captcha
     }
 }
 
@@ -131,8 +157,11 @@ pub(super) fn step(life: Life, event: Event) -> (Life, Actions) {
         // The core may hold what the app doesn't, and Hand Back lets go of it there too.
         (Free, HandBack) => (Free, A::HAND_BACK),
         (_, HandBack) => (Free, A::HAND_BACK | answer | A::NOTE | A::CARD),
+        // Only the agent's own hand-off ends by itself: what the user took or kept stays theirs.
+        (HandedOff, MovedOn) => (Free, A::HAND_BACK | A::ANSWER | A::NOTE | A::CARD),
+        (_, MovedOn) => (life, A::NONE),
         (Asked, Keep) => (Held, A::ANSWER | A::NOTE | A::CARD),
-        (HandedOff, Timer) => (Held, A::ANSWER | A::NOTE | A::CARD),
+        (HandedOff, Timer | NotNow) => (Held, A::ANSWER | A::NOTE | A::CARD),
         (HandedOff | Asked, Stop { holder: true }) => (Held, A::ANSWER | A::CARD),
         (HandedOff | Asked, Gone { holder: true }) => (Held, A::DROP | A::CARD),
         (Free, Closed | Moved) => (Free, A::NONE),
@@ -142,7 +171,7 @@ pub(super) fn step(life: Life, event: Event) -> (Life, Actions) {
         // its page, which is the user's now, and the core refuses agents a tab outside their
         // Space anyway.
         (_, Moved) => (Free, answer | A::NOTE | A::CARD),
-        (_, Keep | Timer | Stop { .. } | Gone { .. }) => (life, A::NONE),
+        (_, Keep | Timer | NotNow | Stop { .. } | Gone { .. }) => (life, A::NONE),
     }
 }
 

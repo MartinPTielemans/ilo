@@ -250,7 +250,7 @@ sign_in_link() {
 }
 sign_in_link "$provider/signin.html?code=abc"
 await "^browser: loaded $tab $callback?code=abc\$" || fail "the sign-in didn't come back to its callback"
-await "^browser: little window $little sign-in done at $callback?code=abc\$" ||
+await "^browser: little window $little sign-in done\$" ||
   fail "the callback with a code didn't end the sign-in"
 grep -q "^browser: tab $tab page forgotten\$" "$log" || fail "the sign-in's callback page wasn't forgotten"
 await "^browser: little bar closing true\$" || fail "the sign-in's Little ilo bar didn't say it was closing"
@@ -287,7 +287,9 @@ await "^browser: loaded [0-9]* $callback?code=user\$" || fail "the user's sign-i
 user_sign_in=$(sed -n "s|^browser: loaded \([0-9]*\) $callback?code=user\$|\1|p" "$log" | tail -1)
 send key w cmd
 expect "^browser: tab $user_sign_in closed\$" "⌘W didn't close the user's sign-in tab"
-grep -q "sign-in done at $callback?code=user\$" "$log" && fail "a sign-in in a tab the user opened counted as done"
+# The one sign-in done is the Little ilo window's above, as the line names no address.
+[ "$(grep -c ' sign-in done$' "$log")" = 1 ] ||
+  fail "a sign-in in a tab the user opened counted as done: $(grep ' sign-in done$' "$log" | tail -1)"
 # The Store's MSIX declares http and https in its manifest, not by ilo.iss's command, so Windows
 # activates the package for a link sent to it, and the package's chrome.exe, which names no
 # profile, hands the link to the browser running on the engine's folder (#1427). check-windows.yml
@@ -400,8 +402,8 @@ if [ "$driven" = 1 ]; then
   send click $page_point
   # Settings says the browser isn't the default and offers to make it so.
   send key , cmd
-  expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
-  settings_drew General
+  expect '^browser: settings shown Overview$' "⌘, didn't show Settings"
+  settings_drew Overview
   expect '^browser: default browser no$' "Settings didn't read whether the browser is the default"
   ../tools/window-screenshot.sh "$pid" "$out/links-settings.png" || fail "no window to capture"
   # Settings › Links, its second tab, starts with the Meet rule, as Arc seeds its Google Meet route
@@ -420,7 +422,7 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
   settings_drew Links
   meet="URL contains \"meet.google.com\" → $front"
-  expect "$(rules_drawn "$meet" "Little ilo")" \
+  expect "$(rules_drawn "$meet" "Little Window")" \
     "the Links tab didn't start with the Meet rule, everything else to Little ilo"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-meet.png" || fail "no window to capture"
   send key w cmd
@@ -432,10 +434,10 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
   click_in_sight "link remove 0"
-  expect "$(rules_drawn none "Little ilo")" "the trash didn't take the Meet rule, leaving the empty box"
+  expect "$(rules_drawn none "Little Window")" "the trash didn't take the Meet rule, leaving the empty box"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-empty.png" || fail "no window to capture"
   post clickkey $(drawn "link otherwise")
-  expect "^browser: menu shown $front, [^,]*, Little ilo (checked)\$" \
+  expect "^browser: menu shown $front, [^,]*, Little Window (checked)\$" \
     "everything else's pop-up didn't offer the Space in front, the user's Space and Little ilo"
   send choose "$front"
   expect "$(rules_drawn none "$front")" "everything else's pop-up didn't set the Space in front"
@@ -472,7 +474,7 @@ if [ "$driven" = 1 ]; then
   send type work
   expect "$(rules_drawn 'URL contains "work" → [^,;]*' "$front")" "the rule didn't take the text typed"
   post clickkey $(drawn "link space 0")
-  expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+  expect "^browser: menu shown $front (checked), [^,]*, work, Little Window\$" \
     "the rule's Space pop-up didn't list the Space in front, the user's Spaces and Little ilo"
   send choose work
   expect "$(rules_drawn 'URL contains "work" → work' "$front")" "the rule's pop-up didn't set its Space"
@@ -508,7 +510,7 @@ if [ "$driven" = 1 ]; then
   ../tools/window-screenshot.sh "$pid" "$out/links-rules.png" || fail "no window to capture"
   # Everything else, now to the second Space.
   post clickkey $(drawn "link otherwise")
-  expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+  expect "^browser: menu shown $front (checked), [^,]*, work, Little Window\$" \
     "everything else's pop-up didn't offer the Space in front, the user's Spaces and Little ilo"
   send choose work
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" "everything else's pop-up didn't set its Space"
@@ -528,10 +530,10 @@ if [ "$driven" = 1 ]; then
   # A rule to Little ilo opens its links in one, for the Space in front: the second, the last link
   # to the window having shown it.
   post clickkey $(drawn "link space 0")
-  expect "^browser: menu shown $front, [^,]*, work (checked), Little ilo\$" \
+  expect "^browser: menu shown $front, [^,]*, work (checked), Little Window\$" \
     "the rule's Space pop-up didn't offer Little ilo"
-  send choose "Little ilo"
-  expect "$(rules_drawn 'URL contains "work" → Little ilo' work)" "the rule's pop-up didn't pick Little ilo"
+  send choose "Little Window"
+  expect "$(rules_drawn 'URL contains "work" → Little Window' work)" "the rule's pop-up didn't pick Little ilo"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   open_little_link "?work-little" "$second"
@@ -546,7 +548,7 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings undo had nothing$' "⌘Z didn't reach Settings"
   none_since '^browser: link rules drawn' || fail "⌘Z brought back a rule after Settings closed"
   post clickkey $(drawn "link space 0")
-  expect "^browser: menu shown $front, [^,]*, work, Little ilo (checked)\$" \
+  expect "^browser: menu shown $front, [^,]*, work, Little Window (checked)\$" \
     "the rule's Space pop-up didn't check Little ilo"
   send choose work
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the rule's pop-up didn't set the second Space"

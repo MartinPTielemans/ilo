@@ -170,15 +170,16 @@ jobs:
         if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
         run: |
           profile="$HOME/.var/app/app.ilo.browser/config/$(cat app/branding/name)"
+          product=$(cat app/branding/product)
           token=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
           mkdir -p "$profile" app/build/flatpak-command
-          printf '{"on":true,"agents":[{"client":"ilo-command","token":"%s"}]}' "$token" > "$profile/Agents"
+          printf '{"on":true,"agents":[{"client":"ilo-command","token":"%s","name":"%s"}]}' "$token" "$product" > "$profile/Agents"
           cd app/build/flatpak-command
           printf '<title>Shot</title><p>A page to take a picture of.</p>' > index.html
           python3 -m http.server --bind 127.0.0.1 8765 > server.log 2>&1 &
           server=$!
           status=0
-          TOKEN=$token PROFILE=$profile dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
+          TOKEN=$token PROFILE=$profile PRODUCT=$product dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
             set -u
             flatpak run --env=BROWSER_CHECK=1 --env=BROWSER_ONBOARDING=skip app.ilo.browser > ilo.log 2>&1 &
             pid=$!
@@ -193,10 +194,10 @@ jobs:
               echo "::error::The Flatpak started no agents server with agents on in its Agents file."
               status=1
             else
-              (umask 077 && printf "%s\n%s\n" "$address" "$TOKEN" > "$PROFILE/ilo-command")
+              (umask 077 && printf "%s\n%s\n" "$address" "$TOKEN" > "$PROFILE/$PRODUCT-command")
               ilo() { flatpak run --command=/app/ilo/ilo-command app.ilo.browser "$@"; }
               help=$(ilo help 2>&1) || { echo "::error::ilo help failed ($?): $help"; status=1; }
-              case $help in *"ilo click <ref>"*) ;; *) echo "::error::ilo help listed no click: $help"; status=1 ;; esac
+              case $help in *"$PRODUCT click <ref>"*) ;; *) echo "::error::ilo help listed no click: $help"; status=1 ;; esac
               opened=$(ilo open http://127.0.0.1:8765/ --as Checker 2>&1) ||
                 { echo "::error::ilo open failed ($?): $opened"; status=1; }
               case $opened in *"127.0.0.1:8765"*) ;; *) echo "::error::ilo open named no page: $opened"; status=1 ;; esac

@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 
 use browser::account::{self, Account};
 use browser::ad_block::choice::{self as ad_blocker, EngineRow};
-use browser::agents::ready::Ready;
 use browser::agents::runner::Cli;
 use browser::agents::{self, Agents, Client};
 use browser::build_info;
@@ -20,20 +19,22 @@ use browser::default_browser::{self, DefaultBrowser, Os};
 use browser::dialog;
 use browser::import::ImportView;
 use browser::link_rules::LinkRulesView;
+use browser::list_keys::{self, Named};
 use browser::little_launch;
 use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
+use browser::product::PRODUCT;
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
-use browser::text_input::{self, TextInput};
+use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
-    SharedString, Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, actions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
+    Global, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
+    SharedString, Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
@@ -43,8 +44,9 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chevron_slot, chip, command_export, command_text, detailed_row,
-    end, frame, glyph_plate, group, group_lined, named_button, row, sent_part, stop_button,
+    Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, chevron_slot, chip,
+    command_export, command_text, detailed_row, end, folder_popup, frame, glyph_plate, group,
+    group_lined, mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button,
     stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
@@ -52,21 +54,25 @@ use browser::settings_search::{
     Search,
 };
 use browser::settings_shortcuts::{Keys, SHORTCUTS};
-use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
+use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
+use browser::tokens::settings::form;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
-    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
+    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_LINE, HEADING_TOP, HEADING_X,
+    HEIGHT, LEDE_LINE, LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SEARCH_PLACEHOLDER,
+    SECTION_TEXT, SENT_TUCK, SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
-use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
     WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
 };
 use browser::tokens::text;
+
+mod assistants;
+mod new_thread;
+mod overview;
 
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
@@ -82,6 +88,12 @@ const ARCHIVE_AFTER: [(&str, f64); 5] = [
 
 /// The core's BC_ARCHIVE_NEVER.
 const ARCHIVE_NEVER: f64 = -1.;
+
+/// The times Settings offers a profile's tabs to wait before the archive, in its order, as first
+/// run's bar has them.
+pub(crate) fn archive_times() -> Vec<f64> {
+    ARCHIVE_AFTER.iter().map(|&(_, seconds)| seconds).collect()
+}
 
 /// Chrome's page zoom choices, as its settings page's.
 const PAGE_ZOOM: [(&str, f64); 11] = [
@@ -123,6 +135,8 @@ enum Block {
     Heading(SharedString),
     /// A heading with what's inside it after a ›, quieter, as Import › Arc.
     Crumb(SharedString, SharedString),
+    /// A heading with the chip saying whose settings its group shows at its end.
+    Scoped(SharedString, AnyElement),
     Group(gpui::Div),
     /// A group of rows the search can find.
     Rows(Vec<Row>),
@@ -164,7 +178,14 @@ impl Page {
 }
 
 /// The choice that has a command's keys reach ilo before the page.
-const PREFER_ILO: &str = concat!("Prefer ", env!("APP_NAME"));
+const PREFER_ILO: &str = concat!("Prefer ", env!("PRODUCT_NAME"));
+
+/// General's rows, as drawn, which their controls are named by too.
+const DEFAULT_BROWSER: &str = "Default browser";
+const SEARCH_WITH: &str = "Search with";
+const SAVE_TO: &str = "Save downloads to";
+/// Little Window's name (the words table's Z41a).
+const LITTLE_WINDOW: &str = "Little Window";
 
 /// The pop-up buttons.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,12 +198,20 @@ enum Popup {
     ArchiveAfter(u64),
     /// A profile's New Note service, in Features.
     Notes(u64),
-    /// Run tasks on, in Agents.
-    TaskAgent,
-    /// The model a CLI runs tasks with.
-    TaskModel(Cli),
+    /// A signed-in assistant's ⋯ menu, in Agents › Your assistant.
+    Assistant(Cli),
+    /// An assistant's Model, under its row in Agents › Your assistant.
+    Model(Cli),
+    /// Threads › A new thread starts with: its Access and its Model.
+    NewThreadAccess,
+    NewThreadModel,
+    NewThreadEffort,
+    /// Other apps' Access: where an app's next task starts.
+    OthersAccess,
     /// General's Page zoom.
     PageZoom,
+    /// The chip saying whose settings a group shows.
+    Scope,
 }
 
 impl Popup {
@@ -190,12 +219,17 @@ impl Popup {
     fn spoken(self) -> SharedString {
         match self {
             Popup::LittleArchiveAfter => "Archive windows left unused after".into(),
-            Popup::PasswordsProfile => "Profile".into(),
-            Popup::SearchEngine(_) => "Search engine".into(),
+            Popup::PasswordsProfile | Popup::Scope => "Profile".into(),
+            Popup::SearchEngine(_) => SEARCH_WITH.into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
-            Popup::TaskAgent => "Run tasks on".into(),
-            Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
+            Popup::Assistant(cli) => {
+                format!("{} options", browser::settings_rows::assistant_name(cli)).into()
+            }
+            Popup::Model(_) => browser::agents::task::MODEL.into(),
+            Popup::NewThreadAccess | Popup::OthersAccess => browser::agents::tier::ACCESS.into(),
+            Popup::NewThreadModel => browser::agents::task::MODEL.into(),
+            Popup::NewThreadEffort => browser::command_bar::EFFORT_NAME.into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -258,12 +292,21 @@ pub struct Settings {
     popup_texts: Rc<RefCell<Vec<(Popup, gpui::Point<gpui::Pixels>)>>>,
     /// The profile whose logins Passwords lists, once the user has picked one.
     passwords_profile: Option<u64>,
+    /// The profile General's search engine and downloads are shown for, once the user has picked
+    /// one from its chip.
+    scope: Option<u64>,
     /// Each profile's logins, as the core last told them.
     logins: HashMap<u64, Vec<Login>>,
     /// Each profile's saved addresses and cards, as the core last told them.
     autofill: HashMap<u64, Vec<Saved>>,
     /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
+    /// The loose ends Overview's ✕ put away, read from the profile's folder at Overview's first
+    /// draw, never at launch, when the search's index makes Settings.
+    put_away: Option<browser::settings_overview::PutAway>,
+    /// The assistants the user clicked on Models while the inside switch is off, looked up and
+    /// shown as usual until the page is left.
+    looked_up: HashSet<Cli>,
     /// Made when Import & Export first shows, so the other browsers' files are read only once the
     /// user asks.
     import: Option<Entity<ImportView>>,
@@ -290,6 +333,8 @@ pub struct Settings {
     /// it sent (#2326), and those of them showing every line.
     requests_opened: HashSet<u64>,
     requests_all: HashSet<u64>,
+    /// The site notes opened to read, by name (#4122).
+    notes_opened: HashSet<&'static str>,
 }
 
 /// Settings' dialog, which it draws in its own content, so there's nothing to show.
@@ -707,9 +752,9 @@ pub fn show_shortcuts(cx: &mut App) {
     show_on(Section::Shortcuts, cx);
 }
 
-/// Shows the Settings window on Agents, with each agent's activity.
+/// Shows the Settings window on Other apps, with each agent's activity.
 pub fn show_agents(cx: &mut App) {
-    show_on(Section::Agents, cx);
+    show_on(Section::OtherApps, cx);
 }
 
 /// Shows the Settings window on About.
@@ -717,9 +762,9 @@ pub fn show_about(cx: &mut App) {
     show_on(Section::About, cx);
 }
 
-/// Shows the Settings window on Import & Export.
+/// Shows the Settings window on Sync & Import.
 pub fn show_import(cx: &mut App) {
-    show_on(Section::ImportExport, cx);
+    show_on(Section::SyncImport, cx);
 }
 
 fn show_on(section: Section, cx: &mut App) {
@@ -806,10 +851,15 @@ fn show_now(cx: &mut App) {
             // Each show logs where its controls are drawn again, so check.sh can take a place from
             // this show rather than from one before it, which a hidden window's scroll left (#3841).
             settings.drawn_logged.borrow_mut().clear();
-            if settings.section == Section::Agents {
+            // A show is the page shown again: Models' rows show the name alone again.
+            settings.looked_up.clear();
+            if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
-            if settings.section == Section::Sync {
+            if settings.section == Section::Models {
+                models_shown(cx);
+            }
+            if settings.section == Section::SyncImport {
                 settings
                     .account
                     .update(cx, |account, cx| account.read_activity(cx));
@@ -831,7 +881,16 @@ fn look_for_clients(cx: &mut App) {
         agents.update(cx, |agents, cx| {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
+            // Whether the command's skill files are still in place, for its row.
+            agents.look_skills(cx);
         });
+    }
+}
+
+/// Looks for the assistants as Models opens, so its rows say what's on this computer.
+fn models_shown(cx: &mut App) {
+    if let Some(agents) = agents::global(cx) {
+        agents.update(cx, |agents, cx| agents.models_shown(cx));
     }
 }
 
@@ -904,29 +963,14 @@ fn open(cx: &mut App) {
     }
     account::bind_keys(cx);
     settings_search::bind_keys(cx);
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
+    let title = Section::OPENS.name().into();
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
-            size(px(WIDTH), px(HEIGHT)),
-        ))),
-        // The column runs under the window's buttons, which sit where the browser window's do.
-        titlebar: Some(TitlebarOptions {
-            title: Some(Section::General.name().into()),
-            appears_transparent: true,
-            traffic_light_position: Some(point(px(12.), px(16.))),
-        }),
-        // Nor a title bar of the window manager's on Linux, where the UI draws the close button.
-        #[cfg(target_os = "linux")]
-        window_decorations: Some(gpui::WindowDecorations::Client),
-        kind: WindowKind::Normal,
         show: false,
         focus: false,
-        is_resizable: true,
-        is_minimizable: false,
-        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
-        ..Default::default()
+        ..browser::settings_column::window_options(bounds, title)
     };
-    SHOWN_SECTION.set(Section::General.name());
+    SHOWN_SECTION.set(Section::OPENS.name());
     let window = cx.open_window(options, |window, cx| {
         let settings = view(cx);
         settings.update(cx, |settings, cx| {
@@ -983,8 +1027,9 @@ fn open(cx: &mut App) {
                 settings.follow_appearance(window, cx)
             })
             .detach();
-            // Settings takes the keyboard back from the dialog once it has gone, as the dialog's
-            // focus still counts as focused then, though nothing draws it.
+            // The keyboard goes back to what had it as the dialog asked, or to Settings, once the
+            // dialog has gone, as the dialog's focus still counts as focused then, though nothing
+            // draws it.
             #[cfg(target_os = "linux")]
             {
                 let mut asked = false;
@@ -994,7 +1039,7 @@ fn open(cx: &mut App) {
                     move |settings: &mut Settings, dialog, window, cx| {
                         let asks = dialog::asks(&dialog, cx);
                         if asked && !asks {
-                            window.focus(&settings.focus, cx);
+                            dialog::give_back(&dialog, &settings.focus, window, cx);
                         }
                         asked = asks;
                     },
@@ -1086,22 +1131,32 @@ fn view(cx: &mut App) -> Entity<Settings> {
         updates::observe_view(cx, |_, cx| cx.notify()).detach();
         let agents = agents::global(cx);
         let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
+        // Each field takes the look Settings has as it draws, which follows the window.
+        let settings: gpui::WeakEntity<Settings> = cx.weak_entity();
         let search = cx.new(|cx| {
-            TextInput::new("Search", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+            TextInput::new("Search", cx).follows(move |cx| {
+                let Some(settings) = settings.upgrade() else {
+                    return Colors::default();
+                };
+                let settings = settings.read(cx);
+                // The field's "Search" over the field's own plate, not over a group's.
+                Colors {
+                    placeholder: settings.base().opacity(SEARCH_PLACEHOLDER).into(),
+                    ..settings.look.field()
+                }
+            })
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let filter = cx.new(|cx| {
             TextInput::new("example.com##.banner", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken("New filter")
         });
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let fence_field = cx.new(|cx| {
             TextInput::new(agents::fence::PLACEHOLDER, cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken(agents::fence::SPOKEN)
         });
         // ⇥ stops at the field, after the sections.
@@ -1116,7 +1171,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             version,
             nightly,
             _agents: agents,
-            section: Section::General,
+            section: Section::OPENS,
             focus: cx.focus_handle(),
             dark,
             appearance: shell::app_appearance(cx),
@@ -1144,10 +1199,14 @@ fn view(cx: &mut App) -> Entity<Settings> {
             drawn_logged: Rc::default(),
             popup_texts: Rc::default(),
             passwords_profile: None,
+            scope: None,
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            put_away: None,
+            looked_up: HashSet::new(),
             requests_opened: HashSet::new(),
+            notes_opened: HashSet::new(),
             requests_all: HashSet::new(),
             import: None,
             _import: None,
@@ -1197,11 +1256,12 @@ pub fn bar_hidden() {
 
 fn build_index(cx: &mut App) {
     let started = Instant::now();
-    let accent = rgb(NO_THEME_ACCENT);
     // Its rows are built only to be read, so in an arena freed as it ends: the fallback one GPUI
     // gives elements built outside a draw is never cleared, and each build added to it (#2138).
     let entries = gpui::with_scratch_element_arena(|| {
-        view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0)
+        view(cx).update(cx, |settings, cx| {
+            settings.searched_rows(settings.look.on, cx).0
+        })
     });
     // check.sh reads this line.
     log!(
@@ -1381,6 +1441,8 @@ impl Settings {
         self.refused = None;
         // Read again each time it shows: a profile closed since has the core forget it was asked.
         self.asked.clear();
+        // Models' rows show the name alone again once left, while the inside switch is off.
+        self.looked_up.clear();
         // check.sh waits for this line.
         log!("browser: settings tab {}", section.name());
         self.section = section;
@@ -1388,13 +1450,16 @@ impl Settings {
         self.shown = true;
         // Each section opens at its top.
         self.card.reset();
-        if section == Section::ImportExport {
+        if section == Section::SyncImport {
             self.show_import(cx);
         }
-        if section == Section::Agents {
+        if section == Section::OtherApps {
             look_for_clients(cx);
         }
-        if section == Section::Sync {
+        if section == Section::Models {
+            models_shown(cx);
+        }
+        if section == Section::SyncImport {
             self.account
                 .update(cx, |account, cx| account.read_activity(cx));
         }
@@ -1463,17 +1528,6 @@ impl Settings {
         if let Some(links) = &self.links {
             links.update(cx, |links, cx| links.set_look(look, cx));
         }
-        let selection = Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION);
-        // The field's "Search" is the rows' grey over the field's own plate, not over a group's.
-        let placeholder = self.base().opacity(DETAIL);
-        self.search.update(cx, |search, cx| {
-            search.set_colors(placeholder.into(), look.ink.into(), selection);
-            cx.notify();
-        });
-        self.filter.update(cx, |filter, cx| {
-            filter.set_colors(look.detail.into(), look.ink.into(), selection);
-            cx.notify();
-        });
         // check.sh waits for this line.
         log!(
             "browser: settings look {}",
@@ -1504,17 +1558,19 @@ impl Settings {
         // The one page whose heading is the app's name, with the line the first launch shows
         // under the wordmark.
         let title = match section {
-            Section::About => env!("APP_NAME"),
+            Section::About => env!("PRODUCT_NAME"),
             section => section.name(),
         };
         let base = self.base();
-        let title =
-            shell::display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(base.opacity(TITLE));
+        // In the heading face, 22 on 28, semibold (spec-settings.md › The window).
+        let title = shell::display_text(title, form::TITLE_SIZE, form::TITLE_LINE, cx)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(base.opacity(TITLE));
         let lede = (!lede.is_empty()).then(|| {
             div()
                 .mt(px(LEDE_TOP))
                 .line_height(px(LEDE_LINE))
-                .text_color(base.opacity(DETAIL))
+                .text_color(self.look.detail)
                 .child(lede)
         });
         let head = div()
@@ -1526,25 +1582,34 @@ impl Settings {
         let mut after_heading = None;
         let blocks = blocks.into_iter().map(|block| {
             let top = match (after_heading, &block) {
+                (_, Block::Heading(_) | Block::Crumb(..) | Block::Scoped(..)) => HEADING_TOP,
                 (None, _) => FIRST_GROUP,
-                (_, Block::Heading(_) | Block::Crumb(..)) => HEADING_TOP,
                 (Some(true), _) => HEADING_BOTTOM,
                 (_, Block::Under(_)) => BUTTONS_TOP,
                 _ => GROUP_GAP,
             };
-            after_heading = Some(matches!(block, Block::Heading(_) | Block::Crumb(..)));
+            after_heading = Some(matches!(
+                block,
+                Block::Heading(_) | Block::Crumb(..) | Block::Scoped(..)
+            ));
             let block = match block {
                 Block::Heading(heading) => self.heading(heading).into_any_element(),
                 Block::Crumb(heading, inside) => {
                     let inside = div()
                         .text_color(self.look.detail)
-                        .font_weight(FontWeight::NORMAL)
                         .child(format!(" › {inside}"));
                     self.heading(heading)
                         .flex()
                         .child(inside)
                         .into_any_element()
                 }
+                Block::Scoped(heading, chip) => self
+                    .heading(heading)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(chip)
+                    .into_any_element(),
                 Block::Group(group) | Block::Under(group) => group.into_any_element(),
                 Block::Rows(rows) => self.rows(rows).into_any_element(),
                 Block::View(view) => view,
@@ -1552,22 +1617,25 @@ impl Settings {
             div().mt(px(top)).child(block)
         });
         let blocks: Vec<gpui::Div> = blocks.collect();
+        // One column, centred on the card (#4092).
         div()
             .w_full()
             .max_w(px(PAGE_WIDTH))
+            .mx_auto()
             .flex()
             .flex_col()
             .child(head)
             .children(blocks)
     }
 
-    /// A heading over the group after it, on the text's column.
+    /// A heading over the group after it, 4 in from the groups' edge, as drawn.
     fn heading(&self, heading: SharedString) -> gpui::Div {
         div()
             .relative()
             .child(self.card.mark(heading.clone()))
-            .px(px(TEXT_X))
-            .font_weight(FontWeight::MEDIUM)
+            .px(px(HEADING_X))
+            .line_height(px(HEADING_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.look.heading)
             .child(heading)
     }
@@ -1580,7 +1648,7 @@ impl Settings {
             let div = self.flashed(&row.name, row.div);
             match row.nested {
                 true => (div.pl(px(x)), x),
-                false => (div, ROW_X),
+                false => (div, 0.),
             }
         });
         group_lined(&self.look, rows)
@@ -1619,114 +1687,141 @@ impl Settings {
         rows
     }
 
-    /// General: how ilo opens and quits, and each profile's search engine and downloads. Make
-    /// Default sits by the heading only while ilo isn't the default.
+    /// General, as drawn (S2): whether the browser is the default, with Make Default while it
+    /// isn't; how it opens and quits; the search engine and downloads of the profile its chip
+    /// shows, which picks another while there are several; and Little Window's button where the
+    /// OS has a place every desktop shows.
     fn general(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
-        let default = self.default_browser.read(cx);
-        let lede: SharedString = match (default.is_default(), default.offers()) {
-            (true, _) => concat!("How ", env!("APP_NAME"), " opens, quits and looks.").into(),
-            (false, true) => concat!(env!("APP_NAME"), " isn't your default browser.").into(),
-            (false, false) => format!(
-                "{} isn't your default browser. {}",
-                env!("APP_NAME"),
-                default.detail()
-            )
-            .into(),
-        };
-        let make = default.offers().then(|| {
-            let make = cx.listener(|settings: &mut Self, _, _, cx| {
-                log!("browser: make default browser");
-                settings.default_browser.read(cx).make_default();
-            });
-            self.button("make-default-browser", "Make Default")
-                .relative()
-                .child(self.drawn("make default".into()))
-                .on_click(make)
-                .into_any_element()
-        });
         let look = &self.look;
+        let default = self.default_browser.read(cx);
+        let (line, make) = match (default.is_default(), default.offers()) {
+            (true, _) => (
+                Some(format!("{PRODUCT} is your default browser").into()),
+                None,
+            ),
+            (false, offers) => {
+                let line = format!(
+                    "{PRODUCT} isn't your default, so links from other apps open somewhere else."
+                );
+                let line: SharedString = match offers {
+                    true => line.into(),
+                    false => format!("{line} {}", default.detail()).into(),
+                };
+                let make = offers.then(|| {
+                    let make = cx.listener(|settings: &mut Self, _, _, cx| {
+                        log!("browser: make default browser");
+                        settings.default_browser.read(cx).make_default();
+                    });
+                    // The page's one main button, a stop as every button here is.
+                    browser::settings_rows::primary(look, "make-default-browser", "Make Default")
+                        .when(self.a11y, |make| named_button(make, "Make Default"))
+                        .tab_index(0)
+                        .focus_from_keys_only()
+                        .focus_visible(ring(look.ink))
+                        .relative()
+                        .child(self.drawn("make default".into()))
+                        .on_click(make)
+                        .into_any_element()
+                });
+                (Some(line), make)
+            }
+        };
+        let default = Row {
+            div: mark_row(
+                look,
+                DEFAULT_BROWSER,
+                line.clone(),
+                make.into_iter().collect(),
+            ),
+            name: DEFAULT_BROWSER.into(),
+            line,
+            keys: None,
+            nested: false,
+        };
         let restore = unsafe { bc::bc_restore_windows() };
-        let restore = self.toggle(
-            "restore windows",
-            "Reopen your windows and tabs",
-            restore,
-            set_restore_windows,
-            accent,
-            cx,
+        let opens: [SharedString; 2] = ["Bring back my windows".into(), "Start fresh".into()];
+        let opens = segmented(
+            look,
+            "when-opens",
+            &opens,
+            Some(if restore { 0 } else { 1 }),
+            self.a11y,
+            |index, segment| {
+                let back = index == 0;
+                segment
+                    .child(self.drawn(format!("segment {}", opens[index])))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        if back == restore {
+                            return;
+                        }
+                        // check.sh waits for this line.
+                        log!(
+                            "browser: restore windows {}",
+                            if back { "on" } else { "off" }
+                        );
+                        set_restore_windows(back, cx);
+                        cx.notify();
+                    }))
+            },
         );
-        let warn = unsafe { bc::bc_warn_before_quitting() };
         let warn = self.toggle(
             "warn before quitting",
             "Ask before quitting",
-            warn,
+            unsafe { bc::bc_warn_before_quitting() },
             set_warn_before_quitting,
             accent,
             cx,
         );
-        let quit = shell::keystroke_label("cmd-q");
         let opening = vec![
             setting(
                 look,
-                "Reopen your windows and tabs",
-                Some(
-                    concat!(
-                        "Off: ",
-                        env!("APP_NAME"),
-                        " opens one empty window, and Today tabs go to the archive."
-                    )
-                    .into(),
-                ),
-                vec![restore],
+                format!("When {PRODUCT} opens"),
+                None,
+                vec![opens.into_any_element()],
             ),
-            setting(
-                look,
-                "Ask before quitting",
-                Some(
-                    format!("{quit} asks first, so a stray press can't close every window.").into(),
-                ),
-                vec![warn],
-            ),
+            setting(look, "Ask before quitting", None, vec![warn]),
         ];
-        // Each only once the core has loaded the profile.
-        let search = self.per_profile(profiles, "Search engine", None, |profile| {
-            let id = profile.id;
-            let (engines, keyword) = search_engines(id)?;
-            let chosen = engines.iter().position(|(each, _)| *each == keyword);
-            let label = chosen.map_or(keyword, |index| engines[index].1.clone());
-            let popup = self.popup(
-                Popup::SearchEngine(id),
-                label,
-                POPUP_WIDTH,
-                cx.listener(move |settings, _, window, cx| {
-                    settings.choose_search_engine(id, engines.clone(), chosen, window, cx)
-                }),
-            );
-            Some(
-                popup
-                    .child(self.drawn(format!("search engine {id}")))
-                    .into_any_element(),
-            )
-        });
-        let folders = self.per_profile(profiles, "Save downloads to", None, |profile| {
-            let id = profile.id;
-            let folder = download_folder(id)?;
-            let change = self
-                .button(("download-folder", id), "Change…")
-                .relative()
-                .child(self.drawn(format!("download folder {id}")))
-                .on_click(cx.listener(move |_, _, _, cx| choose_download_folder(id, cx)));
-            let folder = div().max_w(px(POPUP_WIDTH)).truncate().child(folder);
-            let folder = folder.text_color(self.look.detail).into_any_element();
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(CONTROL_GAP))
-                    .child(folder)
-                    .child(change)
-                    .into_any_element(),
-            )
-        });
+        // The profile the chip shows; each keeps its own, once the core has loaded it.
+        let mut found = Vec::new();
+        if let Some(id) = self.scoped(profiles) {
+            if let Some((engines, keyword)) = search_engines(id) {
+                let chosen = engines.iter().position(|(each, _)| *each == keyword);
+                let label = chosen.map_or(keyword, |index| engines[index].1.clone());
+                let popup = self.popup(
+                    Popup::SearchEngine(id),
+                    label,
+                    POPUP_WIDTH,
+                    cx.listener(move |settings, _, window, cx| {
+                        settings.choose_search_engine(id, engines.clone(), chosen, window, cx)
+                    }),
+                );
+                let popup = popup.child(self.drawn(format!("search engine {id}")));
+                found.push(setting(
+                    look,
+                    SEARCH_WITH,
+                    None,
+                    vec![popup.into_any_element()],
+                ));
+            }
+            if let Some(folder) = download_folder(id) {
+                // The folder's own name, as drawn; an assistive app reads where it is.
+                let name = std::path::Path::new(folder.as_ref())
+                    .file_name()
+                    .map_or(folder.clone(), |name| {
+                        name.to_string_lossy().into_owned().into()
+                    });
+                let picker = folder_popup(look, ("download-folder", id), SAVE_TO, name, self.a11y)
+                    .relative()
+                    .child(self.drawn(format!("download folder {id}")))
+                    .on_click(cx.listener(move |_, _, _, cx| choose_download_folder(id, cx)));
+                found.push(setting(
+                    look,
+                    SAVE_TO,
+                    None,
+                    vec![picker.into_any_element()],
+                ));
+            }
+        }
         let ask = self.toggle(
             "ask where to save",
             "Ask where to save each file",
@@ -1735,13 +1830,107 @@ impl Settings {
             accent,
             cx,
         );
-        let ask = setting(
+        found.push(setting(
             look,
             "Ask where to save each file",
-            Some("Each download asks where it goes, rather than saving to its folder.".into()),
+            None,
             vec![ask],
+        ));
+        // The Mac's menu bar and Windows' notification area, each by its own name; Linux has no
+        // place every desktop shows (browser::little_launch). With Little Window off, none (#1636).
+        let little_on = unsafe { bc::bc_little_windows() };
+        let os = little_launch::os();
+        let menu_bar = (little_launch::button(os).filter(|_| little_on)).map(|button| {
+            let switch = self.toggle(
+                "little in the menu bar",
+                button.row,
+                crate::little_in_menu_bar(),
+                set_little_in_menu_bar,
+                accent,
+                cx,
+            );
+            let line = match os {
+                little_launch::Os::Mac => {
+                    "A small window from the menu bar, for a quick look without the browser."
+                }
+                _ => button.line,
+            };
+            let row = setting(look, LITTLE_WINDOW, Some(line.into()), vec![switch]);
+            (format!("In the {}", button.place), row)
+        });
+        let downloads: SharedString = "Search and downloads".into();
+        let mut blocks = vec![
+            Block::Rows(vec![default]),
+            Block::Heading("Opening and quitting".into()),
+            Block::Rows(opening),
+            match self.scope_chip(profiles, cx) {
+                Some(chip) => Block::Scoped(downloads, chip),
+                None => Block::Heading(downloads),
+            },
+            Block::Rows(found),
+        ];
+        if let Some((heading, row)) = menu_bar {
+            blocks.push(Block::Heading(heading.into()));
+            blocks.push(Block::Rows(vec![row]));
+        }
+        Page::new(Section::General, "", blocks)
+    }
+
+    /// The profile whose settings General shows: the one picked from its chip while it's there,
+    /// or else the one the browser started with.
+    fn scoped(&self, profiles: &[Profile]) -> Option<u64> {
+        let picked = self
+            .scope
+            .filter(|&id| profiles.iter().any(|each| each.id == id));
+        picked.or(profiles.first().map(|profile| profile.id))
+    }
+
+    /// The chip saying whose settings a group shows, which lists the profiles to pick another
+    /// from, while there are several.
+    fn scope_chip(&self, profiles: &[Profile], cx: &mut Context<Self>) -> Option<AnyElement> {
+        if profiles.len() < 2 {
+            return None;
+        }
+        let shown = self.scoped(profiles)?;
+        let chosen = profiles.iter().position(|each| each.id == shown);
+        let names: Vec<SharedString> = profiles.iter().map(|each| each.name.clone()).collect();
+        let ids: Vec<u64> = profiles.iter().map(|each| each.id).collect();
+        let name = chosen.map(|index| names[index].clone()).unwrap_or_default();
+        let open = self.choosing == Some(Popup::Scope);
+        let (keyed_names, keyed_ids) = (names.clone(), ids.clone());
+        let pressed = cx.listener(move |settings: &mut Self, _: &MouseDownEvent, window, cx| {
+            let (names, ids) = (names.clone(), ids.clone());
+            settings.choose_profile(Popup::Scope, names, ids, chosen, window, cx)
+        });
+        // Space or Return opens its menu as a press does.
+        let keyed = cx.listener(
+            move |settings: &mut Self, event: &gpui::ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    let (names, ids) = (keyed_names.clone(), keyed_ids.clone());
+                    settings.choose_profile(Popup::Scope, names, ids, chosen, window, cx)
+                }
+            },
         );
-        let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
+        let chip = browser::settings_rows::scope(&self.look, name.clone(), open)
+            .relative()
+            .id("scope")
+            .when(self.a11y, |chip| {
+                named_popup(chip, Popup::Scope.spoken(), name)
+            })
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(ring(self.look.ink))
+            .child(self.menu_at(Popup::Scope))
+            .child(self.drawn("scope".into()))
+            .on_mouse_down(MouseButton::Left, pressed)
+            .on_click(keyed);
+        Some(chip.into_any_element())
+    }
+
+    /// Appearance (#4092): the settings whose choice is a picture, Appearance and Sidebar
+    /// position, with Page zoom beside them.
+    fn appearance_page(&self, cx: &mut Context<Self>) -> Page {
+        let look = &self.look;
         let appearance = self.appearance;
         let appearance_line: SharedString = match cfg!(target_os = "macos") {
             true => "Light, dark, or as macOS is. View › Appearance has it too.",
@@ -1752,7 +1941,6 @@ impl Settings {
             look,
             self.base(),
             appearance,
-            browser::settings_pictures::Buttons::HERE,
             self.a11y,
             self.drawn_logged.clone(),
             |appearance, _, cx| {
@@ -1764,24 +1952,6 @@ impl Settings {
         .relative()
         // Drawn once for each choice the first time it's shown, which check.sh waits for.
         .child(self.drawn(format!("appearance {}", appearance_title(appearance))));
-        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
-        let appearances = Row {
-            div: frame()
-                .flex_col()
-                .items_stretch()
-                .child(text(look, "Appearance", Some(appearance_line.clone())))
-                .child(
-                    div()
-                        .flex()
-                        .mt(px(SIDE_TOP))
-                        .ml(px(-SIDE_ROOM))
-                        .child(appearances),
-                ),
-            name: "Appearance".into(),
-            line: Some(appearance_line),
-            keys: None,
-            nested: false,
-        };
         let zoom = unsafe { bc::bc_page_zoom() };
         let zoom_chosen = PAGE_ZOOM
             .iter()
@@ -1798,55 +1968,75 @@ impl Settings {
                 settings.choose_page_zoom(zoom_chosen, window, cx)
             }),
         );
-        let mut looks = vec![
-            appearances,
-            setting(
-                look,
-                "Page zoom",
-                Some("Every page's size, until you zoom a site, which keeps its own.".into()),
+        let zoom = setting(
+            look,
+            "Page zoom",
+            Some("Every page's size, until you zoom a site, which keeps its own.".into()),
+            vec![
+                zoom_popup
+                    .child(self.drawn("page zoom".into()))
+                    .into_any_element(),
+            ],
+        );
+        // Transparency, directly under Appearance, where the window has glass to show through.
+        let transparency = browser::transparency::row(
+            look,
+            browser::transparency::has_glass(),
+            self.drawn_logged.clone(),
+            cx,
+        )
+        .map(|div| Row {
+            div,
+            name: browser::transparency::NAME.into(),
+            line: Some(browser::transparency::ABOUT.into()),
+            keys: None,
+            nested: false,
+        });
+        let mut looks = vec![pictured(look, "Appearance", appearance_line, appearances)];
+        // On the Mac the system's Reduce Transparency is said under the group, so Page zoom
+        // starts the next one.
+        let mut groups = match transparency {
+            Some(transparency) if cfg!(target_os = "macos") => {
+                looks.push(transparency);
+                let foot = foot(look, browser::transparency::REDUCE_TRANSPARENCY_WINS);
                 vec![
-                    zoom_popup
-                        .child(self.drawn("page zoom".into()))
-                        .into_any_element(),
-                ],
-            ),
-        ];
-        // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
-        if let Some(switch) = browser::dock_dot::SWITCH {
-            let colored = !off(DOCK_ICON_PLAIN);
-            let colored = self.toggle(
-                "dock icon color",
-                switch.name,
-                colored,
-                set_dock_icon_color,
-                accent,
-                cx,
-            );
-            looks.push(setting(
-                look,
-                switch.name,
-                Some(switch.line.into()),
-                vec![colored],
-            ));
-        }
-        let mut blocks = vec![
-            Block::Heading("Opening and quitting".into()),
-            Block::Rows(opening),
-            Block::Heading("Look".into()),
-            Block::Rows(looks),
-        ];
-        if !found.is_empty() {
-            blocks.push(Block::Heading("Search and downloads".into()));
-            blocks.push(Block::Rows(found));
-        }
-        Page {
-            action: make,
-            ..Page::new(Section::General, lede, blocks)
-        }
+                    Block::Rows(looks),
+                    Block::Under(foot),
+                    Block::Rows(vec![zoom]),
+                ]
+            }
+            transparency => {
+                looks.extend(transparency);
+                looks.push(zoom);
+                vec![Block::Rows(looks)]
+            }
+        };
+        let right = shell::sidebar_right(cx);
+        let pair = browser::settings_pictures::picker(
+            look,
+            self.base(),
+            self.dark,
+            right,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |side, _, cx| set_sidebar_right(side, cx),
+        )
+        .relative()
+        // Drawn again once the side changes, which check.sh waits for.
+        .child(self.drawn(format!("sidebar position {}", side_title(right))));
+        let position = pictured(
+            look,
+            "Sidebar position",
+            "The side of the window the sidebar, the Library and the window's buttons are on."
+                .into(),
+            pair,
+        );
+        groups.extend([Block::Heading("Layout".into()), Block::Rows(vec![position])]);
+        Page::new(Section::Window, "", groups)
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
-    /// shares the favorites, which side the sidebar is on and how it comes while hidden.
+    /// shares the favorites and how the sidebar comes while hidden.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let reopen = shell::keystroke_label("shift-cmd-t");
@@ -1945,7 +2135,7 @@ impl Settings {
                 .child(
                     div()
                         .flex()
-                        .mt(px(SIDE_TOP))
+                        .mt(px(SHARE_TOP))
                         .ml(px(-SIDE_ROOM))
                         .child(shared),
                 ),
@@ -1968,45 +2158,43 @@ impl Settings {
             Some("Its page loads again there, without this profile's logins and cookies.".into()),
             vec![moving],
         );
+        // Drawn only where the broom can be, which is also where the core keeps the switch.
+        let broom = crate::broom_host::can_be(cx);
+        let sort = self.per_profile(
+            profiles,
+            "Sort tabs into folders",
+            Some(
+                format!(
+                    "When you sort, {PRODUCT} sends the titles and site names of today's tabs to \
+                     your assistant."
+                )
+                .into(),
+            ),
+            |profile| {
+                let id = profile.id;
+                broom.then(|| {
+                    self.toggle(
+                        format!("sort tabs {id}"),
+                        "Sort tabs into folders",
+                        crate::broom_host::on(id),
+                        move |on, cx| crate::broom_host::set_on(id, on, cx),
+                        accent,
+                        cx,
+                    )
+                })
+            },
+        );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
             Block::Rows(
-                archive
-                    .into_iter()
+                (archive.into_iter())
                     .chain([unload, battery, moving])
+                    .chain(sort)
                     .collect(),
             ),
             Block::Rows(vec![favorites]),
         ];
         let right = shell::sidebar_right(cx);
-        let line: SharedString =
-            "The side of the window the sidebar, the Library and the window's buttons are on."
-                .into();
-        let pair = browser::settings_pictures::picker(
-            look,
-            self.base(),
-            self.dark,
-            right,
-            browser::settings_pictures::Buttons::HERE,
-            self.a11y,
-            self.drawn_logged.clone(),
-            |side, _, cx| set_sidebar_right(side, cx),
-        )
-        .relative()
-        // Drawn again once the side changes, which check.sh waits for.
-        .child(self.drawn(format!("sidebar position {}", side_title(right))));
-        // The drawings go under the row's line, at its start, their ring's room outside it.
-        let position = Row {
-            div: frame()
-                .flex_col()
-                .items_stretch()
-                .child(text(look, "Sidebar position", Some(line.clone())))
-                .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair)),
-            name: "Sidebar position".into(),
-            line: Some(line),
-            keys: None,
-            nested: false,
-        };
         let edge = self.toggle(
             "edge reveals sidebar",
             "Show the hidden sidebar at the window's edge",
@@ -2017,35 +2205,17 @@ impl Settings {
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
         let side = if right { "right" } else { "left" };
-        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
-        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
-        let top_bar = setting(
+        let mut hidden = vec![setting(
             look,
-            "Top bar",
+            "Show the hidden sidebar at the window's edge",
             Some(
                 format!(
-                    "The URL field and the sidebar's buttons in a row across the window's top, \
-                     the page under it. {top_bar_keys} turns it on and off."
+                    "Move the pointer along the {side} edge. {toggle_keys} shows it either way."
                 )
                 .into(),
             ),
-            vec![top_bar],
-        );
-        let mut hidden = vec![
-            position,
-            top_bar,
-            setting(
-                look,
-                "Show the hidden sidebar at the window's edge",
-                Some(
-                    format!(
-                        "Move the pointer along the {side} edge. {toggle_keys} shows it either way."
-                    )
-                    .into(),
-                ),
-                vec![edge],
-            ),
-        ];
+            vec![edge],
+        )];
         // Where the host watches for it (host_watch_option_taps), or on Windows the core.
         if cfg!(any(
             target_os = "macos",
@@ -2116,7 +2286,7 @@ impl Settings {
             )]));
         }
         Page::new(
-            Section::TabsAndSidebar,
+            Section::TabsAndSpaces,
             "When Today tabs leave, and how the sidebar comes and goes.",
             blocks,
         )
@@ -2179,7 +2349,7 @@ impl Settings {
         let little_on = unsafe { bc::bc_little_windows() };
         let little_switch = self.toggle(
             "little windows",
-            "Little ilo",
+            "Little Window",
             little_on,
             set_little_windows,
             accent,
@@ -2199,31 +2369,10 @@ impl Settings {
         let little = feature(
             look,
             "icons/app-window.svg",
-            concat!("Little ", env!("APP_NAME")),
+            "Little Window",
             Some(little_line.into()),
             vec![little_switch],
         );
-        // The Mac's menu bar and Windows' notification area, each by its own name; Linux has no
-        // place every desktop shows (browser::little_launch).
-        // With Little ilo off, none (#1636).
-        let menu_bar =
-            (little_launch::button(little_launch::os()).filter(|_| little_on)).map(|button| {
-                let on = crate::little_in_menu_bar();
-                let switch = self.toggle(
-                    "little in the menu bar",
-                    button.row,
-                    on,
-                    set_little_in_menu_bar,
-                    accent,
-                    cx,
-                );
-                nested(setting(
-                    look,
-                    button.row,
-                    Some(button.line.into()),
-                    vec![switch],
-                ))
-            });
         let (label, chosen) = chosen_time(&LITTLE_ARCHIVE_AFTER, unsafe {
             bc::bc_little_archive_after()
         });
@@ -2252,13 +2401,12 @@ impl Settings {
         let sign_in_close = nested(setting(
             look,
             "Close sign-in pages when done",
-            Some("When an app's sign-in finishes in Little ilo, its window closes.".into()),
+            Some("When an app's sign-in finishes in a Little Window, the window closes.".into()),
             vec![sign_in_close],
         ));
         // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
-            .chain(menu_bar)
             .chain(little_on.then_some(little_archive))
             .chain(little_on.then_some(sign_in_close))
             .collect();
@@ -2415,9 +2563,9 @@ impl Settings {
             blocks.push(Block::Group(self.always_translated(&always.0, cx)));
         }
         Page::new(
-            Section::Features,
+            Section::General,
             concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own tools. Off takes every way into one away, and its switch brings it back."
             ),
             blocks,
@@ -2562,7 +2710,7 @@ impl Settings {
                 accent,
                 cx,
             );
-            let line = browser::daily_count::words(env!("APP_NAME"));
+            let line = browser::daily_count::words(env!("PRODUCT_NAME"));
             let row = setting(
                 look,
                 "Send a daily usage count",
@@ -2582,7 +2730,7 @@ impl Settings {
             .child(self.drawn("open privacy policy".into()))
             .on_click(|_, _, cx| open_notice(build_info::PRIVACY_POLICY, cx));
         let line = concat!(
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             " never sees the sites you visit or what you type, and never sells your data. ",
             "The policy names every service it talks to."
         );
@@ -2595,7 +2743,11 @@ impl Settings {
         blocks.push(Block::Rows(vec![policy]));
         Page::new(
             Section::Privacy,
-            concat!("What sites may do, and what ", env!("APP_NAME"), " sends."),
+            concat!(
+                "What sites may do, and what ",
+                env!("PRODUCT_NAME"),
+                " sends."
+            ),
             blocks,
         )
     }
@@ -2652,15 +2804,15 @@ impl Settings {
             }
             (false, false) => "uBlock Origin, built in, with the filter lists you turn on.",
             (true, true) => concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own ad blocker, with the filter lists your organization chose."
             ),
             (true, false) => concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own ad blocker, with the filter lists you turn on."
             ),
         };
-        Page::new(Section::AdBlocking, lede, blocks)
+        Page::new(Section::Privacy, lede, blocks)
     }
 
     /// Block with uBlock Origin: the way back to the extension and forward again, each taking
@@ -2697,22 +2849,26 @@ impl Settings {
     fn my_filters(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         let locked = unsafe { bc::bc_ad_block_filters_locked() };
-        let rows = ad_block_filters()
-            .into_iter()
-            .enumerate()
-            .map(|(index, filter)| {
-                let remove = (!locked).then(|| {
-                    let remove =
-                        self.button(("ad-block-filter-remove", index as u64), "Remove")
-                            .relative()
-                            .child(self.drawn(format!("remove filter {index}")))
-                            .on_click(cx.listener(move |settings, _, _, cx| {
-                                settings.remove_filter(index, cx)
-                            }));
-                    remove.into_any_element()
-                });
-                line_row(look, filter, None, remove.into_iter().collect())
+        let filters = ad_block_filters();
+        let count = filters.len();
+        let rows = filters.into_iter().enumerate().map(|(index, filter)| {
+            let remove = (!locked).then(|| {
+                let remove = self
+                    .button(("ad-block-filter-remove", index as u64), "Remove")
+                    .relative()
+                    .child(self.drawn(format!("remove filter {index}")))
+                    .on_click(cx.listener(
+                        move |settings, click: &gpui::ClickEvent, window, cx| {
+                            let lines: Vec<usize> = (0..count).collect();
+                            let keys = click.is_keyboard();
+                            list_keys::removing(&index, &lines, Named::ByLine, keys, window, cx);
+                            settings.remove_filter(index, cx)
+                        },
+                    ));
+                remove.into_any_element()
             });
+            line_row(look, filter, None, remove.into_iter().collect())
+        });
         let mut rows: Vec<gpui::Div> = rows.collect();
         if locked {
             rows.push(line_row(look, "Set by your organization", None, Vec::new()));
@@ -2729,11 +2885,16 @@ impl Settings {
             .rounded(px(CONTROL_RADIUS))
             .bg(look.control)
             .key_context("Naming")
-            .on_action(
-                cx.listener(|settings, _: &KeepName, window, cx| settings.add_filter(window, cx)),
-            )
+            .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+                if browser::dismissal::submits([&settings.filter.clone()], cx) {
+                    settings.add_filter(window, cx)
+                }
+            }))
             .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
-                (settings.filter).update(cx, |field, cx| field.reset("".into(), window, cx));
+                let filter = settings.filter.clone();
+                if browser::dismissal::Close::escape_from([&filter], cx).is_some() {
+                    filter.update(cx, |field, cx| field.reset("".into(), window, cx));
+                }
             }))
             .child(self.drawn("filter field".into()))
             .child(self.filter.clone());
@@ -2777,6 +2938,7 @@ impl Settings {
     /// which a page in it asks again (#671).
     fn always_translated(&self, languages: &[SharedString], cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
+        let count = languages.len();
         let rows = languages.iter().enumerate().map(|(index, language)| {
             let at = self.drawn(format!("always translated {language}"));
             let gone = language.clone();
@@ -2784,7 +2946,10 @@ impl Settings {
                 .button(("always-translated-remove", index as u64), "Remove")
                 .relative()
                 .child(at)
-                .on_click(cx.listener(move |_, _, _, cx| {
+                .on_click(cx.listener(move |_, click: &gpui::ClickEvent, window, cx| {
+                    let lines: Vec<usize> = (0..count).collect();
+                    let keys = click.is_keyboard();
+                    list_keys::removing(&index, &lines, Named::ByLine, keys, window, cx);
                     let mut languages = (cx.try_global::<shell::AlwaysTranslated>())
                         .map(|always| always.0.clone())
                         .unwrap_or_default();
@@ -3121,10 +3286,16 @@ impl Settings {
                 Some(renaming) if renaming.profile == id => div()
                     .key_context("Naming")
                     .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
-                        settings.keep_name(window, cx)
+                        let name = settings.renaming.as_ref().map(|r| r.name.clone());
+                        if browser::dismissal::submits(&name, cx) {
+                            settings.keep_name(window, cx)
+                        }
                     }))
                     .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
-                        settings.cancel_name(window, cx)
+                        let name = settings.renaming.as_ref().map(|r| r.name.clone());
+                        if browser::dismissal::Close::escape_from(&name, cx).is_some() {
+                            settings.cancel_name(window, cx)
+                        }
                     }))
                     .child(renaming.name.clone()),
                 _ => div()
@@ -3196,7 +3367,7 @@ impl Settings {
             Block::Under(div().flex().child(new)),
         ];
         Page::new(
-            Section::Profiles,
+            Section::TabsAndSpaces,
             "A profile keeps its own logins, cookies, history and extensions. Several Spaces can \
              share one.",
             blocks,
@@ -3237,10 +3408,10 @@ impl Settings {
 
     /// Shows the profile's name in a field, all selected, to type a new one over.
     fn rename(&mut self, profile: u64, name: SharedString, cx: &mut Context<Self>) {
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Self| settings.look);
         let name = cx.new(|cx| {
             TextInput::new("Profile name", cx)
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -3349,7 +3520,7 @@ impl Settings {
     fn passwords(&mut self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         const LEDE: &str = concat!(
             "What each profile saves and fills in. ",
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             " shows a login's site and username, never its password."
         );
         let Some(profile) = self.passwords_profile(profiles) else {
@@ -3370,13 +3541,22 @@ impl Settings {
         let login_row = |index: usize, login: &Login, cx: &mut Context<Self>| {
             let (site, username) = passwords::lines(login);
             let login = login.clone();
+            // Named by its login's key, so another's Remove never takes its name, and the keyboard
+            // with it, as a row goes (list_keys::removing); hashed, as the key holds the username.
+            let named = {
+                use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+                BuildHasherDefault::<DefaultHasher>::default().hash_one(&login.key)
+            };
             let remove = self
-                .button(("remove-login", index), "Remove")
+                .button(("remove-login", named), "Remove")
                 .relative()
                 .child(self.drawn(format!("remove login {index}")))
-                .on_click(cx.listener(move |settings, _, window, cx| {
-                    settings.remove(profile, login.clone(), window, cx)
-                }));
+                .on_click(
+                    cx.listener(move |settings, click: &gpui::ClickEvent, window, cx| {
+                        let keys = click.is_keyboard();
+                        settings.remove(profile, login.clone(), keys, window, cx)
+                    }),
+                );
             feature_row(
                 &look,
                 Section::Passwords.glyph(),
@@ -3457,7 +3637,8 @@ impl Settings {
                 move |_, window, cx| {
                     let (names, ids) = (names.clone(), ids.clone());
                     let choose = |settings: &mut Settings, cx: &mut Context<Settings>| {
-                        settings.choose_profile(names, ids, chosen, window, cx)
+                        let which = Popup::PasswordsProfile;
+                        settings.choose_profile(which, names, ids, chosen, window, cx)
                     };
                     view.update(cx, choose).ok();
                 },
@@ -3536,10 +3717,11 @@ impl Settings {
         Page::new(Section::Passwords, LEDE, blocks)
     }
 
-    /// Opens the profiles' pop-up menu over its button, as the archive's, and lists the profile
-    /// picked's logins.
+    /// Opens the profiles' pop-up menu over `which`, as the archive's, and shows the profile
+    /// picked's logins, for Passwords', or its settings, for a group's chip.
     fn choose_profile(
         &mut self,
+        which: Popup,
         names: Vec<SharedString>,
         ids: Vec<u64>,
         chosen: Option<usize>,
@@ -3561,26 +3743,52 @@ impl Settings {
             settings
                 .update(cx, |settings, cx| {
                     if let Some(&profile) = picked.and_then(|index| ids.get(index)) {
-                        // check.sh waits for this line.
-                        log!("browser: passwords profile {profile}");
-                        settings.passwords_profile = Some(profile);
+                        // check.sh waits for these lines.
+                        match which {
+                            Popup::PasswordsProfile => {
+                                log!("browser: passwords profile {profile}");
+                                settings.passwords_profile = Some(profile);
+                            }
+                            _ => {
+                                log!("browser: settings scope profile {profile}");
+                                settings.scope = Some(profile);
+                            }
+                        }
                     }
                     settings.chose(cx);
                 })
                 .ok();
         });
-        self.pop_up(Popup::PasswordsProfile, items, picked, window, cx);
+        self.pop_up(which, items, picked, window, cx);
     }
 
     /// Removes a saved login once the user confirms, in an alert, or on Linux in Settings' own
     /// dialog, as a profile's Delete asks, as nothing brings it back. A site set to Never comes off
-    /// it at once: the offer coming again is its way back.
-    fn remove(&mut self, profile: u64, login: Login, window: &mut Window, cx: &mut Context<Self>) {
+    /// it at once: the offer coming again is its way back. Its Remove pressed from the keys
+    /// (`from_keys`) hands the keyboard to the Remove of the row that takes its place, among the
+    /// saved or the Never rows it's listed in.
+    fn remove(
+        &mut self,
+        profile: u64,
+        login: Login,
+        from_keys: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let listed: Vec<Login> = (self.logins.get(&profile).into_iter().flatten())
+            .filter(|each| each.never == login.never)
+            .cloned()
+            .collect();
         if login.never {
+            list_keys::removing(&login, &listed, Named::ByRow, from_keys, window, cx);
             crate::remove_login(profile, &login);
             return;
         }
         let (message, detail) = passwords::question(&login);
+        // Settings' observer has given the keyboard back to this Remove by the time the answer
+        // runs, so it hands on from there.
+        #[cfg(target_os = "linux")]
+        let handle = window.window_handle();
         #[cfg(target_os = "linux")]
         dialog::ask_in(
             &self.dialog,
@@ -3588,20 +3796,27 @@ impl Settings {
             detail,
             "Remove",
             dialog::Return::Action,
-            Box::new(move |_| crate::remove_login(profile, &login)),
+            Box::new(move |cx| {
+                (handle.update(cx, |_, window, cx| {
+                    list_keys::removing(&login, &listed, Named::ByRow, from_keys, window, cx)
+                }))
+                .ok();
+                crate::remove_login(profile, &login);
+            }),
             window,
             cx,
         );
         #[cfg(not(target_os = "linux"))]
-        {
-            let _ = window;
-            cx.spawn(async move |_, _| {
-                if crate::ask(&message, &detail, &["Remove", "Cancel"], true) == 0 {
-                    crate::remove_login(profile, &login);
-                }
-            })
-            .detach();
-        }
+        cx.spawn_in(window, async move |settings, cx| {
+            if crate::ask(&message, &detail, &["Remove", "Cancel"], true) == 0 {
+                (settings.update_in(cx, |_, window, cx| {
+                    list_keys::removing(&login, &listed, Named::ByRow, from_keys, window, cx)
+                }))
+                .ok();
+                crate::remove_login(profile, &login);
+            }
+        })
+        .detach();
     }
 
     /// Removes a saved address or card once the user confirms, as a login, as nothing brings it
@@ -3617,7 +3832,7 @@ impl Settings {
             true => format!("Remove the card “{}”?", saved.title),
             false => format!("Remove the address for “{}”?", saved.title),
         };
-        let detail = format!("{} won't fill it in again.", env!("APP_NAME"));
+        let detail = format!("{} won't fill it in again.", env!("PRODUCT_NAME"));
         let remove = move || {
             // check.sh waits for this line, which names nothing saved.
             log!(
@@ -3652,79 +3867,82 @@ impl Settings {
 
     /// Agents: the switch that lets agents in, the tasks ⇥ asks in ⌘T, the apps that connect,
     /// and each agent's permissions and what it did in this run, newest first.
-    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Page {
+    /// Agents' pages, Threads, Models, Access and Other apps, in that order: what was one page of
+    /// agents, each part on the page the owner drew it on (spec-settings.md › S8 to S11).
+    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
-        let on = agents.read(cx).is_on();
+        let on = agents.read(cx).threads();
+        // The inside switch: the user's own assistant, for threads. Other apps have theirs.
+        let name = format!("Let your assistant use {PRODUCT}");
         let switch = {
             let agents = agents.clone();
-            let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
-            self.toggle("agents", "Let agents use the browser", on, set, accent, cx)
+            let set =
+                move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_threads(on, cx));
+            self.toggle("agents", name.clone(), on, set, accent, cx)
         };
-        let model = agents.read(cx);
-        let about: SharedString = match model.trouble() {
-            Some(trouble) => trouble,
-            None if on => {
-                "On: a connected client reaches the browser through the bridge beside it.".into()
-            }
-            None => "Each asks before it sends or pays for anything.".into(),
+        // Off, the drawn line says what off does; on, the row is bare. The agents' trouble comes
+        // first, as it did.
+        let about: Option<SharedString> = match agents.read(cx).trouble() {
+            Some(trouble) => Some(trouble),
+            None => (!on).then(|| "Off: no thread starts.".into()),
         };
-        let master = feature(
-            look,
-            Section::Agents.glyph(),
-            "Let agents use the browser",
-            Some(about),
-            vec![switch],
-        );
+        let master = setting(look, name, about, vec![switch]);
         let listed = agents.read(cx).listed();
         let clients: Vec<gpui::Div> = listed
             .iter()
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
-        // Asking your own Claude from ⌘T and letting an app connect are two trust decisions, so
-        // tasks have their switch under agents', shown while agents are on.
-        let tasks_on = agents.read(cx).tasks_on();
-        let tasks = on.then(|| {
-            let switch = {
-                let agents = agents.clone();
-                let set = move |on, cx: &mut App| {
-                    agents.update(cx, |agents, cx| agents.set_tasks_on(on, cx))
-                };
-                self.toggle(
-                    "agent tasks",
-                    "Tasks from the command bar",
-                    tasks_on,
-                    set,
-                    accent,
-                    cx,
-                )
-            };
-            let tab = if shell::OFF_THE_MAC { "Tab" } else { "⇥" };
-            let bar = shell::keystroke_label("cmd-t");
-            let line = match tasks_on {
-                true => format!("{tab} in {bar} gives what you typed to Claude or Codex here."),
-                false => format!("Off: {tab} in {bar} makes no task. Apps that connect still can."),
-            };
-            nested(setting(
-                look,
-                "Tasks from the command bar",
-                Some(line.into()),
-                vec![switch],
-            ))
-        });
-        let mut blocks = vec![Block::Rows([master].into_iter().chain(tasks).collect())];
-        if tasks_on {
-            blocks.push(Block::Heading("Tasks".into()));
-            blocks.push(Block::Group(self.tasks(agents, cx)));
+        // Under the inside switch, while it's on: what is kept of them (#4105).
+        let keeps = on.then(|| self.kept_tasks(agents, cx));
+        // And under that, each one kept, which is the list of what is.
+        let kept = match on {
+            true => self.kept_rows(agents, cx),
+            false => Vec::new(),
+        };
+        let rows = [master].into_iter().chain(keeps).chain(kept);
+        let mut threads = vec![Block::Rows(rows.collect())];
+        // Where a new thread starts, while threads are on, as the drawing has it under the switch.
+        if on {
+            threads.extend(self.new_thread(agents, cx));
         }
-        blocks.push(Block::Heading("Apps that connect".into()));
-        blocks.push(Block::Group(group(look, clients)));
+        let (mut models, mut access) = (Vec::new(), Vec::new());
+        // Every assistant, in its state, whether agents and tasks are on or not (S9).
+        models.push(Block::Heading("Your assistant".into()));
+        models.push(Block::Group(self.assistants(agents, cx)));
+        models.push(Block::Under(foot(
+            look,
+            browser::settings_rows::SIGN_INS_STAY,
+        )));
+        if on {
+            access.extend(self.access());
+            // What a thread may reach: files and folders too, with the folders it holds to revoke.
+            access.extend(self.files_not_here(agents, cx));
+            access.extend(self.folders_in_use(agents, cx));
+        }
+        // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
+        // The Mac, Windows and Linux each post them (needs_you_host.rs).
+        if on {
+            threads.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
+            threads.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
+        }
+        let mut rows = vec![self.other_apps(agents, accent, cx)];
+        // Where their next task starts, while they may connect: the composer's level menu.
+        if agents.read(cx).other_apps() {
+            rows.push(self.others_access(agents, cx));
+        }
+        let mut blocks = vec![Block::Rows(rows)];
+        blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
+        let apps = SharedString::from(APPS_THAT_CONNECT);
+        blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
         // off when it's run.
         if agents.read(cx).command_offered() {
             blocks.push(Block::Heading("Command line".into()));
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
-        blocks.extend(self.fenced_sites(agents, cx));
+        access.extend(self.fenced_sites(agents, cx));
+        access.extend(self.sensitive_sites(agents, cx));
+        access.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -3750,12 +3968,22 @@ impl Settings {
                             true => agents::tools::Tense::Done,
                             false => agents::tools::Tense::Failed,
                         };
-                        agents::tools::step_title(&did, tense)
+                        let title = agents::tools::step_title(&did, tense);
+                        // The call's answer carried a site's notes (#4122).
+                        match entry.notes.is_empty() {
+                            true => title,
+                            false => agents::notes::logged(&title),
+                        }
                     };
                     let what = title(entry);
-                    let refused = (entry.steps.iter().map(|step| &step.refused))
+                    // Why it was refused, but for a permission the browser refused the page,
+                    // whose title says it whole.
+                    let shown = |entry: &agents::Activity| {
+                        agents::tools::refusal_shown(&entry.action, &entry.refused).to_string()
+                    };
+                    let refused = (entry.steps.iter().map(shown))
                         .find(|refused| !refused.is_empty())
-                        .unwrap_or(&entry.refused);
+                        .unwrap_or_else(|| shown(entry));
                     let steps = entry.steps.iter().map(title);
                     let detail: SharedString = if !refused.is_empty() {
                         format!("Refused: {refused}").into()
@@ -3777,9 +4005,13 @@ impl Settings {
                 continue;
             }
             listed_any = true;
-            blocks.push(Block::Heading(
-                format!("What {} may do", agents.read(cx).agent_name(client.id())).into(),
-            ));
+            // An app with no name of its own is "this app" here, as Another app would read as a
+            // name (table OA1).
+            let heading = match model.nameless(client.id()) {
+                true => "What this app may do".into(),
+                false => format!("What {} may do", model.agent_name(client.id())).into(),
+            };
+            blocks.push(Block::Heading(heading));
             blocks.extend(grants.map(Block::Group));
             if !entries.is_empty() {
                 blocks.push(Block::Group(group(look, entries)));
@@ -3792,11 +4024,10 @@ impl Settings {
             if rows.is_empty() {
                 continue;
             }
-            listed_any = true;
-            blocks.push(Block::Heading(
+            access.push(Block::Heading(
                 format!("What {} may do from {bar}", cli.name()).into(),
             ));
-            blocks.push(Block::Group(group(look, rows)));
+            access.push(Block::Group(group(look, rows)));
         }
         if !listed_any {
             blocks.push(Block::Heading("Activity".into()));
@@ -3810,11 +4041,139 @@ impl Settings {
                 )],
             )));
         }
-        Page::new(
-            Section::Agents,
-            "Agents never see your passwords, cookies or autofill.",
-            blocks,
-        )
+        [
+            Page::new(Section::Threads, "", threads),
+            Page::new(
+                Section::Models,
+                Section::Models.lede().unwrap_or_default(),
+                models,
+            ),
+            Page::new(Section::Access, agents::tier::NEVER_GETS, access),
+            Page::new(
+                Section::OtherApps,
+                Section::OtherApps.lede().unwrap_or_default(),
+                blocks,
+            ),
+        ]
+    }
+
+    /// Other apps' own switch (#4260), at the top of their page, where it is kept: only the user's
+    /// click sets it.
+    fn other_apps(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
+        let name = format!("Let other apps' agents use {PRODUCT}");
+        let on = agents.read(cx).other_apps();
+        let switch = {
+            let agents = agents.clone();
+            let set = move |on, cx: &mut App| {
+                agents.update(cx, |agents, cx| agents.set_other_apps(on, cx))
+            };
+            self.toggle("other apps", name.clone(), on, set, accent, cx)
+        };
+        // S30, batch 12: off says what off does; on, the row is bare.
+        let line = (!on).then(|| "Off: no app connects.".into());
+        setting(&self.look, name, line, vec![switch])
+    }
+
+    /// Other apps' Access (#4360): the level an app's next task starts at, from the composer's
+    /// level menu, Full access too; only the user's pick sets it, and it sets it back.
+    fn others_access(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
+        let tier = agents.read(cx).others_start();
+        let agents = agents.clone();
+        let choose = cx.listener(move |settings, _, window, cx| {
+            let (tiers, items) = browser::command_bar::level_choices(tier);
+            let (settings_, agents) = (cx.weak_entity(), agents.clone());
+            let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+                if let Some(&tier) = picked.and_then(|at| tiers.get(at)) {
+                    agents.update(cx, |agents, cx| agents.set_others_start(tier, cx));
+                }
+                settings_.update(cx, |settings, cx| settings.chose(cx)).ok();
+            });
+            settings.pop_up(Popup::OthersAccess, items, picked, window, cx);
+        });
+        let popup = self
+            .popup(
+                Popup::OthersAccess,
+                tier.label().into(),
+                POPUP_WIDTH,
+                choose,
+            )
+            .child(self.drawn("other apps access".into()))
+            .into_any_element();
+        setting(&self.look, agents::tier::ACCESS, None, vec![popup])
+    }
+
+    /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
+    /// one. The level's menu opens Settings here, flashing the group (settings::show_row).
+    fn access(&self) -> Vec<Block> {
+        use agents::tier::{ACCESS, Tier};
+        let look = &self.look;
+        let rows = Tier::ALL.map(|tier| {
+            setting(
+                look,
+                tier.label(),
+                Some(tier.explained().into()),
+                Vec::new(),
+            )
+            .div
+        });
+        let heading: SharedString = ACCESS.into();
+        vec![
+            Block::Heading(heading.clone()),
+            Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
+    }
+
+    /// Files and folders (#4101) on a system that can't wall a task in with them: why they aren't
+    /// offered (X9), under its own heading, where a user who looks for them finds it. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn files_not_here(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        if agents.read(cx).files_available() {
+            return Vec::new();
+        }
+        let why = line_row(&self.look, words::NOT_AVAILABLE, None, Vec::new());
+        vec![
+            Block::Heading(words::ON_THIS_COMPUTER.into()),
+            Block::Group(group(&self.look, [why])),
+        ]
+    }
+
+    /// Each folder a live task holds (#4101), with Revoke, which acts at once, under its own
+    /// heading; not drawn while no task holds one, nor where files aren't available. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn folders_in_use(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        let look = &self.look;
+        let model = agents.read(cx);
+        if !model.files_available() {
+            return Vec::new();
+        }
+        let rows: Vec<gpui::Div> = (model.folders_in_use().into_iter().enumerate())
+            .map(|(index, held)| {
+                let (agents, agent) = (agents.clone(), held.agent.clone());
+                let revoke = self
+                    .button(("agent-folder-revoke", index as u64), words::REVOKE)
+                    .relative()
+                    // By its place, never the folder's name, as this line is logged.
+                    .child(self.drawn(format!("revoke folder {index}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.revoke_folder(&agent, cx))
+                    });
+                line_row(
+                    look,
+                    held.folder,
+                    Some(held.task),
+                    vec![revoke.into_any_element()],
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        vec![
+            Block::Heading(words::FOLDERS_IN_USE.into()),
+            Block::Group(group(look, rows)),
+        ]
     }
 
     /// Always ask first (#3724): the sites the user fenced, each with Remove, then Add Site…, which
@@ -3845,26 +4204,30 @@ impl Settings {
             ));
         }
         if self.fence_adding {
-            let field =
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(CONTROL_HEIGHT))
-                    .px(px(FIELD_PADDING))
-                    .flex()
-                    .items_center()
-                    .rounded(px(CONTROL_RADIUS))
-                    .bg(look.control)
-                    .key_context("Naming")
-                    .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+            let field = div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h(px(CONTROL_HEIGHT))
+                .px(px(FIELD_PADDING))
+                .flex()
+                .items_center()
+                .rounded(px(CONTROL_RADIUS))
+                .bg(look.control)
+                .key_context("Naming")
+                .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+                    if browser::dismissal::submits([&settings.fence_field.clone()], cx) {
                         settings.add_fence(window, cx)
-                    }))
-                    .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                    }
+                }))
+                .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                    let field = settings.fence_field.clone();
+                    if browser::dismissal::Close::escape_from([&field], cx).is_some() {
                         settings.close_fence(window, cx)
-                    }))
-                    .child(self.drawn("fence field".into()))
-                    .child(self.fence_field.clone());
+                    }
+                }))
+                .child(self.drawn("fence field".into()))
+                .child(self.fence_field.clone());
             let cancel = self
                 .button("agent-fence-cancel", "Cancel")
                 .relative()
@@ -3884,13 +4247,8 @@ impl Settings {
         }
         // Its last line's foot, where check.sh scrolls it into sight before it captures it whole.
         let end = div().absolute().left_0().right_0().bottom_0().h(px(1.));
-        let foot = div()
+        let foot = foot(look, fence::FOOT)
             .relative()
-            .px(px(TEXT_X))
-            .text_size(px(text::SMALL))
-            .line_height(px(DETAIL_LINE))
-            .text_color(look.detail)
-            .child(fence::FOOT)
             .child(end.child(self.drawn("fence foot".into())));
         let under = match self.fence_adding {
             true => div().child(foot),
@@ -3909,10 +4267,104 @@ impl Settings {
                     .child(foot.mt(px(BUTTONS_TOP)))
             }
         };
+        // An ilo line's link opens here, flashing the list (Browser::off_limits).
+        let heading: SharedString = fence::HEADING.into();
         vec![
-            Block::Heading(fence::HEADING.into()),
-            Block::Group(group(look, rows)),
+            Block::Heading(heading.clone()),
+            Block::Group(self.flashed(&heading, group(look, rows))),
             Block::Under(under),
+        ]
+    }
+
+    /// Sensitive sites (#4369): each profile's, its profile named with two or more, each with
+    /// Remove, the way out of a mark the user or a sign-in made, and what the list does. A later
+    /// sign-in with a bank or government ID marks a removed site again.
+    fn sensitive_sites(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::sensitive;
+        let look = &self.look;
+        let profiles = crate::ids(bc::bc_profiles);
+        let several = profiles.len() > 1;
+        let model = agents.read(cx);
+        let marked: Vec<(String, String, Option<SharedString>)> = (profiles.into_iter())
+            .flat_map(|profile| {
+                let folder = crate::agents_core::profile_folder(profile);
+                let name = several.then(|| crate::name(bc::bc_profile_name, profile));
+                (model.sensitive_sites(&folder).into_iter())
+                    .map(move |site| (folder.clone(), site, name.clone()))
+            })
+            .collect();
+        let mut rows: Vec<gpui::Div> = (marked.into_iter().enumerate())
+            .map(|(index, (folder, site, name))| {
+                let (agents, gone) = (agents.clone(), site.clone());
+                // The words table's SS8.
+                let remove = self
+                    .button(("agent-sensitive-remove", index as u64), "Remove")
+                    .relative()
+                    .child(self.drawn(format!("unmark {site}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| {
+                            agents.mark_sensitive(&folder, &gone, false, cx)
+                        })
+                    });
+                let text = sensitive::row(&site, name.as_deref());
+                line_row(look, text, None, vec![remove.into_any_element()])
+            })
+            .collect();
+        if rows.is_empty() {
+            rows.push(line_row(
+                look,
+                sensitive::NONE,
+                Some(sensitive::NONE_LINE.into()),
+                Vec::new(),
+            ));
+        }
+        vec![
+            Block::Heading(sensitive::HEADING.into()),
+            Block::Group(group(look, rows)),
+            Block::Under(div().child(foot(look, sensitive::FOOT))),
+        ]
+    }
+
+    /// Site notes (#4122): the switch, then a row for each site ilo has a note for, which opens
+    /// to the note's own text, as the agent gets it. The list is the app's, so nothing adds to it.
+    fn site_notes(
+        &self,
+        agents: &Entity<Agents>,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> Vec<Block> {
+        use agents::notes;
+        let look = &self.look;
+        let on = agents.read(cx).notes_on();
+        let switch = {
+            let agents = agents.clone();
+            let set =
+                move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_notes_on(on, cx));
+            self.toggle("agent site notes", notes::HEADING, on, set, accent, cx)
+        };
+        let line = match on {
+            true => notes::SWITCH_LINE,
+            false => notes::SWITCH_OFF_LINE,
+        };
+        let row = setting(look, notes::HEADING, Some(line.into()), vec![switch]);
+        let rows: Vec<gpui::Div> = (notes::NOTES.iter())
+            .map(|note| {
+                let name = note.name;
+                let opened = self.notes_opened.contains(name);
+                let toggle = cx.listener(move |settings, _, _, cx| {
+                    if !settings.notes_opened.remove(name) {
+                        settings.notes_opened.insert(name);
+                    }
+                    cx.notify();
+                });
+                let logged = self.drawn_logged.clone();
+                browser::settings_rows::site_note_row(look, note, opened, self.a11y, logged, toggle)
+            })
+            .collect();
+        vec![
+            Block::Rows(vec![row]),
+            Block::Group(group(look, rows)),
+            Block::Under(foot(look, notes::FOOT)),
         ]
     }
 
@@ -4125,156 +4577,116 @@ impl Settings {
         cx.notify();
     }
 
-    /// The tasks ⇥ asks in ⌘T: the agent they run on, then each CLI, whether it's installed and
-    /// signed in, with the command that does it to copy, as ilo runs neither, and the model it runs
-    /// tasks with.
-    fn tasks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
+    /// What is kept of the threads, which no setting turns off: the row is named by how many ilo
+    /// holds a conversation's id for, which isn't a promise each still takes a reply, and has
+    /// Remove All…, which asks first, as nothing brings a conversation back. With none the row
+    /// stays, so what a Remove All did can be seen.
+    fn kept_tasks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
         let look = &self.look;
-        let model = agents.read(cx);
-        let ready: Vec<Cli> = Cli::ALL
-            .into_iter()
-            .filter(|cli| model.found(*cli) == Ready::SignedIn)
-            .collect();
-        let default = model.default_task_agent().filter(|cli| ready.contains(cli));
-        let run_on = match default {
-            Some(default) => {
+        let (kept, stuck) = agents.read(cx).kept_tasks();
+        let (name, removes) = browser::settings_rows::kept_row(kept);
+        // Every id held is counted, so those are among them.
+        let stuck = (stuck > 0).then(|| {
+            let said = format!("{stuck} of them couldn't be removed");
+            div().text_color(look.detail).child(said).into_any_element()
+        });
+        let remove = removes.then(|| {
+            let agents = agents.clone();
+            self.button("remove-kept-tasks", REMOVE_ALL)
+                .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, None, cx))
+                .into_any_element()
+        });
+        let controls = stuck.into_iter().chain(remove).collect();
+        nested(setting(look, name, Some(KEPT_AS.into()), controls))
+    }
+
+    /// The finished tasks kept, the last to end first, each by its title and the Archive's own
+    /// words for it, with Remove, which asks first as Remove All… does: the list of what ilo
+    /// keeps of them, and the way out for one.
+    fn kept_rows(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Row> {
+        let kept = agents.read(cx).kept_list(cx);
+        (kept.into_iter())
+            .map(|(task, title, about)| {
                 let agents = agents.clone();
-                let popup = self.popup(
-                    Popup::TaskAgent,
-                    default.name().into(),
-                    POPUP_WIDTH,
-                    cx.listener(move |settings, _, window, cx| {
-                        settings.choose_task_agent(&agents, window, cx)
-                    }),
-                );
-                let detail = "⇥ in the command bar gives the task to this agent";
-                line_row(
-                    look,
-                    "Run tasks on",
-                    Some(detail.into()),
-                    vec![popup.into_any_element()],
-                )
-            }
-            None => line_row(
-                look,
-                "Run tasks on",
-                Some("Claude or Codex, once one below is signed in".into()),
-                Vec::new(),
-            ),
-        };
-        let rows = Cli::ALL.map(|cli| self.task_agent(agents, cli, cx));
-        group(look, std::iter::once(run_on).chain(rows))
+                let remove = self
+                    .button(SharedString::from(format!("remove-kept-{task}")), REMOVE)
+                    .on_click(move |_, _, cx| {
+                        ask_remove_kept(agents.clone(), 1, Some(task.clone()), cx)
+                    })
+                    .into_any_element();
+                nested(setting(&self.look, title, Some(about), vec![remove]))
+            })
+            .collect()
     }
 
-    /// A CLI's row: Signed in with its Model pop-up, or what to run in a terminal to install it or
-    /// sign in, with Copy.
-    fn task_agent(&self, agents: &Entity<Agents>, cli: Cli, cx: &mut Context<Self>) -> gpui::Div {
-        let look = &self.look;
-        let model = agents.read(cx);
-        let (detail, command): (SharedString, _) = match model.found(cli) {
-            Ready::Unknown => ("Looking…".into(), None),
-            Ready::NotFound => (
-                format!("Not found. Install it with {}", cli.install()).into(),
-                Some(cli.install()),
-            ),
-            Ready::SignedOut => (
-                format!("Not signed in. Run {} in a terminal", cli.sign_in()).into(),
-                Some(cli.sign_in()),
-            ),
-            Ready::SignedIn => ("Signed in".into(), None),
-        };
-        if let Some(command) = command {
-            let copy = self
-                .button(("copy-task-command", cli as usize), "Copy")
-                .on_click(move |_, _, cx| {
-                    log!("browser: task command copied {command}");
-                    cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
-                });
-            let controls = vec![copy.into_any_element()];
-            return feature_row(look, cli.glyph(), cli.name(), Some(detail), controls);
-        }
-        if model.found(cli) != Ready::SignedIn {
-            return feature_row(look, cli.glyph(), cli.name(), Some(detail), Vec::new());
-        }
-        let chosen = model.task_model(cli).to_string();
-        let models = model.task_models(cli);
-        let label: SharedString = (models.iter().find(|(id, _)| *id == chosen))
-            .map_or(MenuEntry::label("Default"), |(_, name)| name.clone().into());
-        let agents = agents.clone();
-        let popup = self.popup(
-            Popup::TaskModel(cli),
-            label,
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_task_model(&agents, cli, window, cx)
-            }),
-        );
-        feature_row(
-            look,
-            cli.glyph(),
-            cli.name(),
-            Some(detail),
-            vec![popup.into_any_element()],
-        )
-    }
-
-    /// Opens Run tasks on's menu of the signed-in agents, and makes the one picked the default.
-    fn choose_task_agent(
+    /// Asks before the `kept` finished tasks' conversations are removed, or `only` that task's,
+    /// as nothing brings them back: in an alert, or on Linux in Settings' own dialog, as a
+    /// profile's Delete asks.
+    fn ask_remove_kept(
         &mut self,
         agents: &Entity<Agents>,
-        window: &Window,
+        kept: usize,
+        only: Option<SharedString>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let model = agents.read(cx);
-        let ready: Vec<Cli> = Cli::ALL
-            .into_iter()
-            .filter(|cli| model.found(*cli) == Ready::SignedIn)
-            .collect();
-        let chosen = model.default_task_agent();
-        let items = (ready.iter())
-            .map(|&cli| {
-                let on = Some(cli) == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::named(cli.name(), true)
+        let (message, detail, action) = match kept {
+            1 => (
+                "Remove 1 thread?".to_string(),
+                "The conversation is removed from this computer.".to_string(),
+                REMOVE,
+            ),
+            kept => (
+                format!("Remove {kept} threads?"),
+                "Their conversations are removed from this computer.".to_string(),
+                "Remove All",
+            ),
+        };
+        let agents = agents.clone();
+        let remove = move |cx: &mut App| {
+            log!("browser: kept tasks removed from settings");
+            agents.update(cx, |agents, cx| match &only {
+                Some(task) => agents.remove_kept_task(task, cx),
+                None => agents.remove_kept_tasks(cx),
+            })
+        };
+        #[cfg(target_os = "linux")]
+        dialog::ask_in(
+            &self.dialog,
+            message,
+            detail,
+            action,
+            dialog::Return::Action,
+            Box::new(remove),
+            window,
+            cx,
+        );
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window;
+            cx.spawn(async move |_, cx| {
+                if crate::ask(&message, &detail, &[action, "Cancel"], true) == 0 {
+                    cx.update(remove);
                 }
             })
-            .collect();
-        let (settings, agents) = (cx.weak_entity(), agents.clone());
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(&cli) = picked.and_then(|index| ready.get(index)) {
-                log!("browser: tasks run on {}", cli.id());
-                agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx));
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::TaskAgent, items, picked, window, cx);
+            .detach();
+        }
     }
 
-    /// Opens a CLI's Model menu: its own default first, then its models.
-    fn choose_task_model(
-        &mut self,
-        agents: &Entity<Agents>,
-        cli: Cli,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (models, items) = agents.read(cx).task_model_menu(cli);
-        let (settings, agents) = (cx.weak_entity(), agents.clone());
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some((id, _)) = picked.and_then(|index| models.get(index)) {
-                // check.sh waits for this line.
-                log!(
-                    "browser: task model {} {}",
-                    cli.id(),
-                    if id.is_empty() { "default" } else { id }
-                );
-                agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::TaskModel(cli), items, picked, window, cx);
+    /// Where `which`'s menu opens: under the button the canvas fills, at its start.
+    fn menu_at(&self, which: Popup) -> gpui::Canvas<()> {
+        let texts = self.popup_texts.clone();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, _, _| {
+                let at = point(bounds.origin.x, bounds.origin.y + bounds.size.height);
+                let mut texts = texts.borrow_mut();
+                texts.retain(|&(each, _)| each != which);
+                texts.push((which, at));
+            },
+        )
+        .absolute()
+        .inset_0()
     }
 
     /// The sites where the user answered the agent for good, each with Revoke, and Revoke All
@@ -4370,7 +4782,7 @@ impl Settings {
             )
             .into()
         } else if connected {
-            format!("Connected in {}", client.config()).into()
+            client.set_up_line().into()
         } else if client == Client::Other {
             // Says which it looked for, so one missing from the list isn't a mystery.
             let missing: Vec<&str> = (Client::APPS.into_iter())
@@ -4406,13 +4818,20 @@ impl Settings {
                     }),
                 "disconnect",
             ),
+            // One connected before the server took the product's name (CN2).
             false => (
-                self.button(("connect-agent", index), "Connect")
-                    .on_click(move |_, _, cx| {
-                        // check.sh reads this line.
-                        log!("browser: connect agent {}", client.id());
-                        agents.update(cx, |agents, cx| agents.connect(client, cx))
-                    }),
+                self.button(
+                    ("connect-agent", index),
+                    match model.is_stale(client) {
+                        true => "Connect Again",
+                        false => "Connect",
+                    },
+                )
+                .on_click(move |_, _, cx| {
+                    // check.sh reads this line.
+                    log!("browser: connect agent {}", client.id());
+                    agents.update(cx, |agents, cx| agents.connect(client, cx))
+                }),
                 "connect",
             ),
         };
@@ -4441,11 +4860,27 @@ impl Settings {
         let state = model.command_state();
         let failure = model.failure(client);
         let mono = browser::face::mono(&cx.text_system().all_font_names());
-        let detail = agents::cli::detail(
+        let mut detail = agents::cli::detail(
             state,
             model.command_flatpak_line().as_deref(),
             model.command_windows_folder().as_deref(),
         );
+        // After its own line: the skill written for each program, or one a Remove left (SK1, SK2).
+        let (added, changed) = (model.skills(), model.skills_changed());
+        let skill = match (added.is_empty(), changed.is_empty()) {
+            (false, _) => Some(format!("Skill added for {}.", agents::named(&added))),
+            (_, false) => Some(format!(
+                "Skill for {} was changed, so it wasn't removed.",
+                agents::named(&changed)
+            )),
+            _ => None,
+        };
+        if let Some(skill) = skill {
+            detail.line = format!("{} {skill}", detail.line);
+        }
+        let reveal = (!changed.is_empty())
+            .then(|| model.skill_to_reveal())
+            .flatten();
         let action = |title: &'static str, id: &'static str| {
             let agents = agents.clone();
             self.button(id, title)
@@ -4455,7 +4890,7 @@ impl Settings {
                     // Add follows the row, not the agent: on Windows a command whose PATH entry
                     // was taken off is still connected, and Add puts the entry back (#3783).
                     agents.update(cx, |agents, cx| match agents.command_state() {
-                        agents::cli::State::Off => {
+                        agents::cli::State::Off | agents::cli::State::Stale => {
                             // check.sh reads this line.
                             log!("browser: connect agent {}", client.id());
                             agents.connect(client, cx)
@@ -4477,8 +4912,23 @@ impl Settings {
                 });
             controls.push(copy.into_any_element());
         }
+        if let Some(path) = reveal {
+            // The app's words for the system's file manager.
+            let title = match cfg!(target_os = "macos") {
+                true => "Show in Finder",
+                false => "Show in Folder",
+            };
+            let show = self
+                .button("reveal-skill", title)
+                .relative()
+                .child(self.drawn("ilo-command reveal skill".into()))
+                .on_click(move |_, _, _| crate::boosts_host::show_file(&path));
+            controls.push(show.into_any_element());
+        }
         controls.push(match state {
             agents::cli::State::Off => action("Add", "add-command"),
+            // Added before the command took the product's name (CN2).
+            agents::cli::State::Stale => action("Add Again", "add-command"),
             _ => action("Remove", "remove-command"),
         });
         let export = (failure.is_none())
@@ -4741,8 +5191,10 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Import & Export: the import's view, as it is, and Export Spaces as Markdown.
+    /// Bring in, take out: the import's view, as it is, then Export Spaces as Markdown, under one
+    /// heading as drawn (S6); inside an import, the crumb that names its browser.
     fn import_export(&self, cx: &mut Context<Self>) -> Page {
+        const BRING_IN: &str = "Bring in, take out";
         let look = &self.look;
         let export = self
             .button("export-spaces", "Export…")
@@ -4751,7 +5203,7 @@ impl Settings {
             .on_click(|_, _, cx| crate::export_spaces(cx));
         let export = setting(
             look,
-            "Spaces as Markdown",
+            "Export Spaces as Markdown",
             None,
             vec![export.into_any_element()],
         );
@@ -4760,7 +5212,7 @@ impl Settings {
         let inside = import.and_then(ImportView::crumb).is_some();
         let heading = match import.and_then(ImportView::crumb) {
             Some(inside) => Block::Crumb("Import".into(), inside),
-            None => Block::Heading("Import".into()),
+            None => Block::Heading(BRING_IN.into()),
         };
         let under_way = import.is_some_and(ImportView::under_way);
         let mut blocks = vec![heading];
@@ -4770,7 +5222,6 @@ impl Settings {
                 .map(|import| Block::View(import.into_any_element())),
         );
         if !under_way {
-            blocks.push(Block::Heading("Export".into()));
             blocks.push(Block::Rows(vec![export]));
         }
         // Inside an import the crumb says where it is, so the page's sentence gives way.
@@ -4778,7 +5229,7 @@ impl Settings {
             true => "",
             false => "Bring your things from another browser, or take your Spaces with you.",
         };
-        Page::new(Section::ImportExport, lede, blocks)
+        Page::new(Section::SyncImport, lede, blocks)
     }
 
     /// About: the app's name as the page's heading, its version and its engine's, where its
@@ -4822,7 +5273,7 @@ impl Settings {
                 look,
                 "Licence",
                 concat!(
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     " is free software: you may use, study, share and change it under the GNU \
                      General Public License, version 3."
                 ),
@@ -4881,7 +5332,7 @@ impl Settings {
                 true => "Every 8 hours, and it downloads them in the background.".to_string(),
                 false => format!(
                     "{} won't look for new versions until you choose Check for Updates.",
-                    env!("APP_NAME")
+                    env!("PRODUCT_NAME")
                 ),
             };
             setting(
@@ -5231,7 +5682,6 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// The app's own switches that are on unless the user turned them off, each a file in the
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
-const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
 /// What's recent in hover cards, off (#3074); and the sites Site Controls turned it off for, a line
 /// each.
 const NO_RECENT: &str = "no-recent-in-cards";
@@ -5239,9 +5689,6 @@ const RECENT_SITES_OFF: &str = "recent-off-sites";
 /// Sidebar position, there while it's Right (#2375): this device's, as the other switches are, and
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
-
-/// Top bar, there while it's on (#3160): this device's, as Sidebar position is, and never synced.
-const TOP_BAR: &str = "top-bar";
 
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
@@ -5259,8 +5706,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    cx.set_global(shell::TopBar(off(TOP_BAR)));
-    browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
 
@@ -5309,22 +5754,9 @@ pub fn set_sidebar_right(right: bool, cx: &mut App) {
     cx.refresh_windows();
 }
 
-/// Turns Top bar on or off: kept on this device, and every window follows at once, as each reads
-/// it as it draws.
-pub fn set_top_bar(on: bool, cx: &mut App) {
-    set_off(TOP_BAR, on);
-    cx.set_global(shell::TopBar(on));
-    cx.refresh_windows();
-}
-
 fn set_edge_reveals(reveals: bool, cx: &mut App) {
     set_off(NO_EDGE_REVEAL, !reveals);
     cx.set_global(shell::SidebarEdge(reveals));
-}
-
-fn set_dock_icon_color(colored: bool, cx: &mut App) {
-    set_off(DOCK_ICON_PLAIN, !colored);
-    browser::dock_dot::set_plain(!colored, cx);
 }
 
 /// About's "Check for updates automatically", which only the Mac and Windows show. It reads the
@@ -5489,6 +5921,19 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
+/// Apps that connect's heading.
+const APPS_THAT_CONNECT: &str = "Apps that connect";
+
+/// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
+fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .px(px(TEXT_X))
+        .text_size(px(text::SMALL))
+        .line_height(px(DETAIL_LINE))
+        .text_color(look.detail)
+        .child(line.into())
+}
+
 /// A row: its name, the line under it, if any, and its controls at its end.
 fn line_row(
     look: &RowLook,
@@ -5513,6 +5958,27 @@ fn feature_row(
         .child(glyph_plate(look, glyph, true))
         .child(text(look, name, line))
         .when(!controls.is_empty(), |row| row.child(end(controls)))
+}
+
+/// The line under Settings › Agents' row for the threads kept (table KT2), and the buttons: a
+/// kept task's own, and the one for them all. An assistant that keeps none has no task in the
+/// list, which says it.
+const KEPT_AS: &str = "Threads are kept as you saw them. Your assistant keeps the conversation.";
+const REMOVE: &str = "Remove";
+const REMOVE_ALL: &str = "Remove All…";
+
+/// Asks before the kept conversations go, or `only` that task's (`Settings::ask_remove_kept`),
+/// once the click that asked is over, in Settings' window.
+fn ask_remove_kept(agents: Entity<Agents>, kept: usize, only: Option<SharedString>, cx: &mut App) {
+    cx.defer(move |cx| {
+        let Some(window) = cx.try_global::<SettingsWindow>().map(|w| w.0) else {
+            return;
+        };
+        let ask = |settings: &mut Settings, window: &mut Window, cx: &mut Context<Settings>| {
+            settings.ask_remove_kept(&agents, kept, only.clone(), window, cx)
+        };
+        window.update(cx, ask).ok();
+    });
 }
 
 /// The `ilo` command's glyph, under Command line.
@@ -5548,6 +6014,22 @@ fn feature(
         div: feature_row(look, glyph, name.clone(), line.clone(), controls),
         name,
         line,
+        keys: None,
+        nested: false,
+    }
+}
+
+/// A row whose control is drawn pictures, as Settings' search reads it.
+fn pictured(
+    look: &RowLook,
+    name: &'static str,
+    line: SharedString,
+    pictures: impl IntoElement,
+) -> Row {
+    Row {
+        div: browser::settings_rows::pictured(look, name, line.clone(), pictures),
+        name: name.into(),
+        line: Some(line),
         keys: None,
         nested: false,
     }
@@ -5752,8 +6234,8 @@ impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.drawn_logged.borrow_mut().frame();
         self.a11y = window.is_a11y_active();
-        // The app's window, not a Space's, so ilo green rather than a Space's accent (#319).
-        let accent = rgb(NO_THEME_ACCENT);
+        // What's on is neutral, the text colour, never green or a Space's colour (#4092).
+        let accent = self.look.on;
         // As Linux's client-side decorations leave it, and Windows', where GPUI hides the system's
         // title bar and its buttons for a transparent one; AppKit's frame is always there.
         let frameless = cfg!(target_os = "windows")
@@ -5782,6 +6264,9 @@ impl Render for Settings {
             // check.sh waits for this line, the section each show or switch draws, whichever
             // window was key.
             log!("browser: settings drew {}", self.section.name());
+            // Its places come after it, as frames drawn before the window was on screen logged
+            // them before (#3841).
+            self.drawn_logged.borrow_mut().clear();
         }
         let size = window.viewport_size();
         let size = (
@@ -5848,6 +6333,7 @@ impl Render for Settings {
             found.as_deref(),
             pick,
             foot,
+            settings_column::Version::of(cx),
             self.a11y,
         );
         // Once scrolled, the section's name and the heading gone under it hold at the card's top,
@@ -5901,7 +6387,10 @@ impl Render for Settings {
             .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
-                if !settings.end_search(window, cx) {
+                let search = settings.search.clone();
+                if browser::dismissal::Close::escape_from([&search], cx).is_some()
+                    && !settings.end_search(window, cx)
+                {
                     cx.propagate();
                 }
             }))
@@ -5923,6 +6412,24 @@ impl Render for Settings {
     }
 }
 
+/// `first`, with each of `rest`'s blocks after its own, on `first`'s page: today's pages that the
+/// owner's drawing puts on another's, until each part has its drawn place. A page that starts with
+/// rows of its own goes under its old `name`, so where it starts reads.
+fn joined<const N: usize>(first: Page, rest: [(&'static str, Page); N]) -> Page {
+    let mut page = first;
+    for (name, other) in rest {
+        let headed = matches!(
+            other.blocks.first(),
+            Some(Block::Heading(_) | Block::Crumb(..) | Block::Scoped(..))
+        );
+        if !headed {
+            page.blocks.push(Block::Heading(name.into()));
+        }
+        page.blocks.extend(other.blocks);
+    }
+    page
+}
+
 impl Settings {
     /// `section`'s page, as it shows on the card.
     fn section_page(
@@ -5933,34 +6440,54 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         match section {
-            Section::General => self.general(&profiles(), accent, cx),
-            Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
-            Section::Features => self.features(&profiles(), accent, cx),
-            Section::Agents => match agents::global(cx) {
-                Some(agents) => self.agents(&agents, accent, cx),
-                None => Page::new(Section::Agents, "", Vec::new()),
-            },
-            Section::Links => self.links(accent, cx),
-            Section::Shortcuts => self.shortcuts(accent, cx),
-            Section::Profiles => {
+            Section::Overview => self.overview(cx),
+            Section::General => {
                 let profiles = profiles();
-                self.focus_field(&profiles, window, cx);
-                self.profiles(&profiles, cx)
+                let general = self.general(&profiles, accent, cx);
+                joined(
+                    general,
+                    [("Features", self.features(&profiles, accent, cx))],
+                )
             }
-            Section::Passwords => self.passwords(&profiles(), accent, cx),
-            Section::Privacy => self.privacy(&profiles(), accent, cx),
-            Section::AdBlocking => {
+            Section::Window => self.appearance_page(cx),
+            Section::Privacy => {
+                let privacy = self.privacy(&profiles(), accent, cx);
                 let off_sites = off_sites();
                 self.log_off_sites(&off_sites);
-                self.ad_blocking(&off_sites, accent, cx)
+                let ad_blocking = self.ad_blocking(&off_sites, accent, cx);
+                joined(privacy, [("Ad Blocking", ad_blocking)])
             }
-            Section::Sync => Page::new(
-                Section::Sync,
-                "Sync Spaces, bookmarks, passwords and open tabs across your devices, encrypted \
-                 with a key only they hold.",
-                vec![Block::View(self.account.clone().into_any_element())],
-            ),
-            Section::ImportExport => self.import_export(cx),
+            Section::Passwords => self.passwords(&profiles(), accent, cx),
+            Section::SyncImport => {
+                let sync = Page::new(
+                    Section::SyncImport,
+                    "Sync Spaces, bookmarks, passwords and open tabs across your devices, \
+                     encrypted with a key only they hold.",
+                    vec![Block::View(self.account.clone().into_any_element())],
+                );
+                joined(sync, [("Import", self.import_export(cx))])
+            }
+            Section::Shortcuts => self.shortcuts(accent, cx),
+            Section::Threads | Section::Models | Section::Access | Section::OtherApps => {
+                match agents::global(cx) {
+                    Some(agents) => {
+                        let pages = self.agents(&agents, accent, cx);
+                        let at = pages.iter().position(|page| page.section == section);
+                        pages
+                            .into_iter()
+                            .nth(at.unwrap_or(0))
+                            .unwrap_or_else(|| Page::new(section, "", Vec::new()))
+                    }
+                    None => Page::new(section, "", Vec::new()),
+                }
+            }
+            Section::TabsAndSpaces => {
+                let profiles = profiles();
+                self.focus_field(&profiles, window, cx);
+                let tabs = self.tabs_and_sidebar(&profiles, accent, cx);
+                joined(tabs, [("Profiles", self.profiles(&profiles, cx))])
+            }
+            Section::Links => self.links(accent, cx),
             Section::About => self.about(accent, cx),
         }
     }
@@ -5998,11 +6525,12 @@ impl Settings {
         let profiles = profiles();
         let mut pages = vec![
             self.general(&profiles, accent, cx),
+            self.appearance_page(cx),
             self.tabs_and_sidebar(&profiles, accent, cx),
             self.features(&profiles, accent, cx),
         ];
         if let Some(agents) = agents::global(cx) {
-            pages.push(self.agents(&agents, accent, cx));
+            pages.extend(self.agents(&agents, accent, cx));
         }
         pages.push(self.shortcuts(accent, cx));
         pages.push(self.privacy(&profiles, accent, cx));
@@ -6013,11 +6541,19 @@ impl Settings {
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
         for page in pages {
+            // The heading over the groups that follow it, which the search reads too.
+            let mut group = None;
             for block in page.blocks {
                 let rows = match block {
                     Block::Rows(rows) => rows,
                     Block::Under(buttons) => {
                         under.push((page.section, buttons));
+                        continue;
+                    }
+                    Block::Heading(heading)
+                    | Block::Crumb(heading, _)
+                    | Block::Scoped(heading, _) => {
+                        group = Some(heading);
                         continue;
                     }
                     _ => continue,
@@ -6029,6 +6565,7 @@ impl Settings {
                 for row in rows {
                     entries.push(Entry {
                         section: page.section,
+                        group: group.clone(),
                         under: row.nested.then(|| head.clone()).flatten(),
                         name: row.name,
                         line: row.line,
@@ -6141,7 +6678,7 @@ impl Settings {
         if window.focused(cx).is_some() {
             return;
         }
-        let import = (self.section == Section::ImportExport)
+        let import = (self.section == Section::SyncImport)
             .then(|| {
                 self.import
                     .as_ref()

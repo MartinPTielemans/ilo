@@ -1,0 +1,13 @@
+source: https://www.borger.dk/
+landmark: https://www.borger.dk/oekonomi-skat-su | Økonomi
+landmark: https://www.borger.dk/hjaelp-og-vejledning/kontakt | Kontakt
+checked: 2026-11-27
+holds: addresses
+---
+Go straight there
+Each topic has a path of its own: /familie-og-boern, /skole-og-uddannelse, /sundhed-og-sygdom, /arbejde-dagpenge-ferie, /oekonomi-skat-su, /pension-og-efterloen, /bolig-og-flytning, /transport-trafik-rejser, /danskere-i-udlandet, /udlaendinge-i-danmark, /aeldre and /handicap.
+/hjaelp-og-vejledning/livssituationer lists life's situations, /om-borger-dk/Find-en-myndighed finds the user's municipality or another authority, and /hjaelp-og-vejledning/kontakt is how to get in touch.
+/mitoverblik is the user's own overview.
+
+Know before you start
+The site is in Danish. Its search box is at the top and in the menu. Digital Post, linked at the top, is a site of its own.

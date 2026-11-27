@@ -74,6 +74,16 @@ fn flatpak_name(info: &str) -> Option<String> {
         .map(|name| name.trim().into())
 }
 
+/// What a client is told with nothing listening and while other apps' agents are off (#4260): the
+/// one answer either way, so a client can't tell them apart, nor whether threads are on.
+pub fn off() -> String {
+    format!(
+        "{0} isn't running, or access for other apps is off. Open {0} and turn it on in Settings › \
+         Other apps.",
+        crate::product::PRODUCT
+    )
+}
+
 /// Connects to the server at `socket`, a Unix socket or a Windows named pipe, as the agent with
 /// `token`, then carries `input` to it and its answers to `output` until either side closes. An
 /// error is why it couldn't, for the client's log.
@@ -84,12 +94,7 @@ pub fn run(
     mut output: impl Write,
 ) -> Result<(), String> {
     use super::server;
-    let stream = server::connect(socket).map_err(|_| {
-        format!(
-            "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
-            env!("APP_NAME")
-        )
-    })?;
+    let stream = server::connect(socket).map_err(|_| off())?;
     let failed = |error: io::Error| format!("The browser closed the connection: {error}");
     let mut writer = stream.try_clone().map_err(failed)?;
     // A server with no place free says so and closes before it reads the token, so its answer is

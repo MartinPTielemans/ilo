@@ -22,17 +22,18 @@
 # On Linux two quick ⇧⌘T from the page, the second before the first's tab has its page focused,
 # reopen both tabs closed last.
 # Closing the last tab leaves the Space empty, with no pane, its window resizing, and on Windows
-# maximizing and restoring, with no page, and ⌘T still works there. Mute/Unmute Tab mutes a tab,
-# its row shows a speaker while it plays, crossed out while it's muted, and a click on it unmutes
-# the tab. There ⇧⌦ takes a page out of history, as a click on the trash the pointer draws on its row
-# does, and ⌥⌘⌫ a search typed before, ⇧⌘↩ searches for what was typed, ⌘↩ opens it in a tab behind
+# maximizing and restoring, with no page, and ⌘T there puts the cursor in the bar it rests on.
+# Mute/Unmute Tab mutes a tab, its row shows a speaker while it plays, crossed out while it's muted,
+# and a click on it unmutes the tab. Over a page opened from that bar, ⇧⌦ takes a page out of
+# history, as a click on the trash the pointer draws on its row does, and ⌥⌘⌫ a search typed
+# before, ⇧⌘↩ searches for what was typed, ⌘↩ opens it in a tab behind
 # that loads once it's first shown, Tab on the row that hints a search engine, or a space after its
 # keyword, searches with that engine alone until ⌫ leaves, ↩ on a sum's row copies its result, and a
 # right-click in its field shows the field's menu, with Paste and Go. Site Search Settings opens
 # Chromium's search engines page, where a site search added for the run's own server and made the
 # default is the one Settings' Search engine shows chosen, until it picks DuckDuckGo back. A new
-# profile's onboarding opens on DuckDuckGo and its Search engine lists Google last, whose pick asks
-# Google's hosts, the run's own server here, for the search alone, and which stays gone once
+# profile, through its onboarding, opens on DuckDuckGo and its Search engine lists Google last,
+# whose pick asks Google's hosts, the run's own server here, for the search alone, and which stays gone once
 # Chromium's page deletes it. The command bar's tests, in src/command_bar/tests.rs, have the rest of its keys and what the menu's
 # items do. A tab's menu walks by its keys past lines and dimmed items, selects by typing, opens a
 # submenu by → and by the pointer, which crosses a row on its way there without taking it, picks
@@ -82,8 +83,20 @@ step=0
 rm -f "$saved" "$launch_frame"
 # The example.com and example.org pages the steps open, and DuckDuckGo's for the searches, come from
 # a server of the run's own, which a runner always reaches (#3144).
+# h puts what a page has heard of presses, releases and scrolls in its title, and h again takes it
+# out.
 serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
-<h1>Example Domain</h1>' example.com '*.example.com' example.org duckduckgo.com
+<h1>Example Domain</h1>
+<script>
+let downs = 0, ups = 0, wheels = 0, said = false;
+onmousedown = () => ++downs;
+onmouseup = () => ++ups;
+onwheel = () => ++wheels;
+onkeydown = e => {
+  if (e.key != "h") return;
+  document.title = (said = !said) ? "heard " + downs + " " + ups + " " + wheels : "Example Domain";
+};
+</script>' example.com '*.example.com' example.org duckduckgo.com
 # shellcheck disable=SC2086 # the record mode, or nothing
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
   --enable-tracing-format=json --trace-startup-file="$trace" \
@@ -115,8 +128,13 @@ expect "^browser: page $a audible 1 muted 1\$" "the muted tab's sound didn't sho
 ../tools/window-screenshot.sh "$pid" "$out/muted.png" || fail "no window to capture"
 send key x
 expect "^browser: page $a audible 0 muted 1\$" "the tab's sound didn't stop"
-# The speaker is after the favicon, at the title's x, 43.
-send click 52 $(row 0 | cut -d' ' -f2)
+# The speaker sits at the line's end, before the row's button, which the pointer on the row brings
+# and which moves it, so it's clicked where its line says once the pointer rests on its row.
+await "^browser: speaker $a at " || fail "the muted tab's row logged no speaker"
+speaker_y=$(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f6)
+send move $(row 0 | cut -d' ' -f1) $speaker_y
+expect "^browser: speaker $a at " "the pointer on the muted tab's row didn't move its speaker"
+send click $(grep "^browser: speaker $a at " "$log" | tail -1 | cut -d' ' -f5-)
 expect '^browser: command toggle-mute via sidebar$' "a click on the speaker didn't reach the UI"
 expect "^browser: page $a audible 0 muted 0\$" "a click on the speaker didn't unmute the tab"
 open_from_bar example.com
@@ -222,9 +240,9 @@ expect '^browser: command bar shown$' "a click on the URL field didn't open the 
 expect '^browser: command bar drew "https://example.com/"$' \
   "the command bar from the URL field didn't show the tab's URL"
 at=$(grep '^browser: command bar at' "$log" | tail -1 | cut -d' ' -f5-)
-# The input alone is a row, 50 tall, over the field at 8, 46.
-[ "$at" = "8 44 350 50" ] ||
-  fail "the command bar from the URL field opened at $at, not at 8 44 and 350 by 50"
+# The input alone is a row, 50 tall, over the field at 8, 44 (url-field-top).
+[ "$at" = "8 42 350 50" ] ||
+  fail "the command bar from the URL field opened at $at, not at 8 42 and 350 by 50"
 ../tools/window-screenshot.sh "$pid" "$out/url-field-bar.png" || fail "no window to capture"
 # The field's own menu is ilo's, and gives the keyboard back to the field.
 post rightclickkey 175 25
@@ -407,20 +425,68 @@ in_browser RenderWidgetHostViewCocoa "a click into the page right after a menu i
 send order
 [ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$chosen_frame" ] ||
   fail "a click into the page right after a menu item chosen with the pointer moved the window from $chosen_frame"
-# A click outside closes the menu, and goes no further.
+# While a menu is open, what the pointer does outside it is the menu's. A scroll leaves it open and
+# scrolls nothing, and a click only closes it and goes no further: the page under it hears neither
+# the press nor the release, which alone would be half a click. The page has the keyboard from the
+# click into it above, and has it back as the menu closes, so it can be asked on both sides.
+send key h
+expect '^browser: title [0-9]* heard [0-9 ]*$' "h in the page didn't say what it had heard"
+heard=$(since | sed -n 's/^browser: title [0-9]* heard //p' | tail -1)
+send key h
+expect '^browser: title [0-9]* Example Domain$' "h again didn't give the page its title back"
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
 expect '^browser: menu window at ' "the menu didn't take the keyboard"
+if [ "$(uname)" != Linux ]; then
+  send scroll $page_point 40 2
+  scrolled=$step
+  send order
+  none_since '^browser: menu closed$' "$scrolled" || fail "a scroll outside the menu closed it"
+fi
 send click $page_point
 expect '^browser: menu closed$' "a click outside didn't close the menu"
 expect '^browser: menu window hidden$' "a click outside left the menu's window up"
-# A right-click elsewhere opens that menu in its place: on the next row, left of the menu, which
-# opens right of the pointer. ↓ shows the new one has the keys, not closed as it opened.
+if [ "$(uname)" = Linux ]; then
+  echo "skip: the click that closes a menu going no further, to the page or the row under it, and" \
+    "a scroll outside it scrolling nothing, on Linux: its host lets them land (#4165)."
+else
+  send key h
+  expect '^browser: title [0-9]* heard [0-9 ]*$' \
+    "after the click that closed the menu, h didn't reach the page"
+  heard_since=$(since | sed -n 's/^browser: title [0-9]* heard //p' | tail -1)
+  [ "$heard_since" = "$heard" ] ||
+    fail "the scroll outside the menu or the click that closed it reached the page under them: of presses, releases and scrolls it had heard $heard, and then $heard_since"
+  send key h
+  expect '^browser: title [0-9]* Example Domain$' "h again didn't give the page its title back"
+  # Nor does it show the tab whose row it's on: the next click there does. Then back to the tab
+  # shown, which the steps after this go on from.
+  post rightclick $(row 1)
+  expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the second Today row didn't show its menu"
+  expect '^browser: menu window at ' "the menu didn't take the keyboard"
+  set -- $(row 0)
+  send click $(($1 - 60)) $2
+  closing=$step
+  expect '^browser: menu closed$' "a click on another row didn't close the menu"
+  expect '^browser: menu window hidden$' "a click on another row left the menu's window up"
+  send order
+  none_since '^browser: selected ' "$closing" ||
+    fail "the click on another row that closed a row's menu showed that row's tab too"
+  send click $(($1 - 60)) $2
+  expect "^browser: selected $c\( in .*\)\{0,1\}\$" "the click after the one that closed the menu didn't show its row's tab"
+  set -- $(row 1)
+  send click $(($1 - 60)) $2
+  expect "^browser: selected $b\( in .*\)\{0,1\}\$" "a click on the second row didn't show its tab again"
+fi
+# The one press outside that goes on is a right press, which opens that thing's menu in this
+# one's place: on the next row, left of the menu, which opens right of the pointer. ↓ shows the new
+# one has the keys, not closed as it opened.
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
 expect '^browser: menu window at ' "the menu didn't take the keyboard"
 set -- $(row 1)
 post rightclick $(($1 - 60)) $2
+expect '^browser: menu at .* closed by pressed outside$' \
+  "a right-click on the next row with the menu up didn't close the top row's menu"
 expect "^browser: menu shown $(cased 'Copy Link, ')" \
   "a right-click on the next row with the menu up didn't show that row's menu"
 expect '^browser: menu window at ' "the next row's menu didn't take the keyboard"
@@ -582,7 +648,7 @@ send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
 send flags
-send click 100 154
+send click 100 148
 expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't run New Tab"
 expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar"
 send key escape
@@ -691,15 +757,15 @@ nav_lit "with the page having the keyboard"
 # second: a click in a Settings window closed and opened again, on the switch it last changed, never
 # reached it.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General"
-settings_drew General
+expect '^browser: settings shown Overview$' "Settings… didn't show Settings"
+settings_drew Overview
 expect "^browser: window $window main false\$" "the window behind Settings wasn't told it isn't the user's"
 expect '^browser: nav glyphs dimmed true$' "the window behind Settings didn't dim its header's glyphs"
 expect "^browser: window $window drew main false\$" "the window behind Settings didn't draw its dimmed glyphs"
 ../tools/window-screenshot.sh "$pid" "$out/nav-dimmed.png" all || fail "no window to capture"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 # Where Settings drew the switch, which differs by OS: it logs that once a place.
 await '^browser: settings switch unload idle tabs at ' || fail "Settings didn't draw Unload tabs' switch"
 unload_switch=$(sed -n 's/^browser: settings switch unload idle tabs at //p' "$log" | tail -1)
@@ -715,8 +781,8 @@ expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen
 since $aged | grep -q "browser: tab $c without its page\$" && fail "a tab let go of its page with the switch off"
 send menu Settings…
 # Settings comes back on the section it showed last.
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't bring Settings back to the front"
-settings_drew 'Tabs & Sidebar'
+expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't bring Settings back to the front"
+settings_drew 'Tabs & Spaces'
 send clickkey $unload_switch
 expect '^browser: unload idle tabs on$' "a click on Unload tabs' switch didn't turn it on"
 expect "browser: tab $c without its page\$" "turning the switch on didn't unload the tab unseen 2 hours"
@@ -737,9 +803,9 @@ send state
 # the taskbar's Close window does, which Settings takes as hiding.
 if windows; then
   send menu Settings…
-  expect '^browser: settings shown Tabs & Sidebar$' \
-    "Settings… didn't show Tabs & Sidebar again after its close button"
-  settings_drew 'Tabs & Sidebar'
+  expect '^browser: settings shown Tabs & Spaces$' \
+    "Settings… didn't show Tabs & Spaces again after its close button"
+  settings_drew 'Tabs & Spaces'
   post key f4 ctrl
   expect '^browser: settings hidden$' "Alt+F4 didn't hide Settings"
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in Settings"
@@ -837,10 +903,21 @@ if windows; then
 fi
 send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window with no page didn't draw back at its size"
-# ⇧⌦ takes a page from history out of the rows.
+# The empty Space rests on its bar, and ⌘T puts the cursor in it, opening no floating bar over it.
 send key t cmd
 expect '^browser: command new-tab via ui$' "⌘T in an empty Space didn't reach the UI"
-expect '^browser: command bar shown$' "⌘T in an empty Space didn't open the command bar"
+expect '^browser: resting field has the keyboard$' "⌘T in an empty Space didn't give its resting bar the keyboard"
+none_since '^browser: command bar shown$' || fail "⌘T in an empty Space opened a floating bar over its resting bar"
+# The rows below need ⌘T's floating bar, whose own window has the trash's tooltip and closes on
+# Esc, so a page opened from the resting bar is under it.
+send insert 'data:text/html,<title>first</title>'
+send key return
+expect '^browser: loaded [0-9]* data:text/html,<title>first</title>$' \
+  "the page from the empty Space's resting bar didn't load"
+expect '^browser: resting field dropped$' "the page from the empty Space's resting bar didn't take its place"
+# ⇧⌦ takes a page from history out of the rows.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T over a page didn't open the command bar"
 send type example
 expect '^browser: command bar completes "example" with "\.' \
   "the command bar didn't complete \"example\""
@@ -1080,7 +1157,7 @@ expect "^browser: loaded $waiting https\{0,1\}://example.org/\$" "⌘↩'s tab d
 # Held, back shrinks a little and grows back as its menu opens; reload pressed shrinks too, and let
 # go off it grows back without reloading, as a button does.
 serve
-back_button='138 23.5'
+back_button='158 23.5'
 reload_button='206 23.5'
 printf '%s' iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR42mNgcPhPGhrVMKph+GoAAJiZPxAbf0wNAAAAAElFTkSuQmCC |
   base64 -d > "$out/site/next.png"
@@ -1267,7 +1344,7 @@ open_from_bar "${site}notes.txt"
 send key w cmd
 expect_tabs "$x $kept" "$o" "closing ⌘T's tab didn't go back to the pinned tab it opened over"
 set -- $(row 1)
-send click $1 $(($2 + 41))
+send click $1 $(($2 + 34))
 expect "^browser: selected $u in " "a click on the second Today row didn't show its tab"
 open_from_bar "${site}notes.txt"
 send key w cmd
@@ -1325,7 +1402,7 @@ under=$(echo $kept | cut -d' ' -f1)
 [ -n "$under" ] || fail "no Today tab under $x: Today is \"$(today)\""
 switch "$(($(pinned | wc -w) + 2)) cmd" "$under"
 set -- $(row 0)
-send click $1 $(($2 + 41))
+send click $1 $(($2 + 34))
 expect "^browser: selected $x in " "a click on Today's top row didn't show its tab"
 send key d cmd
 expect_lists "$o $x" "$before" "after ⌘D on the link's tab"
@@ -1387,7 +1464,7 @@ open_site() {
 # The centre of Today's row $1, under the pinned tabs.
 today_row() {
   set -- $(row "$1")
-  echo "$1 $(($2 + 41 * $(echo $(pinned) | wc -w)))"
+  echo "$1 $(($2 + 34 * $(echo $(pinned) | wc -w)))"
 }
 # The links copied last, from the line logged and the two after it.
 copied() {
@@ -1641,13 +1718,17 @@ FRAME
   # Alt+F4 in the bar closes the browser window under it, as in Chrome's address field, and the
   # bar's window, which every browser window shares, lives on to open over the next one: Ctrl+T
   # there opens the bar again (#1362). The windows over the page that have no Alt+F4 of the UI's,
-  # such as the dialog, close themselves on it (dialogs.sh).
+  # such as the dialog, close themselves on it (dialogs.sh). The sidebar's "+ New Tab" opens the bar
+  # over the second window, which shows no page, where Ctrl+T gives the Space's resting bar the
+  # keyboard instead (#4140).
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   new_window_bar
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send click 100 148
+  expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" in the second window didn't run New Tab"
+  expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar in the second window"
   post key f4 ctrl
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in the command bar"
   expect '^browser: command close-window via ui$' "Alt+F4 in the command bar didn't reach the UI"
@@ -2158,36 +2239,12 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
     --disable-component-update < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
-  await '^browser: onboarding step intro settled$' || fail "Google: the new profile's first launch didn't play the onboarding"
-  steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
-  case " $steps " in
-    *" search-engine "*) ;;
-    *) fail "Google: the new profile's first launch had no search engine step: '$steps'" ;;
-  esac
-  # The intro goes on by itself, before any key is sent, so the step after it is waited for in the
-  # whole log, and each later one after the key that left the one before, as count.sh does.
-  await '^browser: onboarding left intro via time$' || fail "Google: the intro didn't go on by itself"
-  for each in $steps; do
-    [ "$each" = intro ] && continue
-    if [ "$step" = 0 ]; then
-      await "^browser: onboarding step $each settled\$" || fail "Google: the $each step didn't come"
-    else
-      expect "^browser: onboarding step $each settled\$" "Google: the $each step didn't come"
-    fi
-    if [ "$each" = search-engine ]; then
-      ../tools/window-screenshot.sh "$pid" "$out/search-engine-step-google.png" || fail "no window to capture"
-      send key return
-      expect '^browser: onboarding left search-engine via return$' "Google: Return didn't leave the search engine step"
-      # Return sets the engine picked unless it's the default, so a line here is a step that
-      # opened on another, such as Google.
-      none_since '^browser: profile [0-9]* searches with ' ||
-        fail "Google: Return as the search engine step opened set an engine, so it hadn't DuckDuckGo picked: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
-    else
-      send key escape
-      expect "^browser: onboarding left $each via escape\$" "Google: Esc didn't leave the $each step"
-    fi
-  done
-  expect '^browser: onboarding done$' "Google: the flow didn't end after its last step"
+  await '^browser: onboarding started$' || fail "Google: the new profile's first launch didn't play the onboarding"
+  # Through each step the way that takes nothing it offers, as count.sh goes; the card asks no
+  # engine, so none is set before Settings' list is read.
+  walk_steps "" "Google: "
+  ! grep -q '^browser: profile [0-9]* searches with ' "$log" ||
+    fail "Google: the onboarding set an engine: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
   expect '^browser: command bar shown$' "Google: the command bar didn't come up after the flow"
   send key escape
   expect '^browser: command bar hidden$' "Google: escape didn't close the command bar"
@@ -2326,7 +2383,7 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
   requests=$(grep '^google: ' "$out/google-tls.log" || true)
   [ "$requests" = "google: GET https://www.google.com/search?q=pelicans" ] ||
     fail "Google: its hosts were asked for more than the search, or not for it: $(printf '%s' "$requests" | tr '\n' ';')"
-  echo "ok: Google's search engine, on a new profile: the first launch's step opens on DuckDuckGo, Settings lists Google last with DuckDuckGo chosen, its pick searches https://www.google.com/search?q=… and asks Google for nothing else, and once Chromium's search engines page deletes it a relaunch doesn't bring it back. Windows: $out/search-engine-step-google.png, $out/search-engine-google.png, $out/search-engine-google-delete.png"
+  echo "ok: Google's search engine, on a new profile: the first launch, through its onboarding, opens on DuckDuckGo, Settings lists Google last with DuckDuckGo chosen, its pick searches https://www.google.com/search?q=… and asks Google for nothing else, and once Chromium's search engines page deletes it a relaunch doesn't bring it back. Windows: $out/search-engine-google.png, $out/search-engine-google-delete.png"
 fi
 # Sort Today Tabs by Site, from the command bar, puts the served page's tabs together at each
 # site's first tab's place, 127.0.0.1 and localhost being two sites of one server, records the rows
@@ -2343,11 +2400,11 @@ sort_item() {
   expect "^browser: menu bar Tabs: .*, Sort Today Tabs by Site$1, " \
     "the Tabs menu's Sort Today Tabs by Site wasn't ${2:-there}"
 }
-# A right-click on the line over Today, under the Space's name with no pinned tab, shows Sort Today
+# A right-click on the gap over Today, under the Space's name with no pinned tab, shows Sort Today
 # Tabs by Site, dimmed if $1 is "(disabled)", and Clear Today over the empty space's menu, captured
 # in $2.png, which escape closes.
 divider_menu() {
-  post rightclick 60 $((90 + 44 + 7))
+  post rightclick 60 $((86 + 42 + 3))
   expect "^browser: menu shown $(cased "Sort Today Tabs by Site$1, Clear Today, New Tab, New Folder…"), " \
     "a right-click on the line over Today didn't lead with Sort Today Tabs by Site${1:+ dimmed} and Clear Today"
   ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"

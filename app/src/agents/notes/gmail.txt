@@ -1,0 +1,14 @@
+source: https://support.google.com/mail/answer/7190
+source: https://support.google.com/mail/answer/6594
+checked: 2026-11-27
+holds: search filters, shortcuts
+---
+Go straight there
+Search finds mail faster than scrolling a list. In the search box: from:NAME, to:NAME, subject:WORD, has:attachment, filename:pdf, is:unread, is:starred, label:NAME, newer_than:2d, older_than:1y, after:2026/01/31, before:2026/02/28. Put an exact phrase in quotes, a minus before a word to leave it out, and OR between two to match either. in:anywhere also looks in Spam and Trash.
+
+Keys beat clicks
+/ puts the cursor in search, g i opens the Inbox, g t Sent and g d Drafts, c writes a new message, j and k move to the older and the newer conversation, and ? lists every key.
+
+Know before you start
+Those keys work only while keyboard shortcuts are on in Gmail's settings. If a key does nothing, click instead, and leave the setting as it is.
+A search with a minus can still show a conversation, when one of its messages matches.

@@ -9,8 +9,12 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use serde_json::{Map, Value, json};
 
-/// The variable that names the agent for its card, as `--as` does.
-pub const NAME: &str = "ILO_AS";
+use super::cli::LINK;
+use crate::product::PRODUCT;
+
+/// The variable that names the agent for its card, as `--as` does: the command's name, upper
+/// case, then `_AS` (build.rs).
+pub const NAME: &str = env!("PRODUCT_AS");
 
 /// The card's name for an agent that gives none.
 pub const UNNAMED: &str = "Shell agent";
@@ -112,8 +116,9 @@ pub fn call(
     };
     let known = WORDS.iter().find(|word| word.word == first);
     let tool = known.map_or(first.as_str(), |word| word.tool);
-    let schema = schema(tools, tool)
-        .ok_or_else(|| format!("There's no command “{first}”. Run ilo help for the commands."))?;
+    let schema = schema(tools, tool).ok_or_else(|| {
+        format!("There's no command “{first}”. Run {LINK} help for the commands.")
+    })?;
     let (positional, mut arguments) = options(rest, schema, first)?;
     let positional = positional.as_slice();
     match (known.map(|word| word.word), positional) {
@@ -180,7 +185,7 @@ pub fn call(
             };
             if positional.len() > names.len() && names.is_empty() {
                 return Err(format!(
-                    "{first} takes no words but options. Run ilo help {first}."
+                    "{first} takes no words but options. Run {LINK} help {first}."
                 ));
             }
             for (index, name) in names.iter().enumerate() {
@@ -198,7 +203,7 @@ pub fn call(
     }
     for name in required(schema) {
         if !arguments.contains_key(name) {
-            return Err(format!("{first} needs {name}. Run ilo help {first}."));
+            return Err(format!("{first} needs {name}. Run {LINK} help {first}."));
         }
     }
     Ok((tool.into(), Value::Object(arguments)))
@@ -319,7 +324,7 @@ fn options(
         };
         let Some(kind) = kind else {
             return Err(format!(
-                "There's no option {word} here. Run ilo help {command} for its options."
+                "There's no option {word} here. Run {LINK} help {command} for its options."
             ));
         };
         let value = match kind {
@@ -394,11 +399,13 @@ fn synopsis(word: &Word) -> String {
         "split" => " ...",
         _ => "",
     };
-    format!("ilo {}{}{extra}", word.word, args.collect::<String>())
+    format!("{LINK} {}{}{extra}", word.word, args.collect::<String>())
 }
 
 fn usage() -> String {
-    "Usage: ilo <command> [-t <tab>] [--json] [--as <name>]. Run ilo help for the commands.".into()
+    format!(
+        "Usage: {LINK} <command> [-t <tab>] [--json] [--as <name>]. Run {LINK} help for the commands."
+    )
 }
 
 /// What `ilo help` prints: the server's instructions, then each command the server has a tool
@@ -432,16 +439,17 @@ pub fn help(about: Option<&str>, instructions: &str, tools: &[Value]) -> Result<
                 .trim();
             text += &format!("  {}\n      {first}\n", synopsis(word));
         }
-        text += "Run ilo help <command> for one command's options.\n";
+        text += &format!("Run {LINK} help <command> for one command's options.\n");
         return Ok(text);
     };
     let word = WORDS.iter().find(|word| word.word == about);
     let name = word.map_or(about, |word| word.tool);
-    let tool = find(name)
-        .ok_or_else(|| format!("There's no command “{about}”. Run ilo help for the commands."))?;
+    let tool = find(name).ok_or_else(|| {
+        format!("There's no command “{about}”. Run {LINK} help for the commands.")
+    })?;
     let mut text = match word {
         Some(word) => format!("{}\n{}\n", synopsis(word), description(tool)),
-        None => format!("ilo {about}\n{}\n", description(tool)),
+        None => format!("{LINK} {about}\n{}\n", description(tool)),
     };
     let properties = (tool
         .pointer("/inputSchema/properties")
@@ -499,7 +507,7 @@ fn save_new(dir: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
         let mut random = [0u8; 12];
         getrandom::fill(&mut random).map_err(std::io::Error::other)?;
         let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-        let path = dir.join(format!("ilo-shot-{name}.png"));
+        let path = dir.join(format!("{LINK}-shot-{name}.png"));
         match write_new(&path, bytes) {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && tries < 8 => {
                 tries += 1;
@@ -628,6 +636,28 @@ pub fn added(profile: &Path) -> Option<Agent> {
     })
 }
 
+/// What the program prints and exits with when run under `name`, the name it was run as, if that
+/// isn't the command's: a link or script from before the command took the product's name, which
+/// Add Again takes away. The command's own link, and the program run by its own name, as the
+/// Flatpak's script and the Mac's bundle run it, go on to `run`.
+pub fn renamed(name: &std::ffi::OsStr) -> Option<Printed> {
+    let stem = Path::new(name).file_stem()?;
+    let own = [
+        Some(LINK.as_ref()),
+        Path::new(super::cli::PROGRAM).file_stem(),
+    ];
+    if own.contains(&Some(stem)) {
+        return None;
+    }
+    Some(Printed {
+        out: String::new(),
+        err: format!(
+            "This command is now {LINK}. Add it again in {PRODUCT} › Settings › Other apps.\n"
+        ),
+        code: exit::REFUSED,
+    })
+}
+
 /// Runs the command line `args` as the agent the agent file names, with `input` for stdin.
 pub fn run(
     args: Vec<String>,
@@ -647,10 +677,7 @@ pub fn run(
     let Some(agent) = agent else {
         return fail(
             exit::UNKNOWN,
-            format!(
-                "The ilo command isn't added. Add it in {} › Settings › Agents › Command line.",
-                env!("APP_NAME")
-            ),
+            format!("The {LINK} command isn't added. Add it in {PRODUCT} › Settings › Other apps."),
         );
     };
     let name = (line.name.clone())
@@ -699,23 +726,19 @@ struct Session {
 
 impl Session {
     fn open(agent: &Agent, name: &str) -> Result<Session, (i32, String)> {
-        let not_running = || {
-            (
-                exit::NOT_RUNNING,
-                format!(
-                    "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
-                    env!("APP_NAME")
-                ),
-            )
-        };
+        let not_running = || (exit::NOT_RUNNING, super::bridge::off());
         let stream = super::server::connect(&agent.address).map_err(|_| not_running())?;
         let mut writer = stream.try_clone().map_err(|_| not_running())?;
         writeln!(writer, "{}", json!({ "token": agent.token })).map_err(|_| not_running())?;
         let mut reader = BufReader::new(stream);
         let answer = super::server::read_line(&mut reader).ok_or_else(not_running)?;
         let answer: Value = serde_json::from_str(&answer).unwrap_or_default();
-        if let Some(refused) = answer.get("error").and_then(Value::as_str) {
-            return Err((exit::UNKNOWN, refused.into()));
+        // The server refuses with agents' off answer while other apps' agents are off, which a
+        // script reads as it does agents off.
+        match answer.get("error").and_then(Value::as_str) {
+            Some(refused) if refused == super::bridge::off() => return Err(not_running()),
+            Some(refused) => return Err((exit::UNKNOWN, refused.into())),
+            None => {}
         }
         let mut session = Session {
             writer,
@@ -930,11 +953,11 @@ mod tests {
     fn help_reads_the_tools() {
         let text = help(None, "The instructions.", &tools()).unwrap();
         assert!(text.starts_with("The instructions."));
-        assert!(text.contains("ilo click <ref>"));
-        assert!(text.contains("ilo hand-off <reason>"));
+        assert!(text.contains(&format!("{LINK} click <ref>")));
+        assert!(text.contains(&format!("{LINK} hand-off <reason>")));
         // Not on this server: no done tool, so no done command.
         let has_done = tools().iter().any(|tool| tool["name"] == "done");
-        assert_eq!(text.contains("ilo done"), has_done);
+        assert_eq!(text.contains(&format!("{LINK} done")), has_done);
         let click = help(Some("click"), "", &tools()).unwrap();
         assert!(click.contains("-t <tab>"));
         assert!(click.contains("--outline"));
@@ -1034,12 +1057,46 @@ mod tests {
         _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Run under the name it had before it took the product's, as an old link or a script names it,
+    /// the command says what it's called now and refuses, before it reads or calls anything. Under
+    /// its own name, or its program's, it runs.
+    #[test]
+    fn under_its_old_name_the_command_says_its_new_one() {
+        let said = format!(
+            "This command is now {LINK}. Add it again in {PRODUCT} › Settings › Other apps.\n"
+        );
+        let old = super::super::cli::OLD_LINK;
+        for name in [
+            old.to_string(),
+            format!("/home/someone/.local/bin/{old}"),
+            format!("{old}.exe"),
+        ] {
+            let printed = renamed(name.as_ref()).expect(&name);
+            assert_eq!(
+                (printed.out.as_str(), printed.err.as_str()),
+                ("", said.as_str())
+            );
+            assert_eq!(printed.code, exit::REFUSED);
+        }
+        let program = super::super::cli::PROGRAM;
+        for name in [
+            LINK.to_string(),
+            format!("/usr/bin/{LINK}"),
+            format!("{LINK}.exe"),
+            program.into(),
+        ] {
+            assert!(renamed(name.as_ref()).is_none(), "{name} refused");
+        }
+    }
+
     /// Without an agent file there's nothing to connect as, and the run says where to add it.
     #[test]
     fn a_run_without_the_agent_file_says_where_to_add_it() {
         let printed = run(vec!["tabs".into()], None, None, String::new);
         assert_eq!(printed.code, exit::UNKNOWN);
-        assert!(printed.err.contains("Command line"));
+        let said =
+            format!("The {LINK} command isn't added. Add it in {PRODUCT} › Settings › Other apps.");
+        assert!(printed.err.contains(&said), "{}", printed.err);
     }
 
     /// The command before Add, as the Store's alias is from install: the profile's server hears

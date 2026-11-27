@@ -61,3 +61,32 @@ pub fn register(cx: &mut App) {
 /// SF is the system's own on the Mac.
 #[cfg(target_os = "macos")]
 pub fn register(_: &mut App) {}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::UI;
+    use gpui::{Font, FontWeight, PlatformTextSystem as _, font};
+
+    /// On the Mac a text in medium draws in a face of its own, between the regular and the
+    /// semibold: GPUI's match read the system face's medium as heavier than 500 and gave the
+    /// regular one (patches/gpui-apple-atlas.patch). A family with no medium, as Menlo, still
+    /// gives its regular.
+    #[test]
+    fn medium_is_a_face_of_its_own_on_the_mac() {
+        let fonts = gpui_apple::AppleTextSystem::new();
+        let face = |family: &'static str, weight| {
+            let font = Font {
+                weight,
+                ..font(family)
+            };
+            fonts.font_id(&font).unwrap()
+        };
+        let medium = face(UI, FontWeight::MEDIUM);
+        assert_ne!(medium, face(UI, FontWeight::NORMAL));
+        assert_ne!(medium, face(UI, FontWeight::SEMIBOLD));
+        assert_eq!(
+            face("Menlo", FontWeight::MEDIUM),
+            face("Menlo", FontWeight::NORMAL)
+        );
+    }
+}

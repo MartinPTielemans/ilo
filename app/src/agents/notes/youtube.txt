@@ -1,0 +1,15 @@
+source: https://support.google.com/youtube/answer/7631406
+landmark: https://www.youtube.com/ | Search
+checked: 2026-11-27
+holds: shortcuts
+---
+Keys beat clicks
+/ puts the cursor in the search box, and Shift+? lists every key.
+On a video: k plays or pauses, j goes back 10 seconds and l forward 10, 0 goes to the start and 1 to 9 jump to 10% to 90% of it.
+c turns captions on or off, m mutes, f fills the screen until f or Esc, > plays faster and < slower, and i opens the miniplayer.
+Paused, . steps one frame on and , one back.
+Shift+N plays the next video, and Shift+P the one before in a playlist.
+
+Know before you start
+The player's keys work only once the player has been clicked.
+On the seek bar, the left and right arrows move 5 seconds, up and down change the volume, and Home and End go to the start and the end.

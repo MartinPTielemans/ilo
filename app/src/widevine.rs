@@ -85,7 +85,7 @@ pub enum Action {
 }
 
 /// The note's own words for it, so the two read as one way.
-pub const RESTART: &str = concat!("Restart ", env!("APP_NAME"));
+pub const RESTART: &str = concat!("Restart ", env!("PRODUCT_NAME"));
 
 /// Settings › Advanced's row for the module, shown where the core offers it.
 pub struct WidevineRow {
@@ -127,14 +127,14 @@ impl WidevineRow {
         let detail = match self.state {
             Widevine::None | Widevine::Absent => concat!(
                 "Netflix and Spotify play their video with it. Proprietary, so ",
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 " downloads it from Google only if you choose to."
             ),
             Widevine::Downloading => "Downloading from Google…",
             Widevine::Failed => "It didn't download. Check your connection and try again.",
             Widevine::Restart => concat!(
                 "Downloaded from Google. Sites play with it once ",
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 " restarts."
             ),
             Widevine::Ready => "Downloaded from Google, which keeps it up to date.",
@@ -272,7 +272,7 @@ mod tests {
         let row = row(&core, cx);
         row.read_with(cx, |row, _| assert!(row.detail().contains("restarts")));
         assert_eq!(labels(&row, cx), ["Remove", RESTART]);
-        assert_eq!(RESTART, concat!("Restart ", env!("APP_NAME")));
+        assert_eq!(RESTART, concat!("Restart ", env!("PRODUCT_NAME")));
         click(&row, Action::Restart, cx);
         assert_eq!(*core.asked.borrow(), ["restart"]);
         moves(&core, &row, Widevine::Ready, cx);

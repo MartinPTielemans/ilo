@@ -4,6 +4,7 @@
 //! may run.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::process::ChildStdin;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -16,6 +17,15 @@ const INITIALIZE: u64 = 1;
 const THREAD: u64 = 2;
 /// Turns' requests count up from here.
 const TURNS: u64 = 100;
+
+/// What starts the name of the permission profile of ilo's own that a thread's commands run under,
+/// never shown. Each start's name ends in its own random part, as Codex merges a table of the
+/// user's config.toml into one of the same name and no table written beforehand can name it.
+pub const PROFILE: &str = "ilo-thread-";
+/// The oldest Codex whose thread/start takes a named profile and answers which one is active: the
+/// one they were read from (rust-v0.172.0, app-server-protocol/src/protocol/v2/thread.rs:99-102,
+/// 225-229). An older one could take the thread without the profile and never say so.
+pub const OLDEST: [u32; 3] = [0, 172, 0];
 
 /// The thread, the turn under way, and the messages that wait for either.
 #[derive(Default)]
@@ -37,6 +47,26 @@ struct Inner {
     failure: Option<Failure>,
     /// When the reasoning under way started.
     thinking: Option<Instant>,
+    /// The model the user picked for its next turns, by id, which each turn names from then on.
+    model: Option<String>,
+    /// The name of the profile its thread was asked to start under, once it was asked.
+    profile: Option<String>,
+}
+
+impl State {
+    /// The profile's name its thread was asked to start under, for a test to answer with.
+    #[cfg(test)]
+    pub fn profile(&self) -> Option<String> {
+        self.inner.lock().unwrap().profile.clone()
+    }
+}
+
+/// A new name for a start's profile: PROFILE and 16 hex digits from the system's random numbers.
+pub fn profile_name() -> String {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).expect("the system has no random numbers");
+    let random: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{PROFILE}{random}")
 }
 
 /// Starts the server: initialize, which `read` follows with the thread and the first turn.
@@ -58,6 +88,11 @@ pub fn begin(stdin: &Mutex<Option<ChildStdin>>, state: &State, first: &str) -> s
             },
         }),
     )
+}
+
+/// The model the next turns run on, from the user's pick.
+pub fn set_model(state: &State, model: &str) {
+    state.inner.lock().unwrap().model = Some(model.to_string());
 }
 
 /// Sends the user's message as a turn, or keeps it for when the thread is there or the turn under
@@ -97,14 +132,21 @@ fn next_turn(stdin: &Mutex<Option<ChildStdin>>, inner: &mut Inner) -> std::io::R
     };
     inner.starting = true;
     inner.next += 1;
+    let params = turn_params(&thread, &text, inner.model.as_deref());
     write_line(
         stdin,
-        &json!({
-            "id": TURNS + inner.next,
-            "method": "turn/start",
-            "params": { "threadId": thread, "input": [{ "type": "text", "text": text }] },
-        }),
+        &json!({ "id": TURNS + inner.next, "method": "turn/start", "params": params }),
     )
+}
+
+/// A turn's params: the thread, the message, and the model the user picked for it, if they did,
+/// which holds for the turns after it too.
+fn turn_params(thread: &str, text: &str, model: Option<&str>) -> Value {
+    let mut params = json!({ "threadId": thread, "input": [{ "type": "text", "text": text }] });
+    if let Some(model) = model {
+        params["model"] = json!(model);
+    }
+    params
 }
 
 /// What a line of Codex's says, answering what it asks on the way.
@@ -137,11 +179,26 @@ pub fn read(
             }];
         }
         match id {
+            // Older than its floor: no thread starts, and the task ends as one whose Codex needs an
+            // update (AP27). Not saying the profile asked for: no thread starts either, and the
+            // task ends as one whose program stopped.
+            INITIALIZE if !fits(message.pointer("/result/userAgent").and_then(Value::as_str)) => {
+                log!("browser: codex is older than its floor");
+                inner.starting = false;
+                return vec![Out::Ended(Some(Failure::NeedsUpdate))];
+            }
+            THREAD if !holds(message, inner.profile.as_deref()) => {
+                inner.starting = false;
+                return vec![Out::Gone("Codex didn't take the thread's profile".into())];
+            }
             INITIALIZE => {
+                let profile = profile_name();
+                let params = thread_params(launch, &profile);
+                inner.profile = Some(profile);
                 _ = write_line(stdin, &json!({ "method": "initialized" }));
                 _ = write_line(
                     stdin,
-                    &json!({ "id": THREAD, "method": "thread/start", "params": thread_params(launch) }),
+                    &json!({ "id": THREAD, "method": "thread/start", "params": params }),
                 );
             }
             THREAD => {
@@ -293,13 +350,15 @@ fn decline(method: &str) -> Value {
 /// The thread's settings: the browser's server as its tools, every feature of Codex's own off,
 /// and none of the user's MCP servers, each turned off by name as config.toml lists them. A model
 /// whose catalog entry asks for code mode keeps `exec` and `wait`, a JavaScript isolate with no
-/// files, network or shell, from which only a patch tool the read-only sandbox refuses and the
-/// browser server's resources are reachable; Codex has no setting that removes it.
-pub fn thread_params(launch: &Launch) -> Value {
+/// files, network or shell, from which only a patch tool the profile refuses and the browser
+/// server's resources are reachable; Codex has no setting that removes it.
+pub fn thread_params(launch: &Launch, profile_name: &str) -> Value {
     let mut config = Map::new();
     for feature in FEATURES_OFF {
         config.insert(format!("features.{feature}"), json!(false));
     }
+    // A thread searches with the browser's own search tool, so its provider's is off, set so the
+    // user's own config can't turn it on.
     config.insert("web_search".into(), json!("disabled"));
     config.insert("notify".into(), json!([]));
     config.insert("project_doc_max_bytes".into(), json!(0));
@@ -320,6 +379,10 @@ pub fn thread_params(launch: &Launch) -> Value {
         };
         config.insert(format!("mcp_servers.{key}.enabled"), json!(false));
     }
+    config.insert(
+        format!("permissions.{profile_name}"),
+        profile(&launch.reads),
+    );
     let mut env = Map::new();
     env.insert(super::bridge::TOKEN.into(), json!(launch.server.token));
     // Under approvalPolicy never Codex refuses an MCP call it would ask about; the browser asks
@@ -354,7 +417,9 @@ pub fn thread_params(launch: &Launch) -> Value {
         "cwd": launch.dir.to_string_lossy(),
         "approvalPolicy": "never",
         "approvalsReviewer": "user",
-        "sandbox": "read-only",
+        // In place of the read-only sandbox, which lets a command read the whole disk; Codex
+        // takes a profile or a sandbox, never both.
+        "permissions": profile_name,
         "ephemeral": true,
         "developerInstructions": launch.instructions,
     });
@@ -362,6 +427,50 @@ pub fn thread_params(launch: &Launch) -> Value {
         params["model"] = json!(model);
     }
     params
+}
+
+/// What a thread's commands may do, as Codex's own sandbox holds them: read `reads` and nothing
+/// else, write nowhere, and no network. Codex can't take away its command tool, so this is what
+/// bounds it. The root's deny is the default the narrower reads reopen
+/// (codex-rs/protocol/src/permissions.rs:1836 at rust-v0.172.0); with no read, a command can't
+/// even load its own program. What Codex itself reads, and the browser's server, aren't commands.
+fn profile(reads: &[PathBuf]) -> Value {
+    let mut filesystem = Map::new();
+    filesystem.insert(":root".into(), json!("deny"));
+    for read in reads {
+        filesystem.insert(read.to_string_lossy().into_owned(), json!("read"));
+    }
+    json!({ "filesystem": filesystem, "network": { "enabled": false } })
+}
+
+/// Whether the `userAgent` Codex answers initialize with, `<originator>/<version> (…)`
+/// (codex-rs/login/src/auth/default_client.rs:152-166 at rust-v0.172.0), names OLDEST or newer.
+pub fn fits(agent: Option<&str>) -> bool {
+    let version = (agent.and_then(|agent| agent.split_whitespace().next()))
+        .and_then(|first| first.rsplit_once('/'))
+        .map(|(_, version)| version);
+    version.is_some_and(at_least_oldest)
+}
+
+/// Whether what `codex --version` printed, `codex-cli <version>`, names OLDEST or newer.
+pub fn fits_version(printed: &str) -> bool {
+    let first = printed.lines().next().unwrap_or_default();
+    first.split_whitespace().last().is_some_and(at_least_oldest)
+}
+
+/// Whether `version`, `<major>.<minor>.<patch>` and anything after, is OLDEST or newer.
+fn at_least_oldest(version: &str) -> bool {
+    let parts: Option<Vec<u32>> = (version.split(['.', '-', '+']).take(3))
+        .map(|part| part.parse().ok())
+        .collect();
+    parts.is_some_and(|parts| parts.len() == 3 && parts[..] >= OLDEST[..])
+}
+
+/// Whether Codex's answer to thread/start says the thread runs under `asked`, the profile this
+/// start named, and not one another start or the user's config named.
+pub fn holds(answer: &Value, asked: Option<&str>) -> bool {
+    let active = answer.pointer("/result/activePermissionProfile/id");
+    asked.is_some() && active.and_then(Value::as_str) == asked
 }
 
 /// Codex's features that would give the model anything but the browser's tools.
@@ -411,4 +520,17 @@ pub fn servers_in(text: &str) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+#[cfg(test)]
+mod tests {
+    /// A turn names the model only once the user picked one, and then its id.
+    #[test]
+    fn a_turn_names_the_model_the_user_picked() {
+        let plain = super::turn_params("t1", "Go on", None);
+        assert_eq!(plain.get("model"), None);
+        let picked = super::turn_params("t1", "Go on", Some("gpt-b"));
+        assert_eq!(picked["model"], "gpt-b");
+        assert_eq!(picked["input"][0]["text"], "Go on");
+    }
 }

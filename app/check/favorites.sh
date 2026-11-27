@@ -47,11 +47,11 @@ fi
 favorites() {
   grep '^browser: favorites' "$log" | tail -1 | sed 's/^browser: favorites *//'
 }
-# One favorite is one tile across the sidebar, 47 tall and 90 below the window's top, under the URL
-# field, and its row of tiles takes the Space's rows 55 down, with the 8 under it.
-tile="114 114"
+# One favorite is one tile across the sidebar, 40 tall and 90 below the window's top, under the URL
+# field, and its row of tiles takes the Space's rows 44 down, with the 4 under it.
+tile="114 110"
 tiled_row() {
-  echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
+  echo "100 $(($(row "$1" | cut -d' ' -f2) + 44))"
 }
 open_from_bar "http://localhost:$port/two.html"
 b=$tab
@@ -148,8 +148,8 @@ expect '^browser: tooltip window shown$' "the sidebar button's tooltip didn't fa
 ../tools/window-screenshot.sh "$pid" "$out/header-tooltip.png" || fail "no window to capture"
 send move 100 400
 expect '^browser: tooltip hidden$' "the pointer leaving the sidebar button didn't hide its tooltip"
-# Clear, at the end of the divider over Today, says what it does in Arc's words, under it.
-send move 200 191
+# Clear, at the end of the New Tab line, says what it does in Arc's words, under it.
+send move 200 195
 expect '^browser: clear hovered 1$' "Clear didn't see the pointer come over it"
 expect '^browser: tooltip shown Clear unpinned tabs in this space$' \
   "resting on Clear didn't show its tooltip"
@@ -254,9 +254,9 @@ grep -q '^browser: scroll bars always$' "$log" && legacy=1
 send layout
 size=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
-send resize 1000 340
+send resize 1000 310
 # The list scrolls as far as the last frame drawn has it.
-expect '^browser: drawn at 1000x340$' "the window didn't draw at its new size"
+expect '^browser: drawn at 1000x310$' "the window didn't draw at its new size"
 # Rows hidden under the list's foot bring a line across the sidebar 1 under it (Arc).
 expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn't show its edge"
 # The overlay knob holds 0.8 s after the last scroll, less than a still can take to be captured,
@@ -272,8 +272,8 @@ fi
 recorded
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
 # Near each row's top, as Windows' capture is a row taller than the window.
-edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 187.2 / 340 }'))
-gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 185.2 / 340 }'))
+edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 170.2 / 310 }'))
+gap=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 168.2 / 310 }'))
 # A light sidebar, as an opaque window's is, draws its edge darker.
 brighter "$edge" "$gap" || brighter "$gap" "$edge" ||
   fail "the edge is $edge over the sidebar's $gap"
@@ -294,10 +294,10 @@ recorded
 switch "2 cmd" "$c"
 none_since '^browser: list scrolled' || fail "showing a tab in view scrolled the list"
 # Shown again in a window short enough that, with the list scrolled back to its top, the last tab's
-# row is wholly under its bottom (at 340 its top still shows), a sliver of its plate marks it there,
+# row is wholly under its bottom (at 310 its top still shows), a sliver of its plate marks it there,
 # through the rest of the scroll; a click on that scrolls the list back to the row.
-send resize 1000 300
-expect '^browser: drawn at 1000x300$' "the window didn't draw at its new size"
+send resize 1000 280
+expect '^browser: drawn at 1000x280$' "the window didn't draw at its new size"
 switch "9 cmd" "$b"
 expect "^browser: list scrolled to [1-9][0-9.]* for $b\$" \
   "showing a tab under the list's bottom didn't scroll to its row"
@@ -320,19 +320,19 @@ in_browser RenderWidgetHostViewCocoa "a click on the page didn't give it the key
 send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back at its size"
 # ⌘, from the page opens Settings on General. Its switch turns the warning before quitting off;
-# on Tabs & Sidebar, the menu of the profile's pop-up button sets how long its Today tabs wait for
+# on Tabs & Spaces, the menu of the profile's pop-up button sets how long its Today tabs wait for
 # the archive, a click on a drawing of Share favorites (#2430) sets who shares them, and on the Mac, the haptics' switch turns them
 # off; and ⌘W hides it.
 send key , cmd
 expect '^browser: command settings via page$' "⌘, from the page didn't run Settings"
-expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+settings_on_general "⌘, didn't show Settings"
 settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings.png" || fail "no window to capture"
 click_in_sight "switch warn before quitting"
 expect '^browser: warn before quitting off$' "a click on Ask before quitting didn't turn it off"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 post clickkey $(drawn "archive [0-9]*")
 expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "a click on Archive Today tabs after didn't show the times, with 12 hours chosen"
@@ -654,9 +654,10 @@ expect '^browser: sidebar width 164$' "dragging the sidebar's edge didn't narrow
 send layout
 size=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
-send resize 1000 220
+# Two rows of tiles 40 tall and 8 apart are 88, more than 0.4 of a window 200 tall (80).
+send resize 1000 200
 expect '^browser: tiles scroll with the list$' \
-  "two rows of tiles in a window 220 tall didn't scroll with the list"
+  "two rows of tiles in a window 200 tall didn't scroll with the list"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-tall.png" || fail "no window to capture"
 # Scrolled 40, the tiles went up 40 with the rows, and the first tile's place holds the third's.
 send scroll 100 150 20 2
@@ -750,11 +751,11 @@ expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back
 send click $sidebar_point
 send key , cmd
 expect '^browser: command settings via ui$' "⌘, from the UI didn't run Settings"
-expect '^browser: settings shown General$' "⌘, from the UI didn't show Settings"
+settings_on_general "⌘, from the UI didn't show Settings"
 settings_drew General
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 post clickkey $(drawn "archive [0-9]*")
 expect '^browser: menu shown 12 hours (default), 24 hours (checked), 7 days, 30 days, Never$' \
   "Settings didn't keep 24 hours across the quit"
@@ -788,9 +789,9 @@ settings_close
 post clickkey $close
 expect '^browser: settings hidden$' "the close button didn't hide Settings"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' \
+expect '^browser: settings shown Tabs & Spaces$' \
   "Settings… didn't show Settings on the section it showed"
-settings_drew 'Tabs & Sidebar'
+settings_drew 'Tabs & Spaces'
 send clickkey $(drawn "chromium settings")
 expect '^browser: more settings$' "a click on Chromium settings didn't run it"
 expect '^browser: settings hidden$' "Chromium settings didn't hide Settings"
@@ -848,13 +849,14 @@ expect "^browser: today $r\( \|\$\)" "Remove from Favorites didn't put the tab a
 expect '^browser: tiles settled$' "the 12 tiles didn't settle"
 expect '^browser: rows settled$' "the rows didn't settle under the 12 tiles"
 twelve=$(favorites)
-# Three rows of tiles take the Space's rows 165 down.
-send click 100 $(($(row 0 | cut -d' ' -f2) + 165))
+# Three rows of tiles, 40 tall and 8 apart, and the block's 4 under them, take the Space's rows
+# 140 down.
+send click 100 $(($(row 0 | cut -d' ' -f2) + 140))
 expect "^browser: selected $r\( in .*\)\{0,1\}\$" "a click on Today's top row didn't show the tab taken out"
 send key d cmd
 expect "^browser: pinned $r\$" "⌘D didn't pin the tab taken out of the favorites"
 expect '^browser: rows settled$' "the rows didn't settle after ⌘D"
-pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 165))"
+pinned_full="100 $(($(pinned_row 0 | cut -d' ' -f2) + 140))"
 post rightclick $pinned_full
 expect "^browser: menu shown $(cased 'Unpin Tab, Add to Favorites (disabled), ')" \
   "with 12 favorites, a pinned tab's menu didn't dim Add to Favorites"

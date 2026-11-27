@@ -1,16 +1,15 @@
 # check.sh runs this at 190.
 # The browser blocks ads and trackers from a new profile's first page, with nothing to install:
 # uBlock Origin, in the framework, loads into every profile, and no extension list shows it, as
-# Settings › Ad Blocking is all of its settings (#2107). Filters given for the check as My filters,
-# through the same managed settings the browser gives it its own, block the served page's ad script
-# and hide its ad. The run reports how long that first launch let requests through. Its own lists
-# take fbclid out of an address. The Site Controls' shield, the action row's last tile, says how
-# many requests it blocked on the page, and turns it off for the site, reloading the page, which
-# then shows the ad, and on again, counting afresh, by clicks and then by Tab's ring and space and
-# return. Off
-# for the site, Settings › Ad Blocking lists it, and its Turn On turns it on there again. Its Block
-# ads and trackers turns it off in every profile, which takes it out of the Site Controls, and on
-# again.
+# Settings › Privacy's Ad Blocking is all of its settings (#2107). Filters given for the check as My
+# filters, through the same managed settings the browser gives it its own, block the served page's
+# ad script and hide its ad. The run reports how long that first launch let requests through. Its
+# own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile,
+# says how many requests it blocked on the page, and turns it off for the site, reloading the page,
+# which then shows the ad, and on again, counting afresh, by clicks and then by Tab's ring and space
+# and return. Off for the site, Settings › Privacy's Ad Blocking lists it, and its Turn On turns it
+# on there again. Its Block ads and trackers turns it off in every profile, which takes it out of
+# the Site Controls, and on again.
 # A filter list switched on there, found by Settings' search, blocks at once: uBlock filters –
 # Annoyances, off as it comes, which --ad-block-lists makes a list on the check's server. A rule
 # added in My filters hides an element, and its Remove shows it again. A private window blocks
@@ -224,15 +223,18 @@ expect "^browser: title $tab ad script loaded, element shown\$" \
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_on_general "Settings… didn't show Settings"
 settings_drew General
-send clickkey $(drawn "toolbar Ad Blocking")
-expect '^browser: settings tab Ad Blocking$' "a click on Ad Blocking didn't show its section"
-settings_drew "Ad Blocking"
+send clickkey $(drawn "toolbar Privacy")
+expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+settings_drew Privacy
 expect '^browser: settings ad blocking off on 127\.0\.0\.1$' \
   "Settings didn't list the site ad blocking is off on, alone"
 expect '^browser: settings turn on 127\.0\.0\.1 at ' "Settings didn't draw the site's Turn On"
-turn_on=$(sed -n "s/^browser: settings turn on 127\.0\.0\.1 at //p" "$log" | tail -1)
+# Ad Blocking is under Privacy's own rows: in_sight scrolls it up, from this show's frame.
+in_sight "turn on 127.0.0.1" '^browser: settings drew Privacy$' ||
+  fail "Settings didn't draw the site's Turn On"
+turn_on=$at
 ../tools/window-screenshot.sh "$pid" "$out/adblock-off-sites.png" all || fail "no window to capture"
 send clickkey $turn_on
 expect '^browser: ad blocking on for 127\.0\.0\.1$' "a click on the site's Turn On didn't run"
@@ -242,12 +244,14 @@ expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
 reload_until "$blocked" "turned on again in Settings' list, the page didn't block its ad"
 
-# Off everywhere in Settings, whose Ad Blocking, where it opens again, leads with Block ads and
-# trackers.
+# Off everywhere in Settings, whose Ad Blocking, under Privacy where it opens again, leads with
+# Block ads and trackers.
 send menu Settings…
-expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking again"
-settings_drew "Ad Blocking"
-click_in_sight "switch ad blocking"
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy again"
+settings_drew Privacy
+in_sight "switch ad blocking" '^browser: settings drew Privacy$' ||
+  fail "Settings didn't draw Block ads and trackers' switch"
+send clickkey $at
 expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-settings.png" all || fail "no window to capture"
 send key w cmd
@@ -262,9 +266,11 @@ none_since "${controls}Ad blocking" || fail "turned off in Settings, the Site Co
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
-expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking a third time"
-settings_drew "Ad Blocking"
-click_in_sight "switch ad blocking"
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy a third time"
+settings_drew Privacy
+in_sight "switch ad blocking" '^browser: settings drew Privacy$' ||
+  fail "Settings didn't draw Block ads and trackers' switch"
+send clickkey $at
 expect '^browser: ad blocking on$' "a second click on the switch didn't turn it on"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -277,9 +283,10 @@ go_from_bar "${filtered#http://}"
 expect "^browser: loaded $tab $filtered\$" "the tab didn't load the filtered page"
 expect "^browser: title $tab filtered element shown\$" "the filtered page's element didn't show first"
 send menu Settings…
-expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking for My filters"
-settings_drew "Ad Blocking"
-send clickkey $(drawn "filter field")
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy for My filters"
+settings_drew Privacy
+in_sight "filter field" '^browser: settings drew Privacy$' || fail "Settings didn't draw My filters' field"
+send clickkey $at
 # Text gets into a field only from the frame that draws it with the keyboard, after the press, and
 # the driver's insert waits for nothing: one sent before that frame was lost (#2847).
 expect '^browser: field New filter has the keyboard$' \
@@ -296,9 +303,10 @@ send click $page_point
 report="filtered element "
 reload_until "filtered element hidden" "My filters' rule didn't hide the page's element"
 send menu Settings…
-expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking to remove the rule"
-settings_drew "Ad Blocking"
-send clickkey $(drawn "remove filter 2")
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy to remove the rule"
+settings_drew Privacy
+in_sight "remove filter 2" '^browser: settings drew Privacy$' || fail "Settings didn't draw the rule's Remove"
+send clickkey $at
 expect '^browser: ad block filter removed 127\.0\.0\.1##\.check-filtered$' \
   "My filters' Remove didn't remove the rule"
 send key w cmd
@@ -313,8 +321,8 @@ expect "^browser: loaded $tab $listed\$" "the tab didn't load the listed page"
 expect "^browser: title $tab listed script loaded\$" \
   "with the annoyance list off, the listed page's script didn't load"
 send menu Settings…
-expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking for its lists"
-settings_drew "Ad Blocking"
+expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy for its lists"
+settings_drew Privacy
 send clickkey $(drawn "search")
 expect '^browser: field Search has the keyboard$' \
   "a click on Settings' search didn't give it the keyboard in a frame drawn"
@@ -340,8 +348,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 new_window_bar
 send window 2
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+resting_key t "private window"
 private_ads="$ads?private"
 send insert "$private_ads"
 send key return
@@ -462,7 +469,7 @@ quit
   fail "without --ad-block-engine=native, the profile has the native engine's folder:" \
     "$(ls "$profile_dir/Ad Blocking")"
 # The way back (#2111): in a build whose default is the browser's own engine, which
-# --ad-block-default=native makes this one for the check, Settings › Ad Blocking's Block with
+# --ad-block-default=native makes this one for the check, Settings › Privacy's Block with
 # uBlock Origin goes back to the extension at the next launch, and the browser's own leaves its
 # data as it was. The relaunch is the restart's, with the switches it was given, as widevine.sh's:
 # a click on Restart would start an app outside the check, so the run reads that it's drawn.
@@ -517,14 +524,16 @@ for engine in native ublock; do
   send menu Settings…
   expect '^browser: settings shown ' "the way back, $engine: Settings… didn't show Settings"
   settings_drew
-  send clickkey $(drawn "toolbar Ad Blocking")
-  expect '^browser: settings tab Ad Blocking$' "the way back: a click on Ad Blocking didn't show it"
-  settings_drew "Ad Blocking"
+  send clickkey $(drawn "toolbar Privacy")
+  expect '^browser: settings tab Privacy$' "the way back: a click on Privacy didn't show it"
+  settings_drew Privacy
   none_since '^browser: settings ad blocker restart at ' ||
     fail "the way back: the row offered a restart before a choice"
   # The row before a choice, its line saying what going back means, in each tone.
   [ "$engine" = ublock ] || way_back_captures before
-  click_in_sight "switch ad blocker"
+  in_sight "switch ad blocker" '^browser: settings drew Privacy$' ||
+    fail "the way back: Settings didn't draw Block with uBlock Origin's switch"
+  send clickkey $at
   if [ "$engine" = native ]; then
     expect '^browser: ad blocker on$' "a click on Block with uBlock Origin didn't turn it on"
     expect '^browser: ad blocker ublock chosen$' "Block with uBlock Origin didn't keep the choice"
@@ -545,4 +554,4 @@ for engine in native ublock; do
 done
 [ -d "$store" ] || fail "uBlock Origin's storage went with the way back"
 
-echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page.$relaunched With the browser's own as the default, Block with uBlock Origin goes back to the extension, which blocks after the restart the row offers, its storage as the browser's own left it, and turned off goes forward again. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png, $out/adblock-way-back-before-light.png, $out/adblock-way-back-before-dark.png, $out/adblock-way-back-chosen-light.png, $out/adblock-way-back-chosen-dark.png, $out/adblock-way-back-ublock-chosen.png"
+echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Privacy lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page.$relaunched With the browser's own as the default, Block with uBlock Origin goes back to the extension, which blocks after the restart the row offers, its storage as the browser's own left it, and turned off goes forward again. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png, $out/adblock-way-back-before-light.png, $out/adblock-way-back-before-dark.png, $out/adblock-way-back-chosen-light.png, $out/adblock-way-back-chosen-dark.png, $out/adblock-way-back-ublock-chosen.png"

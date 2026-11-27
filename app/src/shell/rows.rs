@@ -5,43 +5,45 @@ use std::time::Instant;
 use std::{cell::Cell, f32::consts::FRAC_PI_2, time::Duration};
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, MouseButton,
-    MouseDownEvent, MouseMoveEvent, Pixels, Point, Radians, Role, SharedString, Transformation,
-    Window, canvas, div, prelude::*, px, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, Hsla, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, Point, Radians, Rgba, Role, SharedString,
+    Transformation, Window, canvas, div, prelude::*, px, svg,
 };
 
 use super::Space;
+use super::own_shape::own_shape;
 use super::{
-    BREATH, BREATH_LOW, CHOSEN, CLEAR, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
-    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, DIVIDER_HEIGHT,
-    EMOJI_SIZE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED,
-    KeepName, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
-    PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END,
-    SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER, SLEEPING_FAVICON,
-    SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET,
-    SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
-    STATUS_LOADING, Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label,
-    cubic_bezier, developer_outline, divider_box, favicon, favicon_source, folder_icon, host,
+    BREATH, BREATH_LOW, CHOSEN, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED, CLOSE_RIGHT, CLOSE_SIZE,
+    CancelName, Closing, Command, Curve, EMOJI_SIZE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X,
+    FOLDER_INDENT, FORM_TEXT, KeepName, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS,
+    Naming, PINNED_CARET, PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT,
+    PLATE_INSET, PLATE_RADIUS, Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY,
+    SEGMENT_END, SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER,
+    SLEEPING_FAVICON, SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE, SPACE_MORE,
+    SPACE_MORE_INSET, SPACE_NAME, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
+    STATUS_LOADING, Shell, Slot, Swapped, TITLE_END_INSET, TODAY_GAP, URL_BUTTON_GLYPH,
+    clear_label, cubic_bezier, developer_outline, favicon, favicon_source, folder_icon, host,
     icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
-    scaled::scaled_from_middle,
-    selected_plate, space_icon, split_plate,
-    swap::{ARROW_DOWN, NONE, folder_glyph},
-    title,
+    scaled::scaled_from_middle, selected_plate, space_icon, split_plate, swap::folder_glyph, title,
+    today_line,
 };
 use super::{
     access::{Accessible, NEW_TAB},
+    broom::Broom,
     drag::in_sidebar,
     return_mark::Bitmap,
     sidebar_keys,
 };
+use crate::palette::Tone;
+use crate::tokens::shell::{DIVIDER, LIGHT_SEGMENT_RULE, SEGMENT_RULE};
 use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
+    settings_rows::drawn_of,
     space_icon::has_icon,
     tokens::shell::{
-        DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, NAME_HIDDEN, NAME_HIDDEN_UNDER_FAVORITES,
-        SEGMENT_MARK_GAP, SPACE_PROFILE_GAP, live_folder::COUNT_END as LIVE_COUNT_END,
+        BLOCK_GAP, DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, SEGMENT_MARK_GAP,
+        SPACE_PROFILE_GAP, live_folder::COUNT_END as LIVE_COUNT_END,
     },
     tokens::text,
     tooltip::{Anchor, Tip},
@@ -296,18 +298,23 @@ impl Shell {
             _ => None,
         };
         let chosen = matches!(row, Row::Tab(tab) if self.chosen.contains(&tab)) && !selected;
-        let developer = selected && !folder && self.page(self.selected).developer_mode;
+        // Developer Mode's look is the shown tab's own: New Tab's row has the plate while ⌘T's bar
+        // is open, and none of it.
+        let developer = selected
+            && matches!(row, Row::Tab(_))
+            && !folder
+            && self.page(self.selected).developer_mode;
+        // The open tab's line is its page's own colour, a shape of its own (own_shape.rs); the
+        // plain plate is for a page that has reported none.
+        let page = match row {
+            Row::Tab(tab) if selected => self.page_fill(tab),
+            _ => None,
+        };
         let plate = content
             .relative()
             .children(ring)
-            .when(selected, |plate| {
-                selected_plate(
-                    &self.palette,
-                    plate,
-                    plate_in,
-                    hover.unwrap_or(0.),
-                    developer,
-                )
+            .when(selected && page.is_none(), |plate| {
+                selected_plate(&self.palette, plate, plate_in, hover.unwrap_or(0.))
             })
             .when(developer && !ghost, |plate| {
                 plate.child(self.logged_developer_outline(self.selected, PLATE_RADIUS))
@@ -322,31 +329,28 @@ impl Shell {
             .id("plate")
             .when(chosen, |plate| plate.bg(self.palette.plate(CHOSEN)))
             .when_some(hover.filter(|_| !selected), |plate, hover| {
-                plate.bg(self.palette.plate(HOVERED).opacity(hover))
+                plate.bg(self.palette.hovered_row().opacity(hover))
             })
             // Pressed, a tab's row has the selected fill before the core answers its press, and a
             // folder's keeps its hover fill, as Arc's do. The held row says so, not GPUI's pressed
             // state, which outlives the release of a press that selected its row.
             .when(
                 self.pressed(row) && !selected && dragging != Some(slot) && !folder,
-                |plate| {
-                    plate
-                        .bg(self.palette.selected(0.))
-                        .shadow(self.palette.selected_shadow(1.))
-                },
+                |plate| plate.bg(self.palette.shown(0.)),
             )
             .when(row == Row::NewTab && !selected, |plate| {
                 // GPUI keeps an element's pressed state only once a listener gives it a hitbox.
                 plate
                     .on_mouse_down(MouseButton::Left, |_, _, _| {})
-                    .group_active("row", |style| style.bg(self.palette.selected(0.)))
+                    .group_active("row", |style| style.bg(self.palette.shown(0.)))
             })
-            // A ghost covers the rows it passes, in the colours its row has in place.
+            // A ghost covers the rows it passes, in the colours its row has in place: the open
+            // tab's in its page's colour.
             .when(ghost, |plate| {
-                let fill = if selected {
-                    self.palette.selected(0.)
-                } else {
-                    self.palette.plate(HOVERED)
+                let fill = match (page, selected) {
+                    (Some(page), _) => return plate.bg(page),
+                    (None, true) => self.palette.shown(0.),
+                    (None, false) => self.palette.hovered_row(),
                 };
                 plate.bg(self.window_fill().blend(fill))
             });
@@ -376,6 +380,11 @@ impl Shell {
             .when(self.a11y && !ghost, |element| {
                 self.row_access(element, row, selected)
             })
+            // Under the plate, in its place and pressed smaller with it, as its plain fill is.
+            .children(
+                page.filter(|_| !ghost)
+                    .map(|page| scaled_from_middle(self.own_line(page, depth, plate_in), scale)),
+            )
             .child(scaled_from_middle(plate, scale))
     }
 
@@ -421,6 +430,60 @@ impl Shell {
                 .when(self.keyed == Some(tab), |row| row.aria_active_descendant())
                 .pressed_by_mouse_down(true, true),
         }
+    }
+
+    /// The page's own colour for the line or the tile of `tab`, once its page has reported one:
+    /// the tab shown, alone in the page area beside the docked sidebar. A split view's line is no
+    /// one page's and keeps the plain plate whatever its panes' colours, and Developer Mode's
+    /// line keeps its own look.
+    pub(super) fn page_fill(&self, tab: u64) -> Option<Rgba> {
+        let shown = tab == self.selected && self.shown_has_plate();
+        let color = self.tab_background(tab).filter(|_| shown)?;
+        let own = self.panes(tab).len() == 1 && !self.page(tab).developer_mode;
+        (self.beside_page_area() && own).then(|| gpui::rgb(color))
+    }
+
+    /// The inks of `tab`'s line or tile: the window's, or on its page's own colour the ink that
+    /// reads there, so no page makes its own tab unreadable.
+    pub(super) fn line_palette(&self, tab: u64) -> Palette {
+        match self.page_fill(tab) {
+            Some(fill) => self.palette.on_fill(fill),
+            None => self.palette,
+        }
+    }
+
+    /// The open tab's line in `page`, its page's own colour, at `opacity`: a shape of its own in
+    /// its plate's place, `depth` folders in, on whichever side the sidebar is.
+    fn own_line(&self, page: Rgba, depth: usize, opacity: f32) -> Div {
+        let inset = (ROW_HEIGHT - PLATE_HEIGHT) / 2.;
+        div()
+            .absolute()
+            .top(px(inset))
+            .bottom(px(inset))
+            .left(px(PLATE_INSET + depth as f32 * FOLDER_INDENT))
+            .right(px(PLATE_INSET))
+            .child(self.in_own_colour(page, opacity, PLATE_RADIUS))
+    }
+
+    /// A line of the sidebar in `fill`, the colour of what it opens in the page area, at
+    /// `opacity`, as a shape of its own with corners of `corner` (own_shape.rs): the open tab's
+    /// line in its page's colour, and the shown thread's card in its stage's.
+    pub(super) fn in_own_colour(
+        &self,
+        fill: Rgba,
+        opacity: f32,
+        corner: f32,
+    ) -> impl IntoElement + use<> {
+        let on = self.palette.on_fill(fill);
+        // A dark shape is told from a dark window by a line of light round it.
+        let outline = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER).opacity(opacity));
+        own_shape(Hsla::from(fill).opacity(opacity), outline, corner)
+    }
+
+    /// Whether the page area starts at the sidebar's edge, where a line of the sidebar wears the
+    /// colour of what the area shows: the sidebar docked and settled beside it.
+    pub(super) fn beside_page_area(&self) -> bool {
+        self.card_left() > 0. && self.card_left() == self.width()
     }
 
     /// Whether `row` is a tab's that's pressed and not yet let go.
@@ -566,7 +629,7 @@ impl Shell {
                         .mr(px(LIVE_COUNT_END - TITLE_END_INSET))
                         .text_size(px(text::SMALL))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(self.palette.text(SECONDARY))
+                        .text_color(self.palette.gray(SECONDARY))
                         .child(waiting.to_string()),
                 ),
             None => label,
@@ -630,6 +693,7 @@ impl Shell {
             true => SEPARATE.into(),
             false => super::assets::bars_path(angle),
         };
+        let palette = self.line_palette(row);
         let name = match (separate, unload) {
             (true, _) => "Separate All Tabs",
             (false, true) => "Unload Tab",
@@ -643,7 +707,7 @@ impl Shell {
             .mr(px(CLOSE_RIGHT))
             .size(px(CLOSE_SIZE))
             .rounded(px(NAV_RADIUS))
-            .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+            .hover(|style| style.bg(palette.plate(CLOSE_HOVERED)))
             .flex()
             .items_center()
             .justify_center()
@@ -653,7 +717,7 @@ impl Shell {
                     .path(glyph)
                     .flex_none()
                     .size(px(CLOSE_GLYPH))
-                    .text_color(self.palette.text(SECONDARY)),
+                    .text_color(palette.text(SECONDARY)),
             )
             .when(split, |button| {
                 button
@@ -709,6 +773,7 @@ impl Shell {
     /// (owner, 2026-11-02, #1349). It names itself after a moment, as a header button does.
     fn remove_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let row = tabs[0];
+        let palette = self.line_palette(row);
         div()
             .id(("remove", row))
             .when(self.a11y, |button| button.button_named(REMOVE_TIP))
@@ -717,7 +782,7 @@ impl Shell {
             .mr(px(CLOSE_RIGHT))
             .size(px(CLOSE_SIZE))
             .rounded(px(NAV_RADIUS))
-            .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+            .hover(|style| style.bg(palette.plate(CLOSE_HOVERED)))
             .flex()
             .items_center()
             .justify_center()
@@ -725,7 +790,7 @@ impl Shell {
                 svg()
                     .path(REMOVE)
                     .size(px(REMOVE_GLYPH))
-                    .text_color(self.palette.text(SECONDARY)),
+                    .text_color(palette.text(SECONDARY)),
             )
             .child(self.button_frame(REMOVE_TIP))
             .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
@@ -779,11 +844,13 @@ impl Shell {
         }
     }
 
-    /// The speaker after `tab`'s favicon while its page plays sound, crossed out while it's muted,
-    /// which a click mutes or unmutes (Dia).
+    /// The speaker at the end of `tab`'s line while its page plays sound, crossed out while it's
+    /// muted, which a click mutes or unmutes (Dia). Its glyph ends where a title would, and the
+    /// line's button, under the pointer, comes after it.
     fn speaker(&self, tab: u64, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
         let page = self.page(tab);
         let icon = speaker_glyph(page.muted);
+        let palette = self.line_palette(tab);
         (page.audible || page.muted).then(|| {
             div()
                 .id(("speaker", tab))
@@ -791,18 +858,25 @@ impl Shell {
                     button.button_named(if page.muted { "Unmute" } else { "Mute" })
                 })
                 .flex_none()
-                .mr(px(SPEAKER_GAP))
+                .ml(px(SPEAKER_GAP))
+                .mr(px(-(SPEAKER_SIZE - SPEAKER_DRAWN) / 2.))
                 .size(px(SPEAKER_SIZE))
                 .rounded(px(NAV_RADIUS))
-                .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+                .hover(|style| style.bg(palette.plate(CLOSE_HOVERED)))
                 .flex()
                 .items_center()
                 .justify_center()
+                // check.sh reads the line to click the speaker, which the row's button moves.
+                // Only where a line is read: the owner's launch draws no more.
+                .when(crate::checked() || cfg!(test), |speaker| {
+                    let logged = self.speakers_drawn.clone();
+                    (speaker.relative()).child(drawn_of("speaker", tab.to_string(), logged))
+                })
                 .child(self.swaps.glyph(
                     Swapped::Speaker(tab),
                     icon,
                     SPEAKER_DRAWN,
-                    self.palette.text(SECONDARY).into(),
+                    palette.text(palette.secondary()).into(),
                     cx,
                 ))
                 // Not the row's press, which would show the tab, nor a double-click's rename.
@@ -831,7 +905,7 @@ impl Shell {
                     svg()
                         .path(glyph)
                         .size(px(SPEAKER_DRAWN))
-                        .text_color(self.palette.text(SECONDARY)),
+                        .text_color(self.line_palette(tab).text(SECONDARY)),
                 ),
         )
     }
@@ -948,7 +1022,7 @@ impl Shell {
             .any(|(slot, top)| matches!(slot, Slot::NewTab) && (top..top + ROW_PITCH).contains(&y));
         if event.button == MouseButton::Right && tab.is_none() && !new_tab {
             let divider = (self.layout().get(&Slot::Divider))
-                .is_some_and(|&top| (top..top + DIVIDER_HEIGHT).contains(&y));
+                .is_some_and(|&top| (top..top + TODAY_GAP).contains(&y));
             match (divider, y < NAME_HEIGHT && !self.name_row_hidden()) {
                 (true, _) => self.divider_menu(event.position, cx),
                 (false, true) => self.space_menu(self.space, event.position, cx),
@@ -1026,7 +1100,10 @@ impl Shell {
             .top(px((PLATE_HEIGHT - SEGMENT_LINE) / 2.))
             .w(px(1.))
             .h(px(SEGMENT_LINE))
-            .bg(palette.faint(DIVIDER));
+            .bg(palette.faint(match palette.tone {
+                Tone::Dark => SEGMENT_RULE,
+                Tone::Light => LIGHT_SEGMENT_RULE,
+            }));
         // While it moves the title keeps the width it has whole, so it's cut by the segment's
         // edge and fades, rather than its ellipsis running along it.
         let title = (weight > 0.).then(|| {
@@ -1081,7 +1158,7 @@ impl Shell {
                     svg()
                         .path(speaker_glyph(page.muted))
                         .size(px(SPEAKER_DRAWN))
-                        .text_color(palette.text(SECONDARY)),
+                        .text_color(palette.text(palette.secondary())),
                 )
                 .into_any_element()
         })
@@ -1135,7 +1212,7 @@ impl Shell {
     ) -> gpui::Stateful<gpui::Div> {
         let speaker = self
             .speaker(tab, cx)
-            .map(|speaker| speaker.mr_0().into_any_element());
+            .map(|speaker| speaker.ml_0().mr_0().into_any_element());
         self.segment(&self.palette, tab, fold, first, focused, speaker, cx)
             .id(("segment", tab))
             .when(self.a11y, |segment| {
@@ -1384,7 +1461,7 @@ impl Shell {
             .left(px(left))
             .right(px(DROP_SLOT_INSET))
             .rounded(px(PLATE_RADIUS - DROP_SLOT_INSET))
-            .bg(self.palette.plate(HOVERED));
+            .bg(self.palette.hovered_row());
         let speaker = self.still_speaker(&self.palette, tab);
         let segment = self
             .segment(&self.palette, tab, (1., room), first, false, speaker, cx)
@@ -1462,18 +1539,22 @@ impl Shell {
         } else {
             self.title(tab)
         };
-        let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
+        let open = Some(Row::Tab(tab)) == self.selected_row();
+        let bright = open || page.developer_mode;
+        let palette = self.line_palette(tab);
         // A tab opened from a Live Folder is its item's row: its title and place, and its state's
         // glyph, merged or closed too, while the tab stays.
         let item = self.live_item_of(tab).filter(|_| !back).cloned();
         let label = item.as_ref().map_or(label, |item| item.title.clone());
-        let title = title(&self.palette, label, bright);
+        // The open tab's title is a step heavier, as text on a plate is.
+        let title = title(&palette, label, bright)
+            .when(open, |title| title.font_weight(FontWeight::MEDIUM));
         let host = item
             .as_ref()
             .map(|item| item.place())
             .or_else(|| self.host_line(tab));
         let title = match host {
-            Some(host) => with_host(&self.palette, title, host),
+            Some(host) => with_host(&palette, title, host),
             None => title,
         };
         // The row's button shows under the pointer, and the title truncates before it.
@@ -1484,6 +1565,11 @@ impl Shell {
             .renaming
             .as_ref()
             .filter(|renaming| renaming.naming.tab() == Some(tab));
+        let trouble = self.trouble_mark(tab);
+        let speaker = match trouble {
+            Some(_) => None,
+            None => self.speaker(tab, cx),
+        };
         let label = match renaming {
             Some(renaming) => self.naming_field(renaming, cx),
             None => div()
@@ -1493,17 +1579,14 @@ impl Shell {
                 .flex()
                 .items_center()
                 .when(button.is_none(), |label| label.pr(px(TITLE_END_INSET)))
-                // The mark takes the speaker's place while the page has died or hung.
-                .children(match self.trouble_mark(tab) {
-                    Some(mark) => vec![mark.into_any_element()],
-                    None => (self
-                        .capture_mark(tab)
-                        .map(IntoElement::into_any_element)
-                        .into_iter())
-                    .chain(self.speaker(tab, cx).map(IntoElement::into_any_element))
-                    .collect(),
+                // The mark takes the capture mark's place, and the speaker goes, while the page
+                // has died or hung.
+                .children(match trouble {
+                    Some(mark) => Some(mark.into_any_element()),
+                    None => self.capture_mark(tab).map(IntoElement::into_any_element),
                 })
                 .child(title)
+                .children(speaker)
                 .children(button)
                 .when(!hovered, |label| label.children(self.status_dot(tab))),
         };
@@ -1512,21 +1595,21 @@ impl Shell {
             (true, _) => svg()
                 .path("icons/arrow-left.svg")
                 .size(px(FAVICON_DRAWN))
-                .text_color(self.palette.glyph(NAV))
+                .text_color(palette.glyph(NAV))
                 .into_any_element(),
             (false, Some(item)) => svg()
                 .path(item.state.glyph())
                 .size(px(FAVICON_DRAWN))
-                .text_color(self.palette.text(SECONDARY))
+                .text_color(palette.text(SECONDARY))
                 .into_any_element(),
             (false, None) => {
-                let bitmap = self.tab_bitmap_in(&self.palette, tab);
+                let bitmap = self.tab_bitmap_in(&palette, tab);
                 self.with_return_mark(
-                    &self.palette,
+                    &palette,
                     tab,
                     FAVICON_SIZE,
                     bitmap,
-                    || self.tab_icon(tab),
+                    || self.tab_icon_in(&palette, tab),
                     cx,
                 )
             }
@@ -1690,7 +1773,7 @@ impl Shell {
                 .top(px((NAME_HEIGHT - PLATE_HEIGHT) / 2.))
                 .h(px(PLATE_HEIGHT))
                 .rounded(px(PLATE_RADIUS))
-                .bg(self.palette.plate(HOVERED))
+                .bg(self.palette.hovered_row())
         });
         let name = self
             .shown_space()
@@ -1704,10 +1787,6 @@ impl Shell {
         // A heading VoiceOver can jump to, whose menu is the Space's.
         let row = name_box(&self.palette, room, self.blank)
             .id("space-name")
-            // Lit while the pinned rows are collapsed, where Arc's turns bold.
-            .when(shut, |row| {
-                row.text_color(self.palette.text(SPACE_NAME_SHUT))
-            })
             .when(self.a11y, |row| {
                 row.role(Role::Heading)
                     .accessibility_id("space-name")
@@ -1769,10 +1848,10 @@ impl Shell {
             return row
                 .key_context("Naming")
                 .on_action(
-                    cx.listener(|shell, _: &KeepName, window, cx| shell.keep_name(window, cx)),
+                    cx.listener(|shell, _: &KeepName, window, cx| shell.return_name(window, cx)),
                 )
                 .on_action(
-                    cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
+                    cx.listener(|shell, _: &CancelName, window, cx| shell.escape_name(window, cx)),
                 )
                 .text_color(self.palette.text(FORM_TEXT))
                 .pr(px(end + SPACE_DONE_WIDTH + 4.))
@@ -1859,7 +1938,7 @@ impl Shell {
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::NORMAL)
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(profile)
             }))
     }
@@ -1901,12 +1980,12 @@ impl Shell {
         !self.lone_header && self.lone_unnamed() && !naming && !picking
     }
 
-    /// How tall the list's head is: the name row, or what Arc leaves of it once it hides.
+    /// How tall the list's head is: the name row, or the block's gap it leaves once it hides, so
+    /// the first line is where the name's was.
     pub(super) fn list_head(&self) -> f32 {
         match self.name_row_hidden() {
             false => NAME_HEIGHT,
-            true if self.tile_tabs().is_empty() => NAME_HIDDEN,
-            true => NAME_HIDDEN_UNDER_FAVORITES,
+            true => BLOCK_GAP,
         }
     }
 
@@ -1926,46 +2005,12 @@ impl Shell {
         cx.refresh_windows();
     }
 
-    /// The line over Today, and Clear at its end, where the titles end.
-    pub(super) fn divider(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let live = self.tools_live();
-        let clear = self.tools_shown().then(|| {
-            let arrow = if self.clears_last() { ARROW_DOWN } else { NONE };
-            let what = Swapped::Clear(self.space);
-            let room = self.swaps.toward(what, ARROW_DOWN, self.clock.now());
-            let room = room.unwrap_or(if arrow == NONE { 0. } else { 1. });
-            // Fading out, it takes no click and doesn't light up.
-            let color = if live && self.clear_hovered {
-                CLEAR_HOVERED
-            } else {
-                CLEAR
-            };
-            let glyph = self
-                .swaps
-                .glyph(what, arrow, CLEAR_ARROW, self.palette.text(color), cx);
-            let clear = clear_label(&self.palette, glyph, room, color)
-                .id("clear")
-                .opacity(self.tools_opacity());
-            let clear = clear.when(self.a11y, |clear| {
-                clear.accessibility_id("clear").button_named("Clear Today")
-            });
-            let clear = clear.child(self.button_frame(Command::Clear.name()));
-            clear.when(live, |clear| {
-                clear
-                    .block_mouse_except_scroll()
-                    .on_hover(
-                        cx.listener(|shell, hovered: &bool, _, cx| shell.hover_clear(*hovered, cx)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|shell, _, _, cx| shell.browser.tooltip(None, cx)),
-                    )
-                    .on_click(
-                        cx.listener(|shell, _, _, cx| shell.run(Command::Clear, "sidebar", cx)),
-                    )
-            })
-        });
-        divider_box(&self.palette, self.hairline(), clear)
+    /// The room between what's kept and the New Tab line, while there are tabs today. A right-click
+    /// on it is one on that line's own line.
+    pub(super) fn today_gap(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .flex_none()
+            .h(px(TODAY_GAP))
             .top(px(self.slide(Slot::Divider)))
             .on_mouse_down(
                 MouseButton::Right,
@@ -1977,6 +2022,35 @@ impl Shell {
                     }
                 }),
             )
+    }
+
+    /// The New Tab line's Clear, at its end, where the titles end.
+    fn clear_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let color = if self.clear_hovered {
+            CLEAR_HOVERED
+        } else {
+            self.palette.tertiary()
+        };
+        clear_label(&self.palette, color)
+            .id("clear")
+            .when(self.a11y, |clear| {
+                clear.accessibility_id("clear").button_named("Clear Today")
+            })
+            .child(self.button_frame(Command::Clear.name()))
+            .block_mouse_except_scroll()
+            .on_hover(cx.listener(|shell, hovered: &bool, _, cx| shell.hover_clear(*hovered, cx)))
+            // Not the line's press, which would open the command bar.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|shell, _, _, cx| {
+                    cx.stop_propagation();
+                    shell.browser.tooltip(None, cx)
+                }),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| {
+                cx.stop_propagation();
+                shell.run(Command::Clear, "sidebar", cx)
+            }))
     }
 
     /// The pointer has come onto Clear or left it: it lights up, and after a moment says what it
@@ -2007,35 +2081,36 @@ impl Shell {
             .is_some_and(|space| space.clears_last(self.selected))
     }
 
-    /// Starts the arrow coming or going as Clear starts or stops closing the last Today tabs, on
-    /// the divider drawn before. Another Space's, or a divider just drawn, has its own at once.
-    pub(super) fn step_clear_arrow(&mut self) {
-        let arrow = (!self.today().is_empty()).then(|| (self.space, self.clears_last()));
-        if arrow == self.drawn_arrow {
-            return;
-        }
-        if let Some((space, is)) = arrow {
-            match self.drawn_arrow {
-                Some((was_in, was)) if was_in == space => {
-                    let glyph = |arrow: bool| if arrow { ARROW_DOWN } else { NONE };
-                    let now = self.clock.now();
-                    (self.swaps).start(Swapped::Clear(space), glyph(was), glyph(is), now);
-                }
-                _ => self.swaps.end(Swapped::Clear(space)),
-            }
-        }
-        let shows = |arrow: Option<(u64, bool)>| arrow.is_some_and(|(_, shows)| shows);
-        if shows(arrow) != shows(self.drawn_arrow) {
-            // check.sh waits for this line.
-            log!("browser: clear arrow {}", shows(arrow) as u8);
-        }
-        self.drawn_arrow = arrow;
-    }
-
+    /// "+ New Tab", and while there are tabs today the line that parts them from what's kept,
+    /// with Clear at its end.
     pub(super) fn new_tab_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (plus, label) = new_tab_label(&self.palette);
+        let line = (!self.today().is_empty()).then(|| {
+            // What the broom shows is the browser's answer, and it's drawn where that makes sense.
+            let broom = self.browser.broom();
+            let clear = match broom {
+                Some(Broom::Failed) => self.sort_failed(cx).into_any_element(),
+                _ => self.clear_button(cx).into_any_element(),
+            };
+            let broom = broom.and_then(|state| {
+                let shown = self.broom_shown(state, cx);
+                (shown > 0.).then_some((state, shown))
+            });
+            #[cfg(test)]
+            super::broom::DRAWN.set((super::broom::DRAWN.get().0 + 1, broom));
+            let broom = broom.map(|(state, shown)| self.broom_button(state, shown, cx));
+            today_line(&self.palette, self.hairline(), broom, clear).on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if shell.drag.is_none() && shell.renaming.is_none() {
+                        shell.divider_menu(event.position, cx);
+                    }
+                }),
+            )
+        });
         // ⌥-click opens the new tab beside the page, as Dia's does.
-        self.row(Row::NewTab, plate(plus, label), false, cx)
+        self.row(Row::NewTab, plate(plus, label).children(line), false, cx)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|shell, _, _, cx| shell.pressed_bar_target(cx)),
@@ -2124,7 +2199,7 @@ impl Breath {
 
     /// Once a frame is built: if it drew a loading dot, draws the next in a moment.
     pub(super) fn arm(&self, cx: &mut Context<Shell>) {
-        self.still.set(cx.reduce_motion());
+        self.still.set(crate::motion::still(cx));
         if !self.drawn.take() || self.still.get() || self.pending.replace(true) {
             return;
         }
@@ -2157,7 +2232,7 @@ impl Shell {
         let dot = div()
             .size(px(STATUS_DOT))
             .rounded_full()
-            .bg(self.palette.text(STATUS_LOADING));
+            .bg(self.line_palette(tab).text(STATUS_LOADING));
         let strength = self.breath.strength(self.clock.now());
         Some(
             div()
@@ -2201,7 +2276,7 @@ pub(super) fn with_host(palette: &Palette, title: gpui::Div, host: SharedString)
         .truncate()
         .text_size(px(text::SMALL))
         .line_height(px(HOST_LINE))
-        .text_color(palette.text(SECONDARY))
+        .text_color(palette.gray(SECONDARY))
         .child(host);
     div()
         .flex_1()
@@ -2232,7 +2307,7 @@ mod tests {
         super::{
             CLOSE_RIGHT, CLOSE_SIZE, FAVICON_SIZE, FAVICON_X, Folders, NAME_HEIGHT, PINNED_TURN,
             PLATE_INSET, PRESS_SCALE, PRESS_TIME, Page, ROW_HEIGHT, ROW_PITCH, Row,
-            SELECTED_UNHOVER, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET, Shell, Slot, Swapped,
+            SELECTED_UNHOVER, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET, Shell, Slot,
             commands::{Command, bind_keys},
             drag::detents::shell_with,
             recorder::Recorder,
@@ -2808,20 +2883,12 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// Whether the window drew Clear with its arrow, without it, or no Clear, and whether the
-    /// arrow was coming or going.
-    fn arrow(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Option<bool>, bool) {
-        shell.read_with(cx, |shell, _| {
-            let drawn = shell.drawn_arrow.map(|(_, arrow)| arrow);
-            (drawn, shell.swaps.changing(Swapped::Clear(1)))
-        })
-    }
-
-    /// With two Today tabs, Clear keeps the one shown and has no arrow. Once one is left, the arrow
-    /// comes before Clear, and Clear closes that one too. ⌘Z brings it back with its arrow, shown
-    /// at once on the divider drawn again, and a second tab takes it away until it closes.
+    /// With two Today tabs, Clear keeps the one shown. Once that one is Today's last, Clear closes
+    /// it too, and ⌘Z brings it back.
     #[gpui::test]
-    fn clear_shows_its_arrow_when_one_today_tab_is_left(cx: &mut TestAppContext) {
+    fn clear_closes_the_shown_tab_when_it_is_todays_last_and_undo_brings_it_back(
+        cx: &mut TestAppContext,
+    ) {
         let host = Rc::new(Recorder::default());
         let browser = host.clone();
         cx.update(bind_keys);
@@ -2834,7 +2901,6 @@ mod tests {
         // The keys reach the shell as they do with the UI focused.
         cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
         report(&shell, cx, vec![2, 3], 2);
-        assert_eq!(arrow(&shell, cx), (Some(false), false));
 
         cx.simulate_keystrokes("shift-cmd-k");
         assert!(host.take().contains(&"clear".to_string()));
@@ -2843,11 +2909,6 @@ mod tests {
             vec![3]
         );
         report(&shell, cx, vec![2], 2);
-        assert_eq!(
-            arrow(&shell, cx),
-            (Some(true), true),
-            "the arrow comes on the same Clear"
-        );
 
         cx.simulate_keystrokes("shift-cmd-k");
         assert!(host.take().contains(&"clear".to_string()));
@@ -2856,22 +2917,9 @@ mod tests {
             vec![2]
         );
         report(&shell, cx, Vec::new(), 0);
-        assert_eq!(arrow(&shell, cx).0, None);
 
         cx.simulate_keystrokes("cmd-z");
         assert!(host.take().contains(&"undo clear".to_string()));
-        report(&shell, cx, vec![2], 2);
-        assert_eq!(
-            arrow(&shell, cx),
-            (Some(true), false),
-            "a divider drawn again has it at once"
-        );
-
-        // A tab that opens takes it away again, on the same Clear, and closing it brings it back.
-        report(&shell, cx, vec![4, 2], 4);
-        assert_eq!(arrow(&shell, cx), (Some(false), true));
-        report(&shell, cx, vec![2], 2);
-        assert_eq!(arrow(&shell, cx), (Some(true), true));
     }
 
     /// Under Reduce Motion the rows are in their places at once, and the frame after a move still
@@ -4361,6 +4409,68 @@ mod tests {
         assert_eq!(host.take(), ["close 5"]);
     }
 
+    /// A row's speaker logs where it's drawn, its tab and its square's middle alone, for check.sh
+    /// to click it: once where it is, once more where the row's button, under the pointer, moves
+    /// it, and not again on a draw that leaves it there. A row without one logs nothing.
+    #[gpui::test]
+    fn a_speaker_logs_its_place_once_and_again_where_the_rows_button_moves_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, _host) = window(cx, vec![2], vec![4, 5], 4);
+        // The lines since the last ask, the speakers' alone.
+        let heard = || {
+            let lines = crate::heard::take();
+            crate::heard::listen();
+            (lines.into_iter())
+                .filter(|line| line.starts_with("browser: speaker "))
+                .collect::<Vec<_>>()
+        };
+        let place = |line: &str| {
+            let at = line.strip_prefix("browser: speaker 5 at ");
+            let at = at.unwrap_or_else(|| panic!("not the playing tab's line alone: {line}"));
+            let (x, y) = at.split_once(' ').expect("x and y");
+            let number = |text: &str| text.parse::<f32>().expect("a number and nothing else");
+            (number(x), number(y))
+        };
+        let draw_again = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        crate::heard::listen();
+        shell.update(cx, |shell, cx| {
+            let page = Page {
+                audible: true,
+                ..Page::default()
+            };
+            shell.set_page(5, page, cx);
+        });
+        cx.run_until_parked();
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line where it's first drawn: {lines:?}");
+        let rest = place(&lines[0]);
+        draw_again(&shell, cx);
+        assert_eq!(heard(), [""; 0], "drawn again where it was");
+
+        // The row's button comes under the pointer, and the speaker makes room for it.
+        let button = close_button(&shell, cx, 5);
+        move_to(cx, button);
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line where it moved: {lines:?}");
+        let moved = place(&lines[0]);
+        assert!(moved.0 < rest.0, "before the button: {moved:?}, {rest:?}");
+        assert_eq!(moved.1, rest.1, "on its row's line still");
+        draw_again(&shell, cx);
+        assert_eq!(heard(), [""; 0], "drawn again where it moved to");
+
+        // The pointer on a row with no speaker: its own back where it was, and nothing of that row.
+        let silent = close_button(&shell, cx, 4);
+        move_to(cx, silent);
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line back at its place: {lines:?}");
+        assert_eq!(place(&lines[0]), rest);
+        crate::heard::take();
+    }
+
     /// VoiceOver reads the button the row under the pointer shows by what it does, and the speaker
     /// by what a press on it would do (#1381). Its press closes the tab as a click does.
     #[gpui::test]
@@ -4709,5 +4819,37 @@ mod tests {
         assert_eq!(chosen(cx), [3, 5]);
         cx.simulate_click(six, Modifiers::none());
         assert!(chosen(cx).is_empty());
+    }
+
+    /// Developer Mode's outline is the shown tab's. While ⌘T's bar gives New Tab the plate no row
+    /// has it, and the tab's row has it back where it was once the bar goes.
+    #[gpui::test]
+    fn new_tab_s_plate_has_no_developer_outline(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+            let page = Page {
+                url: "http://localhost:3000/".into(),
+                developer_mode: true,
+                ..Page::default()
+            };
+            shell.set_page(1, page, cx);
+            shell.set_selected(1, cx);
+        });
+        let outlined = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            shell.read_with(cx, |shell, _| shell.developer_outline_drawn.get())
+        };
+        let on_its_row = outlined(&shell, cx);
+        assert_eq!(on_its_row.map(|(tab, _)| tab), Some(1));
+        shell.update(cx, |shell, cx| shell.set_new_tab(true, cx));
+        assert_eq!(outlined(&shell, cx), None);
+        shell.update(cx, |shell, cx| shell.set_new_tab(false, cx));
+        assert_eq!(outlined(&shell, cx), on_its_row);
     }
 }

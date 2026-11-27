@@ -31,10 +31,10 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, agent_request, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
-    folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
-    toast, tooltip, updates, zoom_hud,
+    account, boost_editor, capture, command_bar, dialog, elevation::Level, folder_preview,
+    hover_card, icon_picker, launch, launch_picture, link_preview, link_target, log, log_always,
+    log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
+    updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -76,6 +76,9 @@ mod emoji;
 #[path = "../platform/windows/fade.rs"]
 mod fade;
 mod find_bar;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/first_run_window.rs"]
+mod first_run_window;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/floats.rs"]
 mod floats;
@@ -186,6 +189,7 @@ use other_tabs_host::*;
 mod translate_host;
 use translate_host::{tab_language, tab_translate_texts};
 mod boosts_host;
+mod broom_host;
 use boosts_host::{tab_boost_zap_ended, tab_boost_zapped};
 
 use browser::bc;
@@ -267,7 +271,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     // the agent card's.
     update_tab_window(tab, |shell, cx| {
         shell.leave_keys("page", cx);
-        shell.leave_card_keys(cx);
+        shell.leave_ilo_keys(cx);
     });
     if let Some(kept) = link_card_key(tab, unsafe { &*key }) {
         return (kept, "link card");
@@ -289,7 +293,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     // Focus Agent Question's key gives an agent's card the keyboard while one shows (#3869).
     if update_tab_window(tab, |shell, cx| {
-        shell.run_agent_card_page_key(&keystroke, repeat, cx)
+        shell.run_ilo_page_key(&keystroke, repeat, cx)
     })
     .unwrap_or(false)
     {
@@ -367,10 +371,11 @@ fn open_saved_windows(cx: &mut App) {
     }
 }
 
-/// A window brought back in a Space an agent left, which this launch deletes once it has moved its
-/// tabs to the user's (`end_old_tasks`), as a run quit with no window left can't (#1676), shows the
-/// user's Space of its profile instead. The pages the launch opens then go there and stay in front,
-/// where they went to the agent's Space and the window then showed another tab.
+/// A window brought back in a Space an agent left, which this launch deletes with its pages
+/// (`end_old_tasks`), as a run quit with no window left can't (#1676), shows the user's Space of
+/// its profile instead. The pages the launch opens then go
+/// there and stay in front, where they went to the agent's Space and the window then showed
+/// another tab.
 fn leave_agent_space(window: bc::bc_id) {
     let shown = unsafe { bc::bc_window_space(window) };
     if shown == 0 || name(bc::bc_space_agent, shown).is_empty() {
@@ -392,8 +397,8 @@ fn leave_agent_space(window: bc::bc_id) {
 /// that launched the browser, open on top either way, in this window, the one in front, the links
 /// where Settings › Links sends them. With nothing to bring back and nothing to open, it's a new
 /// profile's first run: `shell` plays the onboarding, then shows the welcome on the empty card. This
-/// is its only way in at launch, so a launch that brings Spaces back never reads more than
-/// `restored` for it. check.sh sets BROWSER_ONBOARDING to "skip" for every run but the onboarding
+/// is its only way in at launch, so a launch that brings Spaces back reads only `restored` and
+/// whether a first run left under way by ⌘Q waits to resume (onboarding/resume.rs). check.sh sets BROWSER_ONBOARDING to "skip" for every run but the onboarding
 /// run's, which sets "light" or "dark".
 fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -> bool {
     let start = Instant::now();
@@ -415,7 +420,12 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     let notes = browser::updates::notes_to_open(notes, std::path::Path::new(&profile_dir()));
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
-        Err(_) if !restored && links.is_empty() && notes.is_none() => {
+        // A first run left under way by ⌘Q plays again at its step, though its Space came back.
+        Err(_)
+            if links.is_empty()
+                && notes.is_none()
+                && (!restored || browser::shell::first_run_waiting(&profile_dir())) =>
+        {
             let onboarding = std::env::var("BROWSER_ONBOARDING").ok();
             shell
                 .update(cx, |shell, _, cx| {
@@ -564,7 +574,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         browser::text_input::bind_keys(cx);
         #[cfg(target_os = "linux")]
         held_escape::watch(wayland, cx);
-        cx.set_global(menu::field_menu(Rc::new(|window, request, cx| {
+        let show_over: Rc<menu::ShowOver> = Rc::new(|window, request, cx| {
             // A browser window's field by the view the host knows the window by, as its other
             // menus are, which on Linux isn't GPUI's own: Chromium's surface or the X window GPUI
             // opened in. An overlay's by its own.
@@ -588,7 +598,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 } = request;
                 show_menu(view, items, at, false, look, chosen, cx);
             }
-        })));
+        });
+        cx.set_global(menu::field_menu(show_over.clone()));
+        cx.set_global(menu::entries_menu(show_over));
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -610,8 +622,10 @@ unsafe extern "C" fn started(_: *mut c_void) {
         log!("browser: started at {:.1} ms", unsafe {
             platform::host_since_launch()
         });
-        dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The transparency level the window and what floats over it are drawn at, before the
+        // first window draws (#4128).
+        browser::transparency::level(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
         // which the host writes as the first window opens, under its AppUserModelID.
         if let (Ok(title), Ok(switch)) = (
@@ -857,7 +871,12 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     log!("browser: launch window at {:.1} ms", unsafe {
         platform::host_since_launch()
     });
-    unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
+}
+
+/// Off to another app: a toast showing waits until the user is back.
+extern "C" fn resigning_active() {
+    quitting::launch_picture_on_resigning();
+    update_app_later(|cx| browser::toast::app_away(true, cx));
 }
 
 /// Back from another app, such as System Settings, where the user may have changed the default
@@ -865,6 +884,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
 extern "C" fn became_active() {
     // Later: AppKit can say so from inside the update that activated the app to show a window.
     update_app_later(|cx| {
+        browser::toast::app_away(false, cx);
         settings::check_default_browser(cx);
         import_host::became_active(cx);
         daily_count_host::became_active(cx);
@@ -925,6 +945,25 @@ fn profile_dir() -> String {
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
+    browser::palette::set_window_material(unsafe { platform::host_has_window_material() });
+    // The Mac's floating windows lie on the window's glass, under their plates (glass.rs). Main's
+    // thread is the one that draws.
+    #[cfg(target_os = "macos")]
+    browser::glass::set_host(|window, plate| {
+        let (at, size) = (plate.bounds.origin, plate.bounds.size);
+        unsafe {
+            platform::host_set_glass(
+                browser_windows::ns_view(window),
+                f64::from(at.x),
+                f64::from(at.y),
+                f64::from(size.width),
+                f64::from(size.height),
+                f64::from(plate.radius),
+                f64::from(plate.opacity),
+                plate.light,
+            )
+        }
+    });
     let profile = profile_dir();
     // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
     // portal, which asks the user, rather than through a grant of every device (#3166). Without a

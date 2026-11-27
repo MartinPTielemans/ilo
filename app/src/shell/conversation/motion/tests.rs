@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::product::PRODUCT;
 
 fn at(start: Instant, seconds: f32) -> Instant {
     start + Duration::from_secs_f32(seconds)
@@ -22,6 +23,9 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         running,
         failed: false,
         opens: Opens::Nothing,
+        under: "".into(),
+        page: None,
+        says: "".into(),
     }
 }
 
@@ -33,6 +37,7 @@ fn trace(running: bool, steps: usize) -> Line {
         key: 0,
         running,
         took: (!running).then_some(4),
+        started: None,
         items,
     })
 }
@@ -42,17 +47,22 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         agent: "task-1".into(),
         name: "Claude".into(),
         title: "Museums in Lisbon".into(),
-        about: "Claude · Haiku · Working".into(),
-        progress: "".into(),
+        about: format!("{PRODUCT} · Haiku · Working").into(),
         asked: "what's on at maat".into(),
         page: None,
         lines,
         tabs: Vec::new(),
         on: None,
+        held: Vec::new(),
         stoppable: true,
+        live: Default::default(),
         open: None,
         answers: Vec::new(),
         writing: false,
+        tier: Default::default(),
+        finished: Vec::new(),
+        folder: None,
+        model: None,
     }
 }
 
@@ -98,9 +108,9 @@ fn a_turns_answer_comes_once_its_trace_has_folded() {
     let old = conversation(vec![Line::You("what's on".into()), trace(true, 2)]);
     let answer = "Two shows.\n\nBoth close at six.".into();
     let new = Conversation {
-        about: "Claude · Haiku · Done 13:31".into(),
-        progress: "".into(),
+        about: format!("{PRODUCT} · Haiku · Done 13:31").into(),
         stoppable: false,
+        live: Default::default(),
         ..conversation(vec![
             Line::You("what's on".into()),
             trace(false, 2),
@@ -124,7 +134,7 @@ fn a_turns_answer_comes_once_its_trace_has_folded() {
     assert!(
         motion
             .swapped(Fold::Trace(0))
-            .is_some_and(|was| was.title == "Working")
+            .is_some_and(|was| was.title == "Weaving")
     );
     assert!(motion.status().is_some_and(|(was, _)| was == "Working"));
 }
@@ -167,6 +177,7 @@ fn what_is_written_fades_in_only_where_it_grew_at_most_once_a_frame() {
     };
     let line = |text: &str| Conversation {
         writing: true,
+        tier: Default::default(),
         ..conversation(vec![trace(true, 1), Line::Said(text.to_string().into())])
     };
     motion.changed(&line(""), &line("Two"), &HashMap::new(), start);
@@ -257,6 +268,7 @@ fn what_was_written_below_the_trace_goes_into_it_without_rising_again() {
     };
     let old = Conversation {
         writing: false,
+        tier: Default::default(),
         ..conversation(vec![trace(true, 1), Line::Said("Looking at maat.".into())])
     };
     let mut new = conversation(vec![trace(true, 2)]);
@@ -327,4 +339,37 @@ fn chips_rise_in_one_after_another() {
             .map(|since| close(since, second)),
         Some(true)
     );
+}
+
+/// A trace at work as `trace` gives it, with `helpers` helpers' lines before its steps (#4102).
+fn with_helpers(helpers: usize, steps: usize) -> Line {
+    let Line::Trace(mut trace) = trace(true, steps) else {
+        unreachable!()
+    };
+    let lines = (0..helpers).map(|at| TraceItem::Helper {
+        step: step(100 + at, "Reading shop.example", true),
+        name: "".into(),
+        tab: None,
+    });
+    trace.items.splice(0..0, lines);
+    Line::Trace(trace)
+}
+
+/// The fold over a stretch of work counts nothing, so a helper that comes changes none of its words:
+/// the helper's line rises in as a step's does, and nothing crossfades.
+#[test]
+fn a_helper_that_comes_changes_nothing_on_the_fold() {
+    let start = Instant::now();
+    let mut motion = Motion {
+        live: true,
+        ..Motion::default()
+    };
+    let opened = HashMap::new();
+    let (none, one) = (
+        conversation(vec![with_helpers(0, 2)]),
+        conversation(vec![with_helpers(1, 2)]),
+    );
+    motion.changed(&none, &one, &opened, start);
+    assert!(motion.swapped(Fold::Trace(0)).is_none());
+    assert_eq!(motion.came(Key::Step(100)), Some(start));
 }

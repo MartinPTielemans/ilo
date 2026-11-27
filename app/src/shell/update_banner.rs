@@ -17,9 +17,8 @@ use super::{HOVERED, PRESSED, Shell, access::Accessible, permission::card_listen
 use crate::dialog::{MOVE, ease_in_out};
 use crate::tokens::settings::{CONTROL_HEIGHT, CONTROL_RADIUS};
 use crate::tokens::shell::{
-    FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, NEW_TAB, NEW_TAB_PLUS, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, TITLE_GAP, UNSELECTED_TITLE, UPDATE_BANNER, UPDATE_BANNER_GAP, UPDATE_BANNER_GLYPH,
-    UPDATE_BANNER_OPEN,
+    FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, PLATE_INSET, PLATE_RADIUS, SECONDARY, TITLE_GAP,
+    UNSELECTED_TITLE, UPDATE_BANNER, UPDATE_BANNER_GAP, UPDATE_BANNER_GLYPH, UPDATE_BANNER_OPEN,
 };
 use crate::tokens::text;
 use crate::updates::{self, Action, Stage};
@@ -223,7 +222,7 @@ impl Shell {
         };
         let height = self.update_banner_height();
         let open = height > UPDATE_BANNER;
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let (rest_words, title, detail, button) = match (&waiting, self.update_restarting) {
             (Waiting::Ready(version), restarting) => (
                 "Update ready",
@@ -232,7 +231,7 @@ impl Shell {
                     None => "The update is ready".into(),
                 },
                 if restarting {
-                    concat!(env!("APP_NAME"), " reopens with your tabs.")
+                    concat!(env!("PRODUCT_NAME"), " reopens with your tabs.")
                 } else {
                     "Your tabs come back."
                 },
@@ -261,7 +260,7 @@ impl Shell {
         // At rest: the glyph, the words on the title column and the version at the end, in small
         // type and + New Tab's inks.
         let collapsed = plate(
-            glyph(UPDATE_BANNER_GLYPH, NEW_TAB_PLUS),
+            glyph(UPDATE_BANNER_GLYPH, self.palette.secondary()),
             div()
                 .flex_1()
                 .min_w_0()
@@ -275,13 +274,13 @@ impl Shell {
                         .min_w_0()
                         .truncate()
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(self.palette.text(NEW_TAB))
+                        .text_color(self.palette.text(self.palette.secondary()))
                         .child(rest_words),
                 )
                 .children(waiting.version().clone().map(|version| {
                     div()
                         .flex_none()
-                        .text_color(self.palette.text(NEW_TAB_PLUS))
+                        .text_color(self.palette.text(self.palette.tertiary()))
                         .child(version)
                 })),
         )
@@ -316,7 +315,7 @@ impl Shell {
                     .h(px(DETAIL_LINE))
                     .truncate()
                     .text_size(px(text::SMALL))
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(detail),
             )
             .child(

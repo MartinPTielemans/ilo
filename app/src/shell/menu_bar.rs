@@ -19,8 +19,6 @@ pub struct MenuBar {
     /// The shown Space's profile's extensions that run in the window, for the Extensions menu.
     pub extensions: Vec<Extension>,
     pub sidebar_hidden: bool,
-    /// Whether Top bar is on, for View's Show Top Bar or Hide Top Bar.
-    pub top_bar: bool,
     /// Whether the tab shown is pinned, or None with none shown.
     pub pinned: Option<bool>,
     /// Whether the Space shown has its pinned rows collapsed.
@@ -29,6 +27,8 @@ pub struct MenuBar {
     pub pinned_offered: bool,
     /// Whether Tabs › Sort Today Tabs by Site would move a row now, else it's dimmed (#2344).
     pub sort_offered: bool,
+    /// Whether Tabs › Sort Tabs into Folders would sort now, as the broom takes a click (#4252).
+    pub broom_offered: bool,
     /// Whether the page shown is in Developer Mode, or None where it can't change: no web page, or
     /// a private window.
     pub developer_mode: Option<bool>,
@@ -71,10 +71,6 @@ pub struct ProfileChoice {
 
 impl MenuBar {
     /// View's item for ⌘S, by what it does now, as Arc's.
-    pub fn top_bar_title(&self) -> &'static str {
-        super::commands::top_bar_title(self.top_bar)
-    }
-
     pub fn sidebar_title(&self) -> &'static str {
         if self.sidebar_hidden {
             SHOW_SIDEBAR
@@ -148,7 +144,6 @@ impl Shell {
             spaces,
             extensions,
             sidebar_hidden: self.sidebar_hidden,
-            top_bar: self.top_bar,
             pinned,
             pinned_shut: self
                 .shown_space()
@@ -156,6 +151,7 @@ impl Shell {
             pinned_offered: self.offers(Command::CollapsePinned)
                 || self.offers(Command::ExpandPinned),
             sort_offered: self.offers(Command::SortBySite),
+            broom_offered: self.offers(Command::SortIntoFolders),
             developer_mode: self.developer_mode(self.selected),
             tracing: trace::recording(cx),
             little_off: !self.little_windows,

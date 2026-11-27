@@ -114,7 +114,7 @@ sign_in first
 await '^browser: account FirstDevice None$' ||
   fail "signing in didn't make A the account's first device"
 settings_keyboard
-at=$(drawn "sync copy") || fail "Settings › Sync didn't draw Copy with the words"
+at=$(drawn "sync copy") || fail "Settings › Sync & Import didn't draw Copy with the words"
 send clickkey $at
 copied_at=$(date +%s)
 words=
@@ -128,7 +128,7 @@ done
 clipboard formats
 echo "$clipped" | grep -qx "$hint" ||
   fail "the copied words aren't marked for clipboard managers to skip: $(echo "$clipped" | tr '\n' ' ')"
-at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
+at=$(drawn "sync done") || fail "Settings › Sync & Import didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
 # A Space A makes reaches the devices it adds, and theirs reach it.
@@ -223,7 +223,7 @@ await '^browser: account NeedsSecret None$' || fail "C, signed in, didn't need t
 await '^browser: account Pairing None$' || fail "C, needing the secret, didn't offer to pair"
 settings_keyboard
 at=$(drawn_after "sync use-words" '^browser: account Pairing None$') ||
-  fail "C's Settings › Sync didn't offer the words"
+  fail "C's Settings › Sync & Import didn't offer the words"
 send clickkey $at
 send type $words
 send key return
@@ -307,8 +307,7 @@ sent_all=
 synced_line="browser: synced today [0-9]* in space [0-9]* at [0-9]* unloaded ${site}login.html?today"
 device a
 forward
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open A's command bar"
+resting_key t "device A window"
 send insert "${site}login.html?today-1"
 had=$(grep -c "$synced_line-1\$" "$b_log" || true)
 a_had=$(wc -l < "$a_log")
@@ -394,9 +393,15 @@ busy_commits=$(commits)
 busy_kept=$(kept)
 busy_sent=$(sent_lines)
 busy_started=$(now_ms)
+# Archiving A's only tab above left its window with no page, so the first ⌘T gives its resting bar
+# the keyboard, and each after it, with a page there, opens the command bar.
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open A's command bar for busy tab $i"
+  if [ "$i" = 1 ]; then
+    resting_key t "device A window"
+  else
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open A's command bar for busy tab $i"
+  fi
   send insert "${site}login.html?busy-$i"
   send key return
 done
@@ -438,8 +443,14 @@ await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's 
 forward
 send key n cmd alt
 expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window on A"
+# The new window has no page, and ⌘L opens the command bar inside it, whose field takes the keyboard
+# and whose URL loads in it (docs/ux-spec.md, Little Arc).
 send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the Little ilo window's command bar"
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in A's Little ilo window"
+expect '^browser: command bar opens inside the window$' \
+  "⌘L didn't open the command bar inside A's Little ilo window"
+expect '^browser: field Search or enter address has the keyboard$' \
+  "⌘L's command bar in A's Little ilo window didn't give its field the keyboard"
 send insert "${site}login.html?users-own"
 send key return
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "A's Little ilo tab didn't load"
@@ -453,13 +464,13 @@ done
 grep -rqa 'login.html?agents-own' "$store_b" &&
   fail "a tab of A's agent's Space reached B's sync store, as another computer's open tab"
 # B's command bar finds A's tab by its title and names A as Settings does, and never the agent's
-# (#1234). ↩ opens it in B, a tab of B's own.
+# (#1234). ↩ opens it in B, a tab of B's own. B's window shows no page, so ⌘T gives the keyboard to
+# its resting bar, the same bar as ⌘T's over a page, drawn in the empty Space (#4140).
 device b
 await "^browser: other computers' tabs [1-9]" ||
   fail "B's core never told the app of A's open tab, which B's sync store has"
 forward
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open B's command bar"
+resting_key t "device B window"
 send type login
 expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on $label" \
   "B's command bar didn't list A's tab for \"login\""
@@ -474,7 +485,8 @@ done
 selected | grep -q "login.html?users-own\$" ||
   fail "↓ never selected A's tab in B's command bar: $(selected)"
 send key return
-expect '^browser: command bar hidden$' "↩ on A's tab didn't close B's command bar"
+expect "^browser: command bar go ${site}login.html?users-own\$" \
+  "↩ on A's tab didn't go to it from B's resting bar"
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab didn't open its page in B"
 
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
@@ -558,8 +570,8 @@ else
   send choose Remove
 fi
 expect "^browser: remove login [0-9]* $login\$" "return didn't remove the login on B"
-send clickkey $(drawn "toolbar Sync")
-expect '^browser: settings tab Sync$' "a click on Sync didn't show B's tab again"
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show B's tab again"
 device a
 for _ in $(seq 300); do
   [ "$(grep '^browser: passwords ' "$log" | tail -1 | sed 's/.*: //')" = none ] && break
@@ -582,7 +594,7 @@ cleared=$(grep '^browser: secret clear ' "$log" | tail -1)
 for d in c b; do
   device $d
   settings_keyboard
-  at=$(drawn "sync sign-out") || fail "$d's Settings › Sync didn't draw Sign Out"
+  at=$(drawn "sync sign-out") || fail "$d's Settings › Sync & Import didn't draw Sign Out"
   send clickkey $at
   await '^browser: account SignedOut None$' || fail "Sign Out didn't sign $d out"
 done

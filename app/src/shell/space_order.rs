@@ -7,15 +7,17 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton, MouseUpEvent,
-    Pixels, Point, Render, WeakEntity, Window, canvas, div, prelude::*, px, rgba,
+    AnyElement, App, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton,
+    MouseUpEvent, Pixels, Point, Render, WeakEntity, Window, canvas, div, prelude::*, px,
 };
 
 use super::{
-    Curve, DROP, DROP_LINE, DROP_LINE_END, DROP_RING, DROP_RING_X, Edit, FOOTER_HEIGHT,
-    SPACE_DROP_LINE, SPACE_HEIGHT, SWITCHER_INSET, Shell, What, footer::space_cells,
+    Curve, DROP_LINE, DROP_LINE_END, DROP_RING, DROP_RING_X, Edit, FOOTER_HEIGHT, SPACE_DROP_LINE,
+    SPACE_HEIGHT, SWITCHER_INSET, Shell, What, footer::space_cells,
 };
+use crate::space_icon::SpaceIcon;
 use crate::tokens::shell::library::{CARD_GAP, CARD_WIDTH, SPACES_INSET, SPACES_LEFT};
+use crate::tokens::shell::{SPACE_ICON_PITCH, SPACE_PITCH};
 
 /// A Space's dot or card handle pressed and dragged, as GPUI holds it. Which Space, and along
 /// what, is the Shell's to keep, in its SpaceDrag.
@@ -262,10 +264,17 @@ impl Shell {
         Some(before)
     }
 
-    /// The switcher's cells for the Spaces as they are, in a span `span` wide.
+    /// The switcher's cells for the Spaces as they are, in a span `span` wide. A dot's pitch is
+    /// its own, and an icon keeps the wider one it had, or two would lie against each other.
     pub(super) fn switcher_cells(&self, span: f32) -> Vec<f32> {
         let shown = self.spaces.iter().position(|space| space.id == self.space);
-        space_cells(span, self.spaces.len(), shown.unwrap_or(usize::MAX))
+        let pitches: Vec<f32> = (self.spaces.iter())
+            .map(|space| match SpaceIcon::parse(&space.icon) {
+                SpaceIcon::Dot => SPACE_PITCH,
+                SpaceIcon::Glyph(_) | SpaceIcon::Emoji(_) => SPACE_ICON_PITCH,
+            })
+            .collect();
+        space_cells(span, &pitches, shown.unwrap_or(usize::MAX))
     }
 
     /// Where each dot's and card's middle is drawn now, from its row's left, gliding ones where
@@ -285,12 +294,18 @@ impl Shell {
 
     /// The Spaces came in another order: the dots and cards that were in `before` glide from
     /// where they were drawn to their places, and the one just let go from where its copy was.
-    pub(super) fn glide_spaces(&mut self, before: HashMap<(Along, u64), f32>, moved: bool) {
+    /// Under Reduce Motion they're in their places from the first frame.
+    pub(super) fn glide_spaces(
+        &mut self,
+        before: HashMap<(Along, u64), f32>,
+        moved: bool,
+        cx: &App,
+    ) {
         let landing = self.space_landing.take();
         if !moved && landing.is_none() {
             return;
         }
-        let now = Instant::now();
+        let now = crate::motion::start(cx);
         for (key, at) in self.space_places() {
             let from = match landing {
                 Some((along, space, x)) if (along, space) == key => x,
@@ -337,6 +352,7 @@ impl Shell {
     /// in from a plate's left and its end as far above their foot, from the section's left.
     pub(super) fn space_drop_line(&self, along: Along) -> Option<AnyElement> {
         let drag = self.space_drag().filter(|drag| drag.along == along)?;
+        let colour = self.palette.drop_line();
         let from = self
             .spaces
             .iter()
@@ -350,7 +366,7 @@ impl Shell {
                 .top(px((SPACE_HEIGHT - SPACE_DROP_LINE) / 2.))
                 .w(px(DROP_LINE))
                 .h(px(SPACE_DROP_LINE))
-                .bg(rgba(DROP))
+                .bg(colour)
                 .into_any_element(),
             Along::Cards => {
                 let ring = div()
@@ -358,7 +374,7 @@ impl Shell {
                     .size(px(DROP_RING))
                     .rounded_full()
                     .border(px(DROP_LINE))
-                    .border_color(rgba(DROP));
+                    .border_color(colour);
                 div()
                     .absolute()
                     .left(px(x - self.cards_at() - DROP_RING / 2.))
@@ -369,7 +385,7 @@ impl Shell {
                     .flex_col()
                     .items_center()
                     .child(ring)
-                    .child(div().flex_1().w(px(DROP_LINE)).bg(rgba(DROP)))
+                    .child(div().flex_1().w(px(DROP_LINE)).bg(colour))
                     .into_any_element()
             }
         })

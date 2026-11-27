@@ -11,10 +11,9 @@ use std::time::Instant;
 
 use gpui::{
     App, Bounds, Context, Global, Pixels, SharedString, Subscription, Window, canvas, div,
-    prelude::*, px, rgb,
+    prelude::*, px,
 };
 
-use crate::palette::NO_THEME_ACCENT;
 use crate::settings_rows::{
     Look, SLIDE, button, detailed_row, drawn, named_button, named_switch, switch,
 };
@@ -232,13 +231,13 @@ const NIGHTLY_NAME: &str = "Get nightly builds";
 pub fn nightly_words(built: Track, followed: Track) -> &'static str {
     if built == Track::Nightly && followed == Track::Release {
         concat!(
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             " keeps this build until a release is newer."
         )
     } else {
         concat!(
             "Each night’s build of ",
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             ", ahead of the next release."
         )
     }
@@ -436,12 +435,12 @@ pub fn words(
             SharedString::from(unnamed.to_string())
         })
     }
-    let app = env!("APP_NAME");
+    let app = env!("PRODUCT_NAME");
     match updater {
         Updater::None => return (None, None),
         Updater::Store => {
             return (
-                Some(concat!("The Microsoft Store updates ", env!("APP_NAME")).into()),
+                Some(concat!("The Microsoft Store updates ", env!("PRODUCT_NAME")).into()),
                 None,
             );
         }
@@ -452,7 +451,7 @@ pub fn words(
         Stage::Idle => (None, CHECK),
         Stage::Checking => (Some("Checking…".into()), None),
         Stage::Current => (
-            Some(concat!(env!("APP_NAME"), " is up to date").into()),
+            Some(concat!(env!("PRODUCT_NAME"), " is up to date").into()),
             CHECK,
         ),
         Stage::Found(found) => (
@@ -571,7 +570,7 @@ impl Render for VersionRow {
                 .children(button)
                 .into_any_element()
         });
-        detailed_row(&look, env!("APP_NAME"), self.version.clone(), control)
+        detailed_row(&look, env!("PRODUCT_NAME"), self.version.clone(), control)
     }
 }
 
@@ -637,7 +636,7 @@ impl Render for NightlyRow {
                 named_switch(control, NIGHTLY_NAME, on)
             })
             .relative()
-            .child(switch(&self.look, on, slid, rgb(NO_THEME_ACCENT)))
+            .child(switch(&self.look, on, slid, self.look.on))
             .child(drawn(format!("switch {NIGHTLY}"), self.logged.clone()))
             .child(at)
             .on_click(cx.listener(move |row, _, _, cx| {

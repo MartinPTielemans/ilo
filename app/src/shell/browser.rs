@@ -4,8 +4,11 @@
 
 use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, px, size};
+use gpui::{
+    App, Bounds, Entity, Pixels, Point, RenderImage, SharedString, Size, Window, point, px, size,
+};
 
+use crate::command_bar::CommandBar;
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
@@ -278,10 +281,6 @@ pub trait Browser {
     /// Lists the captures saved to the Library, away from the main thread, and calls
     /// `Shell::set_captures`.
     fn list_captures(&self, cx: &mut App);
-    /// What the Library button's hover lists, as `recent_downloads::HOVER_IMAGES`' and its
-    /// fellows' bits, as the user picked them from its menu.
-    fn hover_kinds(&self, cx: &mut App) -> u32;
-    fn set_hover_kinds(&self, kinds: u32, cx: &mut App);
     /// Moves the file at `path` to the system's Trash, and says whether it's gone, as it is if it
     /// was gone already.
     fn trash(&self, path: &str, cx: &mut App) -> bool;
@@ -322,11 +321,6 @@ pub trait Browser {
     fn set_developer_mode(&self, tab: u64, on: bool, cx: &mut App);
     /// Answers what the tab's page asks (Shell::set_question), if it still asks.
     fn answer_permission(&self, tab: u64, answer: Answer, cx: &mut App);
-    /// Answers what an agent asks (Shell::set_agent_question), if it still asks.
-    fn answer_agent(&self, question: u64, answer: crate::agents::Answer, cx: &mut App);
-    /// The user pressed Choose File… on an agent's question for a page's file field: the system's
-    /// file dialog opens over `window`.
-    fn choose_agent_file(&self, question: u64, window: u64, cx: &mut App);
     /// Asks the dialog a tab's page asks over the tab's card, with the corners of its radius, or
     /// takes back the one it asks (None).
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, cx: &mut App);
@@ -665,19 +659,10 @@ pub trait Browser {
     /// Puts the window's own buttons, and the reveal's window and edge, on the window's right, or
     /// back on its left (Sidebar position, #2375).
     fn set_sidebar_right(&self, _right: bool, _cx: &mut App) {}
-    /// Windows': puts the window's buttons at its right though the sidebar is on the left, as the
-    /// top bar has them, or back with the sidebar (#3160).
-    fn set_window_buttons_right(&self, _right: bool, _cx: &mut App) {}
     /// The user moved the sidebar from the command bar: Sidebar position keeps it on this device,
     /// and every window follows.
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
         cx.set_global(super::SidebarRight(right));
-        cx.refresh_windows();
-    }
-    /// The user turned Top bar on or off from a menu, the command bar or its key: kept on this
-    /// device, and every window follows.
-    fn keep_top_bar(&self, on: bool, cx: &mut App) {
-        cx.set_global(super::TopBar(on));
         cx.refresh_windows();
     }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
@@ -870,6 +855,41 @@ pub trait Browser {
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// What the broom on the New Tab line shows for the Space the window shows, or None where it
+    /// isn't drawn, which the browser alone decides. It tells the shell to draw again as the
+    /// answer changes, and ends `Broom::Failed` itself.
+    fn broom(&self) -> Option<super::Broom> {
+        None
+    }
+    /// The user's click on the broom, its menu item or its bar entry: sorts the Today tabs of the
+    /// Space the window shows into folders. The user's alone: no agent tool, page or typed text
+    /// reaches it.
+    fn start_broom(&self, _cx: &mut App) {}
+    /// Makes Sort Tabs into Folders' folders in `space`'s today's list: each of `new` a folder of
+    /// its name holding its tabs, brought together at the first one's place in their order, and
+    /// each of `joins` its tabs put at the end of that today's folder. Returns the folders made,
+    /// or None if it made none, which a core without today's folders answers.
+    fn make_today_folders(
+        &self,
+        _space: u64,
+        _new: &[(String, Vec<u64>)],
+        _joins: &[(u64, Vec<u64>)],
+        _cx: &mut App,
+    ) -> Option<Vec<u64>> {
+        None
+    }
+    /// Takes back `make_today_folders`: the folders it `made` go, leaving their tabs, the tabs it
+    /// `joined` to a today's folder leave it, and `space`'s today's rows go back to the order
+    /// `rows`; the folders that were there before stay as they were.
+    fn unsort_today(
+        &self,
+        _space: u64,
+        _made: &[u64],
+        _joined: &[u64],
+        _rows: &[u64],
+        _cx: &mut App,
+    ) {
+    }
     /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
     fn link_cards(&self) -> bool {
         false
@@ -921,6 +941,19 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// The tab the core shows in this window now, 0 for none. The shell hears of it only when
+    /// the core's report comes, which at launch can be after the user's first keys.
+    fn shown_now(&self) -> u64 {
+        0
+    }
+    /// A command bar to rest in this window's empty Space, whose page draws its field and rows
+    /// (#4140). It asks nothing of the core until it's typed in.
+    fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
+    /// Whether this system can wall a task in with its files, which the composer's `+` offers
+    /// files and a folder by (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// Whether the user types in a field of a window over this one: find, the password offer, the
     /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
     /// gone back to the page with it still showing.
@@ -1015,6 +1048,13 @@ pub trait Browser {
     }
     /// Opens the Settings window, or brings it to the front.
     fn settings(&self, cx: &mut App);
+    /// Opens the Settings window on Agents' Off limits list, scrolled to it.
+    fn off_limits(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents' Access group, which explains each level: the level
+    /// menu's Settings….
+    fn agent_access(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents, for what first run's assistant step leaves to it.
+    fn agents_settings(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.
     fn shortcuts(&self, cx: &mut App);
     /// Opens the Settings window on its About tab.
@@ -1042,21 +1082,64 @@ pub trait Browser {
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
     /// changes.
     fn show_task(&self, agent: SharedString, cx: &mut App);
+    /// The command bar, just opened for a new tab, takes `asked` as an ask, as if the user had
+    /// typed it and pressed ⇥: an ended task's Start Again (#4105). Nothing is sent.
+    fn ask_again(&self, _asked: SharedString, _cx: &mut App) {}
     /// Asks for a picture of a task's page for its conversation, which the browser answers with
     /// `Shell::page_pictured` and `request`.
     fn task_picture(&self, tab: u64, request: u64, cx: &mut App);
+    /// Whether a picture of `tab` taken now could have been given to an agent, by the agents'
+    /// rules (Agents::keeps_picture_at), for a kept task's card, its page at `url`. None is,
+    /// without agents.
+    fn keeps_picture(&self, _tab: u64, _url: &str, _cx: &App) -> bool {
+        false
+    }
+    /// The conversation of `agent`'s task took a picture of `tab`: `picture` if its card may keep
+    /// it, else none (Agents::card_pictured).
+    fn card_pictured(
+        &self,
+        _agent: SharedString,
+        _tab: u64,
+        _picture: Option<Arc<RenderImage>>,
+        _cx: &mut App,
+    ) {
+    }
     /// The user stops the agent with the id `agent`: what it's doing and asking ends.
     fn stop_agent(&self, agent: SharedString, cx: &mut App);
     /// Selects the tab's next match, or the one before, opening its find bar if it's closed.
     fn find_next(&self, tab: u64, forward: bool, cx: &mut App);
     /// Scrolls the tab's page to put its selection in the middle.
     fn jump_to_selection(&self, tab: u64, cx: &mut App);
-    fn quit(&self, cx: &mut App);
+    /// The user's Quit. A host that asks first calls `going` once the quit is decided and before
+    /// it quits, outside the shell's update, and never if the user cancels: what the shell does
+    /// only for a quit that happens.
+    fn quit(&self, going: Rc<dyn Fn(&mut App)>, cx: &mut App);
     /// Opens another window on the same Spaces, after this one's draw.
     fn new_window(&self, cx: &mut App);
-    /// new_window, with a new profile's first launch playing in the new window, which shows no
-    /// page.
-    fn welcome_window(&self, _cx: &mut App) {}
+    /// Puts first run's `window`, which the shell opened unshown and draws the flow in, on screen
+    /// as a window of its own, in front with the keyboard: until first run ends it's the only
+    /// window on screen.
+    fn show_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// Takes first run's `window` off screen and closes it, and puts the browser window it kept
+    /// waiting at launch on screen.
+    fn end_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// Keeps the system's glass and shadow round first run's card to its size and corners now,
+    /// as its entry grows it, where the host draws them.
+    fn shape_first_run(&self, _width: f32, _height: f32, _radius: f32) {}
+    /// Grows first run's window to the browser window's frame, in one step, and says whether it
+    /// will. The host finds its own held window. A yes says it has tested that it can, and it
+    /// sets the frame on the main queue's next turn, as the ask comes inside the press. On a yes
+    /// the UI draws the card growing in the window as it is on each frame (first-run v9 §10),
+    /// shaped by `shape_first_run`; on a no nothing changes and the exit is the cross-fade.
+    /// On a yes the host also puts the browser window under first run's then, unseen.
+    fn grows_first_run(&self) -> bool;
+    /// How far the browser window under a grown first run's window has come in, its opacity,
+    /// and the card's glass's, both 0 to 1, said on each frame of a grown exit.
+    fn reveal_first_run(&self, _window: f32, _glass: f32) {}
+    /// First run's window opens on screen at once, for a host with no call that shows it.
+    fn shows_first_run_at_open(&self) -> bool {
+        false
+    }
     /// Whether the system opens http and https links with the browser, which the onboarding asks
     /// only as it starts, to leave out its step for it.
     fn is_default_browser(&self) -> bool {
@@ -1083,18 +1166,34 @@ pub trait Browser {
         None
     }
     fn set_crash_reports(&self, _on: bool, _cx: &mut App) {}
-    /// Whether agents may use the browser, as Settings' switch has it, or None in a build without
-    /// the agents' server.
-    fn agents(&self, _cx: &App) -> Option<bool> {
+    /// Whether the product's own threads run, the inside switch as Settings › Threads has it, or
+    /// None in a build without the agents' server.
+    fn threads(&self, _cx: &App) -> Option<bool> {
         None
     }
-    fn set_agents(&self, _on: bool, _cx: &mut App) {}
+    fn set_threads(&self, _on: bool, _cx: &mut App) {}
+    /// Makes the Agents if they aren't yet. A launch makes them after its first frame, and first
+    /// run's card, which starts before it, reads what they find.
+    fn start_agents(&self, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {
         None
     }
     fn set_daily_count(&self, _on: bool, _cx: &mut App) {}
+    /// Whether `setting` is on for `space`'s profile, as Settings' switch has it, or None where
+    /// Settings doesn't offer it, or before the profile has loaded.
+    fn setting(&self, _space: u64, _setting: Setting, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_setting(&self, _space: u64, _setting: Setting, _on: bool, _cx: &mut App) {}
+    /// How long, in seconds, a Today tab of `space`'s profile waits before it goes in the archive,
+    /// and the times Settings offers it, in its order; None before the profile has loaded. A
+    /// thread's card done and seen goes after as long; below 0 is Never.
+    fn archive_after(&self, _space: u64) -> Option<(f64, Vec<f64>)> {
+        None
+    }
+    fn set_archive_after(&self, _space: u64, _seconds: f64, _cx: &mut App) {}
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);
@@ -1258,6 +1357,17 @@ impl Default for Volume {
     fn default() -> Self {
         Volume(1.)
     }
+}
+
+/// A switch of Settings' own that first run shows too (Browser::setting).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Setting {
+    /// General's Reopen your windows and tabs.
+    RestoreWindows,
+    /// Ad Blocking's Block ads and trackers, in every profile.
+    AdBlocking,
+    /// Passwords' Offer to save passwords, the profile's own.
+    SavePasswords,
 }
 
 /// What's wrong with a tab's page, as the core says (BC_PAGE_ in browser_core.h). Agents read the

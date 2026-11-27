@@ -1,8 +1,9 @@
-//! The agent's pointer over the page (ours, #365): as an agent clicks or types in a page the window
-//! shows, in its own Space, its pointer glides to the element with its Space's name beside it, and
-//! a Signal ring goes round the element with the ref the agent named it by. The window over the
-//! page draws it (`Shell::over_page`), which the mouse goes through, so the user's own pointer and
-//! clicks are never in its way, and it goes a moment after the agent's last action.
+//! The agent's pointer at an element of the page (ours, #365): as an agent clicks or types in a
+//! page the window shows, in its own Space, the pointer is at the element, and it goes a moment
+//! after the agent's last action. Nothing of it is drawn: the thread's card and the panel beside
+//! the page say the agent is at work. Its life and its two lines stay until the checks that read
+//! them are redesigned, and its draw below stays unreached until then.
+#![allow(dead_code)]
 
 use std::time::Duration;
 use std::time::Instant;
@@ -14,8 +15,8 @@ use gpui::{
 
 use super::{Shell, panes::pane_frames};
 use crate::tokens::shell::agent_pointer::{
-    COLOR, LABEL_HEIGHT, LABEL_INSET, LABEL_SIZE, POINTER, RING, RING_OUTSET, RING_RADIUS,
-    TAG_HEIGHT, TAG_INSET, TAG_RADIUS, TAG_SIZE, TEXT,
+    LABEL_HEIGHT, LABEL_INSET, LABEL_SIZE, LIGHT_ON_PRIMARY, LIGHT_PRIMARY, ON_PRIMARY, POINTER,
+    PRIMARY, RING, RING_OUTSET, RING_RADIUS, TAG_HEIGHT, TAG_INSET, TAG_RADIUS, TAG_SIZE,
 };
 
 /// How long the pointer takes to glide to the element, and the ring to come in once it's there,
@@ -66,7 +67,7 @@ impl Shell {
             return;
         }
         // From where it is if it's still over the page, else from up and left of the element.
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let from = (self.agent_pointer.as_ref())
             .filter(|pointer| pointer.tab == tab && self.agent_pointer_shown())
             .map(|pointer| pointer.tip(pointer.since.elapsed().as_secs_f32(), still))
@@ -79,21 +80,15 @@ impl Shell {
             f32::from(element.size.width),
             f32::from(element.size.height)
         );
+        // Its one end, which asks for no frame, as nothing of it is drawn.
         let going = cx.spawn(async move |shell, cx| {
             cx.background_executor()
-                .timer(Duration::from_secs_f32(GLIDE + HOLD))
-                .await;
-            if shell.update(cx, |_, cx| cx.notify()).is_err() {
-                return;
-            }
-            cx.background_executor()
-                .timer(Duration::from_secs_f32(FADE))
+                .timer(Duration::from_secs_f32(GLIDE + HOLD + FADE))
                 .await;
             shell
-                .update(cx, |shell, cx| {
+                .update(cx, |shell, _| {
                     shell.agent_pointer = None;
                     log!("browser: agent pointer gone");
-                    cx.notify();
                 })
                 .ok();
         });
@@ -106,7 +101,6 @@ impl Shell {
             since,
             _going: going,
         });
-        cx.notify();
     }
 
     /// Whether the agent's pointer is over the page the window shows.
@@ -118,14 +112,12 @@ impl Shell {
     }
 
     /// What the window over the page draws: Add Split View's targets while a tab or a link is
-    /// dragged over it, the agent's pointer, and a new download's icon on its way to the Library
-    /// button.
+    /// dragged over it, and a new download's icon on its way to the Library button.
     pub fn over_page(&self, window: &mut Window, cx: &App) -> AnyElement {
         div()
             .size_full()
             .relative()
             .child(self.drop_targets(window))
-            .children(self.agent_pointer_drawn(window, cx))
             .children(self.download_flight_drawn(window, cx))
             .into_any_element()
     }
@@ -150,9 +142,10 @@ impl Shell {
         }
         let pointer = self.agent_pointer.as_ref()?;
         let pane = self.pane_of(pointer.tab)?;
+        let (primary, on_primary) = pointer_inks(&self.palette);
         let name = self.agent_bar().map(|bar| bar.name()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         // Frames only while it moves: the glide, the ring coming in and the fade.
         if t < GLIDE + RING_IN || t > GLIDE + HOLD {
             window.request_animation_frame();
@@ -178,9 +171,9 @@ impl Shell {
                 .flex()
                 .items_center()
                 .rounded(px(radius))
-                .bg(rgb(COLOR))
+                .bg(rgb(primary))
                 .text_size(px(size))
-                .text_color(rgb(TEXT))
+                .text_color(rgb(on_primary))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .whitespace_nowrap()
                 .child(text)
@@ -203,7 +196,7 @@ impl Shell {
                     .h(ring.size.height)
                     .rounded(px(RING_RADIUS))
                     .border(px(RING))
-                    .border_color(rgb(COLOR))
+                    .border_color(rgb(primary))
                     .opacity(ring_in),
             )
             .child(
@@ -218,14 +211,21 @@ impl Shell {
                 .top(tag_top)
                 .opacity(ring_in),
             )
-            .child(
-                svg()
-                    .absolute()
-                    .left(tip.x - pointer_box * TIP)
-                    .top(tip.y - pointer_box * TIP)
-                    .size(pointer_box)
-                    .path("icons/mouse-pointer-2.svg")
-                    .text_color(rgb(COLOR)),
+            // The pointer over a wider stroke of itself in on-primary, its outline on any page.
+            .children(
+                [
+                    ("icons/mouse-pointer-2-outline.svg", on_primary),
+                    ("icons/mouse-pointer-2.svg", primary),
+                ]
+                .map(|(glyph, ink)| {
+                    svg()
+                        .absolute()
+                        .left(tip.x - pointer_box * TIP)
+                        .top(tip.y - pointer_box * TIP)
+                        .size(pointer_box)
+                        .path(glyph)
+                        .text_color(rgb(ink))
+                }),
             )
             .when(!name.is_empty(), |page| {
                 page.child(
@@ -242,6 +242,15 @@ impl Shell {
             });
         Some(page.into_any_element())
     }
+}
+
+/// The pointer's and its rings' ink, `primary`, and the ink that reads on it, `on-primary`, in
+/// `palette`'s tone.
+pub(super) fn pointer_inks(palette: &super::Palette) -> (u32, u32) {
+    (
+        palette.toned(PRIMARY, LIGHT_PRIMARY),
+        palette.toned(ON_PRIMARY, LIGHT_ON_PRIMARY),
+    )
 }
 
 fn ease_out(progress: f32) -> f32 {

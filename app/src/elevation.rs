@@ -71,6 +71,16 @@ fn invisible_past(color: u32, blur: f32) -> f32 {
     distance
 }
 
+/// How far past what it shadows a drop shadow of `color`, falling `y` with `blur`, can be seen.
+fn reach_of(color: u32, y: f32, blur: f32) -> Reach {
+    let sides = invisible_past(color, blur);
+    Reach {
+        above: (sides - y).max(0.),
+        below: sides + y,
+        sides,
+    }
+}
+
 /// How far past what a level shadows its drop shadow can be seen, on each side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reach {
@@ -173,12 +183,7 @@ impl Level {
     /// How much room a window that draws this level's shadow itself needs round what it holds.
     pub fn reach(self) -> Reach {
         let (color, y, blur) = self.drop();
-        let sides = invisible_past(color, blur);
-        Reach {
-            above: (sides - y).max(0.),
-            below: sides + y,
-            sides,
-        }
+        reach_of(color, y, blur)
     }
 
     /// The margin a panel at this level leaves round itself in its window for its shadow, in whole
@@ -233,6 +238,36 @@ impl Level {
             .pb(px(margin.below))
             .child(panel.shadow(self.shadow()))
             .into_any_element()
+    }
+}
+
+/// What floats' shadows (#4090), wide and close, the same in both looks, under the levels' outline:
+/// a menu's glass, the downloads plate's.
+pub fn menu_shadow() -> Vec<BoxShadow> {
+    use crate::tokens::floating as f;
+    let shadow = |color: u32, y: f32, blur: f32| BoxShadow {
+        color: rgba(color).into(),
+        offset: point(px(0.), px(y)),
+        blur_radius: px(sigma(blur)),
+        spread_radius: px(0.),
+        inset: false,
+    };
+    vec![
+        shadow(f::SHADOW, f::SHADOW_Y, f::SHADOW_BLUR),
+        shadow(f::CONTACT, f::CONTACT_Y, f::CONTACT_BLUR),
+        shadow(t::OUTLINE, 0., t::OUTLINE_BLUR),
+    ]
+}
+
+/// How much room a menu's window leaves round its panels for `menu_shadow`, in either look.
+pub fn menu_reach() -> Reach {
+    use crate::tokens::floating as f;
+    let wide = reach_of(f::SHADOW, f::SHADOW_Y, f::SHADOW_BLUR);
+    let contact = reach_of(f::CONTACT, f::CONTACT_Y, f::CONTACT_BLUR);
+    Reach {
+        above: wide.above.max(contact.above),
+        below: wide.below.max(contact.below),
+        sides: wide.sides.max(contact.sides),
     }
 }
 

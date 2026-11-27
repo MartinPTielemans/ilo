@@ -1,7 +1,7 @@
 # check.sh runs this at 590.
 # Settings' everyday rows that are Chromium's (#1636), browser-wide, which the core writes into
 # every profile, on a page of the check's own server, a secure context as notifications need:
-# - General › Page zoom at 125% zooms the page the user is on, as its devicePixelRatio says, and
+# - Window › Page zoom at 125% zooms the page the user is on, as its devicePixelRatio says, and
 #   100% gives it back.
 # - Privacy › Let sites ask to send notifications off: the page's Notification.requestPermission
 #   is denied with no question.
@@ -57,8 +57,8 @@ send type r
 expect '^browser: title [0-9]* ratio 1$' "the page isn't at 100% before the zoom changes"
 before=$(sed -n 's/^browser: title [0-9]* ratio \(.*\)$/\1/p' "$log" | tail -1)
 
-# Page zoom at 125%, then back to 100%.
-everyday_section General
+# Page zoom at 125%, then back to 100%, in Window (#4092).
+everyday_section Window
 click_in_sight "page zoom"
 expect '^browser: menu shown ' "a click on Page zoom didn't open its menu"
 post choose 125%
@@ -68,7 +68,7 @@ everyday_key r
 expect '^browser: title [0-9]* ratio 1\.25$' \
   "at 125% the page's devicePixelRatio isn't 1.25: $(grep 'ratio' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/everyday-zoomed.png" || fail "no window to capture"
-everyday_section General
+everyday_section Window
 click_in_sight "page zoom"
 expect '^browser: menu shown ' "a click on Page zoom didn't open its menu again"
 post choose "100% (default)"

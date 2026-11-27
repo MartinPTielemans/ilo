@@ -104,6 +104,7 @@ impl Host for Recorder {
             Run::ExtensionItem(id, item) => format!("extension {id} {item:?}"),
             Run::OpenInProfile(profile) => format!("open in profile {profile}"),
             Run::NewSpaceInProfile(profile) => format!("new space in profile {profile}"),
+            Run::Sensitive(on) => format!("sensitive {on}"),
         };
         self.push(format!("run {run} {tab}"));
     }
@@ -178,6 +179,7 @@ fn site() -> Site {
         arrangement_misfits: None,
         arrangement_off: None,
         recent: None,
+        sensitive: None,
     }
 }
 
@@ -703,6 +705,23 @@ fn a_value_chosen_sets_the_permission(cx: &mut TestAppContext) {
         panel.calls(),
         ["menu Allow*, Block, Ask", "menu Allow*, Block, Ask"]
     );
+}
+
+/// Escape goes to the topmost layer (#4108): a value's menu over the panel, closed with Escape
+/// (no choice), closes alone, and the next Escape closes the panel.
+#[gpui::test]
+fn escape_in_a_values_menu_closes_the_menu_and_the_next_the_panel(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(cx, site());
+    panel.calls();
+    panel.host.answer.set(None);
+    panel.click(line(1));
+    assert_eq!(
+        panel.calls(),
+        ["menu Allow*, Block, Ask"],
+        "the panel closed with its menu"
+    );
+    panel.keys("escape");
+    assert_eq!(panel.calls(), ["release", "stop", "hide"]);
 }
 
 fn device(name: &str, removable: bool) -> Device {
@@ -1340,6 +1359,34 @@ fn developer_mode_s_switch_shows_while_it_s_on(cx: &mut TestAppContext) {
             "hide"
         ]
     );
+}
+
+/// "…" holds the user's mark of a sensitive site, checked while it's marked, which takes it off;
+/// a private window has none (#4369).
+#[gpui::test]
+fn the_sensitive_mark_is_a_checkmark_in_more(cx: &mut TestAppContext) {
+    let marked = Site {
+        sensitive: Some(true),
+        ..site()
+    };
+    let mut panel = Panel::new(cx, marked);
+    panel.calls();
+    panel.host.answer.set(Some(2));
+    panel.click(MORE);
+    let menu = "menu Clear Cache, Clear Cookies, Sensitive Site*, , Manage Extensions…, \
+                Add Extension…, , All Site Settings…";
+    assert_eq!(
+        panel.calls(),
+        [
+            menu,
+            "release",
+            "stop",
+            &format!("run sensitive false {TAB}"),
+            "hide"
+        ]
+    );
+    let private = more_items(&site());
+    assert!(!(private.iter()).any(|(item, _)| item.title.contains("Sensitive")));
 }
 
 /// Where it isn't the user's to change, such as a private window, there's no shield: its place in

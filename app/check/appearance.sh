@@ -38,13 +38,16 @@ for choice in $other $system $other automatic; do
   expect "^browser: title [0-9]* scheme $scheme\$" \
     "View › Appearance › $item didn't make the page's prefers-color-scheme $scheme"
 done
-# Settings › General's Appearance is three drawings (#2429) that pick as View › Appearance does,
+# Settings › Window's Appearance is three drawings (#2429) that pick as View › Appearance does,
 # and follow it: a click on the other look's gives the page its scheme, View › Appearance's other
 # item moves the ring and gives back the system's, and a click on Automatic's leaves the page's
 # scheme as it is. The row is captured in each look.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_on_general "Settings… didn't show Settings"
 settings_drew
+send clickkey $(drawn "toolbar Window")
+expect '^browser: settings tab Window$' "a click on Window didn't show its section"
+settings_drew Window
 was=$system
 for choice in $other $system automatic; do
   case $choice in
@@ -104,9 +107,8 @@ fi
 # Pages never read a Space's theme (#684): all a page can see of the browser's colours, its
 # prefers-color-scheme and the rest of what theme.html reads, stays as it was when the Space takes a
 # red theme, then a blue one whose look is the other of the system's, as a dark theme on a light
-# Mac's. The theme picker opens from the command bar's Edit Theme…, with the keyboard, so its
-# clicks are in its points: its arrow 13 wide, then the card, whose field, an HSL disc, has its
-# middle at 178.5 down, and its appearance buttons at 49 down, light 178.3 and dark 218.7 along.
+# Mac's. The theme panel opens from the command bar's Edit Theme…, with the keyboard, so its
+# clicks are in its points, from its top left, at the places panel_at works out from its tokens.
 go_from_bar "${site#http://}theme.html"
 expect '^browser: title [0-9]* seen ' "the theme page didn't say what it sees"
 seen=$(grep '^browser: title [0-9]* seen ' "$log" | tail -1 | sed 's/^browser: title [0-9]* //')
@@ -133,22 +135,23 @@ close_picker() {
   expect '^browser: theme picker hidden$' "escape didn't hide the theme picker"
 }
 open_picker
-send clickkey 276.5 178.5
-expect '^browser: themed space ' "a click in the theme picker's field didn't theme the Space"
+send clickkey $(panel_at field 0.5 0)
+expect '^browser: themed space ' "a click in the theme panel's pad didn't theme the Space"
 close_picker
 sees_the_same "with a red theme"
-look=dark at="231.7 49"
-[ "$system" = light ] || look=light at="191.3 49"
-# The other look, then the blue swatch, the eighth, which the keyboard reaches, as the field takes
-# no click once the Space has a colour: tab to the appearance buttons, to − and +, then to the
-# swatches' first, and → to it.
+look=dark
+[ "$system" = light ] || look=light
+# The other look, then the blue palette, the third disc, which the keyboard reaches: tab to the
+# appearance, tab to the palettes' first, as the Space's red is none of them, and → to it.
 open_picker
-send clickkey $at
+send clickkey $(panel_at look $look)
 expect '^browser: themed space ' "the theme picker's $look button didn't change the Space's theme"
-for key in tab tab tab right right right right right right right space; do
+for key in tab tab right right space; do
   send key $key
 done
-expect '^browser: colored space [0-9]* 7eb6d5$' "the blue swatch didn't give the Space its colour"
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the blue palette didn't give the Space its colour"
+blue=$(grep '^browser: colored space ' "$log" | tail -1 | cut -d' ' -f5)
+near_color "$blue" "$(panel_color 2)" || fail "the blue palette coloured the Space $blue, not $(panel_color 2)"
 close_picker
 grep -q "^browser: theme picker set [0-9]* .*appearance=$look\$" "$log" ||
   fail "the theme picker's $look button didn't give the theme a $look look"

@@ -105,18 +105,18 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
 
 # The first launch's Space is the browser's only one, "Space 1" with no icon, which Arc 1.171
-# counts as unnamed and hides the name row of, what's under it rising 39. The runs keep the row
+# counts as unnamed and hides the name row of, what's under it rising 38. The runs keep the row
 # (check.sh), so the sidebar's empty space's menu offers Hide Space Header after Edit Theme Color…,
-# which puts New Tab, under the divider, 39 above where it was. Show Space Header brings the row
+# which puts New Tab, under the gap over Today, 38 above where it was. Show Space Header brings the row
 # back for the steps after (#1400).
 post rightclick $(row 3)
-expect "^browser: menu shown $(cased 'New Tab, New Folder…, Show Top Bar, Change Space Icon…, Rename Space…, Edit Theme Color…, Hide Space Header'), " \
+expect "^browser: menu shown $(cased 'New Tab, New Folder…, Change Space Icon…, Rename Space…, Edit Theme Color…, Hide Space Header'), " \
   "the lone unnamed Space's menu didn't offer Hide Space Header after Edit Theme Color…"
 send choose "$(cased 'Hide Space Header')"
 expect '^browser: space header hidden$' "Hide Space Header didn't hide the name row"
 expect '^browser: outline ' "the rows weren't drawn again without the name row"
 ../tools/window-screenshot.sh "$pid" "$out/space-header-hidden.png" || fail "no window to capture"
-send click 100 $((90 + 44 + 15 + 20 - 39))
+send click 100 $((86 + 4 + 6 + 17))
 expect '^browser: command new-tab via sidebar$' "New Tab didn't rise into the hidden name row's place"
 expect '^browser: command bar shown$' "a click on the risen New Tab didn't open the command bar"
 send key escape
@@ -151,32 +151,35 @@ committed=$((step + 1))
 send key return
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
-# The form's Choose a Theme row opens the theme picker beside it, a child window with the
-# keyboard, so its clicks go to the key window in points from its top left, its arrow 13 wide.
-# A click in its field is the Space's first colour, where it's clicked, and the window takes it.
+# The form's Choose a Theme row opens the theme panel beside it, a child window with the
+# keyboard, so its clicks go to the key window in points from its top left, the panel's own.
+# A click in its pad is the Space's first colour, where it's clicked, and the window takes it.
 send click 100 299
 expect "^browser: theme picker for $second\$" "the form's Choose a Theme row didn't open the picker"
 expect '^browser: theme picker shown$' "the theme picker didn't show"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
 none_since '^browser: create space' "$committed" || fail "return while composing named the Space"
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
-[ "$(echo "$at" | awk '{ print $3, $4 }')" = "370 509" ] ||
-  fail "the theme picker opened at $at, not 370 by 509"
-# Half way from the field's middle to its right edge is red: hue 0 at lightness 0.5. X11's and
-# Windows' drivers click on whole pixels, which lands half a point right of it and below, a little
-# less on Windows, whose picker opens a fraction of a point to the right (#1368).
-red_at="x=0.5000 y=0.0000"
-red_color=ff0000
-[ -z "$x11" ] || { red_at="x=0.5030 y=0.0030"; red_color=ff0302; }
-! windows || { red_at="x=0.5029 y=0.0029"; red_color=ff0302; }
+[ "$(echo "$at" | awk '{ print $3, $4 }')" = "$(panel_at size)" ] ||
+  fail "the theme picker opened at $at, not $(panel_at size | sed 's/ / by /')"
+# The pad shows red, hue 0 at lightness 0.5, where it shows the field's (0.5, 0). X11's and
+# Windows' drivers click on whole pixels, and the panel needn't open on one (#1368), so the press
+# lands a little off it: within a hundredth of it, and red.
 rest="intensity=0.810 grain=0.000 appearance=automatic"
-red="$red_at colors=1 $rest"
-send clickkey 276.5 178.5
-expect "^browser: theme picker set $second $red\$" "a click in the field didn't give a colour"
-expect "^browser: colored space $second $red_color\$" "the field's colour wasn't the Space's colour"
+send clickkey $(panel_at field 0.5 0)
+expect "^browser: theme picker set $second x=[-0-9.]* y=[-0-9.]* colors=1 $rest\$" \
+  "a click in the pad didn't give a colour"
+red=$(grep "^browser: theme picker set $second " "$log" | tail -1 | cut -d' ' -f6-)
+red_at=${red%% colors=*}
+echo "$red_at" | awk '{ x = substr($1, 3) - 0.5; y = substr($2, 3) + 0; exit !(x * x <= 0.0001 && y * y <= 0.0001) }' ||
+  fail "a click at the pad's red gave $red_at, not x=0.5 y=0"
+expect "^browser: colored space $second [0-9a-f]*\$" "the pad's colour wasn't the Space's colour"
+red_color=$(grep "^browser: colored space $second " "$log" | tail -1 | cut -d' ' -f5)
+[ "$(channel "$red_color" 1)" -ge 240 ] && [ "$(channel "$red_color" 2)" -le 16 ] && [ "$(channel "$red_color" 3)" -le 16 ] ||
+  fail "a click at the pad's red gave the Space $red_color"
 expect "^browser: themed space $second $red\$" "the core didn't keep the Space's theme"
 # + makes it two colours, the second the first's opposite.
-send clickkey 211.5 316.5
+send clickkey $(panel_at plus 1)
 expect "^browser: themed space $second $red_at colors=2 $rest\$" "+ didn't add a second colour"
 ../tools/window-screenshot.sh "$pid" "$out/theme-picker.png" || fail "no window to capture"
 # On the Mac, AppKit can make an overlay's panel key as it shrinks away after the UI hid it, and
@@ -202,9 +205,8 @@ expect "^browser: create space $second reading 日本語\$" "return didn't name 
 expect "^browser: renamed space $second reading 日本語\$" "the core didn't rename the Space"
 expect '^browser: space form gone$' "the form didn't leave after Create"
 ../tools/window-screenshot.sh "$pid" "$out/new-space.png" || fail "no window to capture"
-send key t cmd
+resting_key t "new Space"
 expect '^browser: command new-tab via ui$' "⌘T in the new Space didn't reach the UI"
-expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
 send type "http://localhost:$port/one.html"
 send key return
 expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"
@@ -580,8 +582,8 @@ expect "^browser: settled space $first\$" "the first Space's page didn't settle 
 send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the side buttons out over the page"
 send move $page_point
-send move 3 300
-send move 3 306
+send move 0 300
+send move 0 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out for the side buttons"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen for the side buttons"
 set -- $swipe_point
@@ -624,10 +626,11 @@ expect '^browser: library hidden$' "a swipe let go short of halfway didn't put t
 none_since '^browser: command view-library' ||
   fail "a swipe let go short of halfway opened the Library"
 library_to "swipe $swipe_point 12 0 10" swipe shown
-# Fingers going on past where it opens take the Library on a little with the card, its column's
-# fill still reaching the window's left edge: the edge is the column's colour 40 across, and not
-# the section's beside it. The column is the ink over the window, darker in a light window and
-# lighter in a dark one, so the step compares colours, not which is brighter.
+# Fingers going on past where it opens take the Library on a little with the card, its column
+# still reaching the window's left edge: the edge is the column's colour 40 across. The column has
+# no fill of its own, as drawn, so it is the window's glass there as in it, and anything else
+# opened at the edge reads apart. The step compares colours, not which is brighter, as the glass
+# is darker in a light window and lighter in a dark one.
 post swipe $swipe_point 60 0 10 1500
 expect '^browser: library past its end$' "fingers past the Library's end didn't reach it"
 ../tools/window-screenshot.sh "$pid" "$out/library-end.png" || fail "no window to capture"
@@ -641,17 +644,17 @@ alike() {
 }
 column=$(end_at 6)
 inside=$(end_at 40)
-beside=$(end_at 200)
-{ alike "$column" "$inside" && ! alike "$column" "$beside"; } || fail "past its end the \
-Library's column left the window's edge: $column at it, $inside in it, $beside beside"
+alike "$column" "$inside" || fail "past its end the Library's column left the window's edge: \
+$column at it, $inside in it"
 await "^browser: drive $step done" || fail "the driver didn't finish the swipe"
 none_since '^browser: command view-library' || fail "fingers past the Library's end closed it"
 expect '^browser: library shown$' "the Library didn't settle back where it opens"
 library_to "swipe $swipe_point -12 0 10" swipe hidden
 fi
 library_to "wheel $swipe_point 1" wheel shown
-# Its Spaces section is as wide as its two cards, 216 + 264 a Space as Arc's, unless that would
-# leave the page less than 56, as Arc 1.171's. The section's button is clicked at its middle,
+# Its Spaces section is as wide as its column, two cards and the + after them, as library.rs's
+# spaces_content lays them out from tokens.toml's [shell.library], unless that would leave the page
+# less than its spaces-page, as Arc 1.171's. The section's button is clicked at its middle,
 # where the column's line says it drew it, so a section added to the column doesn't move the click.
 read -r bx by bw bh << EOF
 $(grep '^browser: library button spaces at ' "$log" | tail -1 | cut -d' ' -f6-)
@@ -659,8 +662,12 @@ EOF
 [ -n "$bh" ] || fail "the Library's column said nothing of where it drew the Spaces button"
 send click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
-spaces_wide=$((216 + 264 * 2))
-[ $spaces_wide -gt $((${content%x*} - 56)) ] && spaces_wide=$((${content%x*} - 56))
+spaces_wide=$(($(token shell.library column-width) + $(token shell.library spaces-left) +
+  2 * $(token shell.library card-width) + $(token shell.library card-gap) +
+  $(token shell.library plus-gap) + $(token shell.library plus-size) +
+  $(token shell.library plus-after)))
+page_least=$((${content%x*} - $(token shell.library spaces-page)))
+[ $spaces_wide -gt $page_least ] && spaces_wide=$page_least
 expect "^browser: library spaces 2 wide $spaces_wide\$" \
   "the Library's Spaces section isn't $spaces_wide wide with two Spaces in a $content window"
 expect "^browser: library resized $spaces_wide\$" "the Library didn't settle at its Spaces' width"
@@ -711,21 +718,20 @@ send dismiss
 # down. Its brush opens the theme picker for the Space beside itself, over the Library, which
 # stays open (#1074), where the second gets its light and its dark appearance in turn, and then
 # automatic again. The capture comes while it's dark, the card taking the theme as it's made and
-# the window only the look of the Space it shows, the first. $1 is the appearance and $2 its
-# button's x in the picker's window, which holds the 13 wide arrow left of the card. With open as
-# $3 the picker stays open.
+# the window only the look of the Space it shows, the first. $1 is the appearance, its segment at
+# the panel's head. With open as $2 the panel stays open.
 appear() {
   send click $brush_x $card_y
   expect "^browser: theme picker for $second\$" "the second card's brush didn't open the theme picker"
   expect '^browser: theme picker drawn$' "the brush's theme picker didn't draw itself on screen"
   none_since '^browser: library hidden$' || fail "the brush's theme picker closed the Library"
-  send clickkey $2 49
+  send clickkey $(panel_at look "$1")
   expect "^browser: themed space $second .* appearance=$1\$" "the picker didn't make the Space $1"
   if [ "$1" = dark ]; then
     ../tools/window-screenshot.sh "$pid" "$out/library-theme-picker.png" ||
       fail "no window to capture"
   fi
-  [ "${3:-}" != open ] || return 0
+  [ "${2:-}" != open ] || return 0
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't hide the brush's theme picker"
   none_since '^browser: library hidden$' || fail "escape in the card's theme picker closed the Library"
@@ -745,14 +751,14 @@ rename_card() {
   none_since '^browser: renamed space ' || fail "escape in a card's name renamed the Space"
   none_since '^browser: library hidden$' || fail "escape in a card's name closed the Library"
 }
-appear light 191.3
-appear dark 231.7 open
+appear light
+appear dark open
 # Escape, and the brush straight after it, as the picker fades out: it shows again and stays, and
 # takes a click, as a press while it fades leaves the showing that goes, not the next (#2237).
 post key escape
-appear light 191.3
+appear light
 rename_card library-rename.png
-appear automatic 150.9
+appear automatic
 # The second card's slot hangs the icon picker from itself over the Library, which stays open,
 # and a click on the first card's slot, 264 to the left, moves the picker there. Escape closes the
 # picker, and then the Library.
@@ -1061,10 +1067,10 @@ show_space "key 1 ctrl" select-space ui "$first" "$a"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 
 # A right-click on the sidebar's empty space, three rows under the Space's one Today row, shows
-# New Tab, New Folder…, Show Top Bar and the Space's menu, and New Tab opens the command bar, as ⌘T
+# New Tab, New Folder… and the Space's menu, and New Tab opens the command bar, as ⌘T
 # does.
 post rightclick $(row 3)
-expect "^browser: menu shown $(cased "New Tab, New Folder…, Show Top Bar, Change Space Icon…, Rename Space…, $colors, $profile, \
+expect "^browser: menu shown $(cased "New Tab, New Folder…, Change Space Icon…, Rename Space…, $colors, $profile, \
 Live Folders › GitHub Pull Requests, \
 ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click under the Space's rows didn't show New Tab, New Folder… and the Space's menu"
@@ -1109,8 +1115,8 @@ done
 send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the … out over the page"
 send move $page_point
-send move 3 300
-send move 3 306
+send move 0 300
+send move 0 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 reveal_edit="207 117"
@@ -1374,10 +1380,10 @@ expect "^browser: menu shown $(cased "Change Space Icon…, Remove Icon, Rename 
 New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
 send choose "$(cased 'Remove Icon')"
 expect "^browser: iconed space $first none\$" "Remove Icon didn't take the Space's icon away"
-# Edit Theme Color… in the Space's menu opens the theme picker too. A swatch is the Space's colour,
-# its own hex, at its hue and lightness in the field, and the wave's knob dragged left washes the
+# Edit Theme Color… in the Space's menu opens the theme panel too. A palette is the Space's colour,
+# its own hex, at its hue and lightness in the field, and Intensity's thumb dragged left washes the
 # window's colours out, the window following as it goes; the core keeps the theme once it's let go.
-# A click outside the picker closes it.
+# A click outside the panel closes it.
 # The menu opens as a hand opens it, the release once it shows, which the menu takes: on Windows the
 # press left the browser window holding the mouse captured, so every drag in the picker went to it
 # and moved it (#2516). The picker's drags, and one from where it has nothing, leave the window's
@@ -1400,15 +1406,17 @@ expect "^browser: theme picker for $first\$" "Edit Theme Color… didn't open th
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
 recorded
-# From the menu it has no arrow, its card 14 inside the sidebar's edge and the window's top, as
-# Arc 1.171's is inside its 382 × 534 window there (#1400). Its window keeps the arrow's 13 left of
-# the card, so it starts a point past the edge. Linux and Windows put it on a whole point or a
-# fraction off, so a point either way passes.
+# It hangs beside the Space's name, its top at the name row's, 8 right of the sidebar's edge, the
+# window as big as the panel. Linux and Windows put it on a whole point or a fraction off, so a
+# point either way passes; the row is the sidebar's 34 tall round the name's middle.
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
 edge=$(grep '^browser: sidebar width ' "$log" | tail -1 | cut -d' ' -f4)
-echo "$at" | awk -v edge="${edge:-228}" '{ x = $1 - (edge + 1); y = $2 - 14 }
-  END { exit !(x * x <= 1 && y * y <= 1 && $3 == 370 && $4 == 509) }' ||
-  fail "Edit Theme Color… opened the theme picker at $at, not against the sidebar's edge at the top"
+echo "$at" | awk -v edge="${edge:-228}" -v beside="$(panel_at beside)" -v name="${name_point#* }" \
+  -v size="$(panel_at size)" '{ x = $1 - (edge + beside); split(size, s, " ") }
+  END { exit !(x * x <= 1 && $2 <= name + 1 && name - $2 <= 35 && $3 == s[1] && $4 == s[2]) }' ||
+  fail "Edit Theme Color… opened the theme picker at $at, not beside the Space's name"
+# A place on the panel, in the browser window's points.
+on_window() { echo "$at" | awk -v on="$*" '{ split(on, p, " "); print $1 + p[1], $2 + p[2] }'; }
 # Its shadow's window is round it, the card's shape cut out of it where the card is, or the page
 # shows through under the card (#2075). Only the Mac's host draws its own.
 if [ "$(uname)" = Darwin ]; then
@@ -1418,10 +1426,10 @@ if [ "$(uname)" = Darwin ]; then
 else
   echo "skip: the theme picker's shadow round it: only the Mac's host draws its own."
 fi
-# Between the swatches and the wave there's nothing: a drag from there changes nothing.
+# The note under the bars is only words: a drag along it changes nothing.
 themes=$(grep -c "^browser: themed space $first " "$log" || true)
-empty=$(echo "$at" | awk '{ print $1 + 13 + 178.5, $2 + 410 }')
-emptied=$(echo "$at" | awk '{ print $1 + 13 + 218.5, $2 + 410 }')
+empty=$(on_window $(panel_at note 2))
+emptied=$(on_window $(panel_at note 42))
 send press $empty
 send dragto $emptied
 send release $emptied
@@ -1430,53 +1438,63 @@ frame_kept "a drag from the picker's empty space"
   fail "a drag from the picker's empty space changed the theme: $(grep "^browser: themed space $first " "$log" | tail -1)"
 [ "$(grep '^browser: theme picker \(shown\|hidden\)$' "$log" | tail -1)" = "browser: theme picker shown" ] ||
   fail "a drag from the picker's empty space closed it"
-send clickkey "$(swatch_x 7)" $swatch_y
-blue='x=-0.619[0-9] y=-0.242[0-9] colors=1'
-expect "^browser: theme picker set $first $blue intensity=0.810 " "the blue swatch gave no colour"
-expect "^browser: colored space $first 7eb6d5\$" "the swatch didn't give the Space its colour"
-expect "^browser: themed space $first $blue intensity=0.810 " "the core didn't keep the swatch"
-# The knob's middle is 30 to 231 from the card's left, 13 in, 452 down: 192.8 at 0.81.
-knob=$(echo "$at" | awk '{ print $1 + 13 + 192.8, $2 + 452 }')
-washed=$(echo "$at" | awk '{ print $1 + 13 + 100, $2 + 452 }')
+# The sixth palette, slate, is one colour, its hex near its token's. Where the field has it is the
+# panel's to say: the steps after read it from the line the panel logs.
+send clickkey $(panel_at palette 6)
+expect "^browser: theme picker set $first x=[-0-9.]* y=[-0-9.]* colors=1 intensity=0.810 " \
+  "the slate palette gave no colour"
+main=$(grep "^browser: theme picker set $first " "$log" | tail -1 | cut -d' ' -f6-7)
+expect "^browser: colored space $first [0-9a-f]*\$" "the palette didn't give the Space its colour"
+slate=$(grep "^browser: colored space $first " "$log" | tail -1 | cut -d' ' -f5)
+near_color "$slate" "$(panel_color 6)" || fail "the slate palette coloured the Space $slate, not $(panel_color 6)"
+expect "^browser: themed space $first $main colors=1 intensity=0.810 " "the core didn't keep the palette"
+# Intensity's thumb, at 0.81, dragged to 0.35.
+knob=$(on_window $(panel_at bar intensity 0.81))
+washed=$(on_window $(panel_at bar intensity 0.35))
 send press $knob
 expect '^browser: theme picker handles 1 drawn, intensity held$' \
-  "the wave's knob wasn't drawn held as it was pressed"
+  "Intensity's thumb wasn't drawn held as it was pressed"
 send dragto $washed
 send release $washed
-# The pointer lands on a whole point, and the card's left needn't be one, so the drag ends a little
-# either side.
-expect "^browser: theme picker set $first $blue intensity=0.3[45][0-9] " \
-  "the wave's knob dragged left didn't wash the colour out"
-expect "^browser: themed space $first $blue intensity=0.3[45][0-9] " \
+# The pointer lands on a whole point, and the panel's left needn't be one, so the drag ends a
+# little either side.
+expect "^browser: theme picker set $first $main colors=1 intensity=0.3[45][0-9] " \
+  "Intensity's thumb dragged left didn't wash the colour out"
+expect "^browser: themed space $first $main colors=1 intensity=0.3[45][0-9] " \
   "the core didn't keep the theme's intensity"
-frame_kept "a drag on the wave's knob"
-# The grain's dial, 298.5 across the card and 452 down, turns for a drag across its top.
-dial=$(echo "$at" | awk '{ print $1 + 13 + 298.5, $2 + 425 }')
-turned=$(echo "$at" | awk '{ print $1 + 13 + 338.5, $2 + 425 }')
+frame_kept "a drag on Intensity's thumb"
+# Grain's thumb, at none, dragged right gives the theme grain.
+dial=$(on_window $(panel_at bar grain 0))
+turned=$(on_window $(panel_at bar grain 0.3))
 send press $dial
 send dragto $turned
 send release $turned
-expect "^browser: themed space $first $blue intensity=0.3[45][0-9] grain=0\.[0-9]*[1-9]" \
-  "a drag on the grain's dial didn't give the theme grain"
-frame_kept "a drag on the grain's dial"
-# + twice puts three colours round the blue, the others 150° and 210° on, and the third dragged
+expect "^browser: themed space $first $main colors=1 intensity=0.3[45][0-9] grain=0\.[0-9]*[1-9]" \
+  "a drag on Grain's thumb didn't give the theme grain"
+frame_kept "a drag on Grain's thumb"
+# + twice puts three colours round the slate, the others 150° and 210° on, and the third dragged
 # alone goes to a place of its own, the other two staying, which the core keeps.
-send clickkey 211.5 316.5
-expect "^browser: themed space $first x=-0.619[0-9] y=-0.242[0-9] colors=2 " "+ didn't add a second colour"
-send clickkey 211.5 316.5
-expect "^browser: themed space $first x=-0.619[0-9] y=-0.242[0-9] colors=3 " "+ didn't add a third colour"
+send clickkey $(panel_at plus 1)
+expect "^browser: themed space $first $main colors=2 " "+ didn't add a second colour"
+send clickkey $(panel_at plus 2)
+expect "^browser: themed space $first $main colors=3 " "+ didn't add a third colour"
 # Pressed before its frame is drawn, a handle wouldn't follow the drag's moves.
 expect '^browser: theme picker handles 3 drawn$' "the picker didn't draw the three colours at rest"
-# The blue is 201.4° round and 0.665 out, so the third is at 51.4°, (0.415, 0.519) in the field,
-# whose middle is 178.5 from the card's top and 13 + 178.5 from its left, at 170 a unit. Dragged
-# to (0.3, -0.55), it's 97.2° on from the blue and 0.038 nearer the middle.
-third=$(echo "$at" | awk '{ print $1 + 13 + 178.5 + 170 * 0.415, $2 + 178.5 + 170 * 0.519 }')
-placed=$(echo "$at" | awk '{ print $1 + 13 + 178.5 + 170 * 0.3, $2 + 178.5 - 170 * 0.55 }')
+# The field's point $1° round from the slate's, $2 further out.
+turned() {
+  echo "$main" | awk -v by="$1" -v out="$2" '{ x = substr($1, 3); y = substr($2, 3)
+    r = sqrt(x * x + y * y) + out; a = atan2(y, x) + by * atan2(0, -1) / 180
+    print r * cos(a), r * sin(a) }'
+}
+# The third is 210° on from the slate, as far out. Dragged to 97.2° on and 0.038 nearer the
+# middle, it goes there alone.
+third=$(on_window $(panel_at field $(turned 210 0)))
+placed=$(on_window $(panel_at field $(turned 97.2 -0.038)))
 send press $third
 expect '^browser: theme picker handles 3 drawn, 2 held$' "the third colour wasn't drawn held as it was pressed"
 send dragto $placed
 send release $placed
-alone="x=-0.619[0-9] y=-0.242[0-9] colors=3 .* places=150.00,0.0000,9[6-8]\.[0-9]*,-0.0[2-5][0-9]*"
+alone="$main colors=3 .* places=150.00,0.0000,9[6-8]\.[0-9]*,-0.0[2-5][0-9]*"
 expect "^browser: theme picker set $first $alone\$" "the third colour dragged alone didn't go to its own place"
 expect "^browser: themed space $first $alone\$" "the core didn't keep the third colour's place"
 frame_kept "a drag on a colour's dot"
@@ -1643,16 +1661,17 @@ send window 1
 # In the Library's Spaces, the first Space's top Today row dragged onto the second's card, which is
 # empty, moves its tab there as Move to does, and the Library stays open; dragged back from there,
 # it goes home (Arc's help centre, #688). Each card's tabs are under its name, 48 + 6 + 38 down, and
-# with no pinned tabs under the divider's 15, so its first row's middle is 127 down.
+# with no pinned tabs under the card's own divider, the 15 a card keeps where the sidebar has its
+# New Tab line, so the middle of its first row of 34 is 124 down.
 # The Library opens on the section it showed last, its Spaces.
 send key l cmd shift
 expect '^browser: library section spaces$' "⇧⌘L didn't open the Library on its Spaces, as it was left"
 expect '^browser: library shown$' "⇧⌘L didn't open the Library over the cards"
 card_drag() {
-  send press $1 127
-  send dragto $(($1 + 10)) 127
-  send dragto $2 127
-  send release $2 127
+  send press $1 124
+  send dragto $(($1 + 10)) 124
+  send dragto $2 124
+  send release $2 124
 }
 card_drag 260 524
 expect "^browser: library dragged [0-9]* to space $second\$" \

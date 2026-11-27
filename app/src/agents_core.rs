@@ -6,9 +6,8 @@ use std::ffi::CString;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use browser::agents::{
-    self, Agents, Browser, Failure, GlobalAgents, PageAction, Question, TabInfo,
-};
+use browser::agents::{self, Agents, Browser, Failure, GlobalAgents, PageAction, TabInfo};
+use browser::log;
 use gpui::{App, AppContext};
 
 use crate::{WINDOWS, bar_picks_host, bc, ids, name};
@@ -32,6 +31,34 @@ fn call<T>(core: impl FnOnce() -> T) -> T {
 }
 
 struct Core;
+
+/// bc_profile_search_url's shape, as browser_core.h declares it on core/profile-search-url
+/// (306b2ada4), in build 14: `size_t (bc_id profile, const char* text, char* url, size_t
+/// capacity)`. The caller's buffer takes the URL, so nothing is freed; 0 is no engine.
+type ProfileSearchUrl =
+    unsafe extern "C" fn(bc::bc_id, *const std::ffi::c_char, *mut std::ffi::c_char, usize) -> usize;
+
+/// bc_profile_search_url, where the core linked has it (build 14 on). It's looked up by name, so a
+/// core from before it still starts the app, which searches as it did; logged once, at the start.
+fn profile_search_url() -> Option<ProfileSearchUrl> {
+    static FOUND: std::sync::OnceLock<Option<ProfileSearchUrl>> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        #[cfg(unix)]
+        // SAFETY: dlsym reads the name, which ends in a zero byte, and answers null when nothing
+        // loaded has it. The core exports it only in ProfileSearchUrl's shape (306b2ada4).
+        let found = unsafe {
+            let found = libc::dlsym(libc::RTLD_DEFAULT, c"bc_profile_search_url".as_ptr());
+            (!found.is_null())
+                .then(|| std::mem::transmute::<*mut std::ffi::c_void, ProfileSearchUrl>(found))
+        };
+        #[cfg(not(unix))]
+        let found = None;
+        // check.sh reads this line.
+        let by = if found.is_some() { "profile" } else { "window" };
+        log!("browser: core searches by {by}");
+        found
+    })
+}
 
 impl Browser for Core {
     fn agent_space(&self, agent: &str) -> u64 {
@@ -216,10 +243,26 @@ impl Browser for Core {
         })
     }
 
-    fn ask(&self, question: Option<Question>, cx: &mut App) {
-        crate::update_shells_in(cx, |shell, cx| {
-            shell.set_agent_question(question.clone(), cx)
-        });
+    fn search_url(&self, space: u64, words: &str) -> Option<String> {
+        let profile = unsafe { bc::bc_space_profile(space) };
+        // The engine of the Space's profile, whichever window is open, where the core has it.
+        if let Some(search) = profile_search_url() {
+            return crate::url_for(words, |words, url, capacity| unsafe {
+                search(profile, words, url, capacity)
+            });
+        }
+        // Else that of a window that shows the profile. A thread's Space has none of its own, and
+        // with no window of its profile open there's no engine to search with, never another
+        // profile's.
+        let window = WINDOWS.with_borrow(|windows| {
+            (windows.iter())
+                .filter(|window| window.regular())
+                .find(|window| unsafe { bc::bc_space_profile(bc::bc_window_space(window.id)) } == profile)
+                .map(|window| window.id)
+        })?;
+        crate::url_for(words, |words, url, capacity| unsafe {
+            bc::bc_search_url(window, std::ptr::null(), words, url, capacity)
+        })
     }
 
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
@@ -255,10 +298,6 @@ impl Browser for Core {
 
     fn answer_download(&self, download: u64, keep: bool) {
         unsafe { bc::bc_agent_download_answer(download, keep) };
-    }
-
-    fn file_field_choose(&self, field: u64, window: u64) -> bool {
-        unsafe { bc::bc_file_field_choose(field, window) }
     }
 
     fn file_field_drop(&self, field: u64) {
@@ -330,10 +369,12 @@ impl Browser for Core {
 
     fn user_space(&self, like: u64) -> u64 {
         let profile = unsafe { bc::bc_space_profile(like) };
+        // A private window's is never one: agents get no path into it.
         let users = |space: u64| {
             space != 0
                 && name(bc::bc_space_agent, space).is_empty()
                 && unsafe { bc::bc_space_profile(space) } == profile
+                && !self.private_space(space)
         };
         let shown = unsafe { bc::bc_window_space(crate::front().0) };
         match users(shown) {
@@ -343,6 +384,38 @@ impl Browser for Core {
                 .find(|&space| users(space))
                 .unwrap_or(shown),
         }
+    }
+
+    fn space_profile(&self, space: u64) -> String {
+        profile_folder(unsafe { bc::bc_space_profile(space) })
+    }
+
+    fn profile_space(&self, profile: &str) -> u64 {
+        let users = |space: u64| {
+            space != 0
+                && name(bc::bc_space_agent, space).is_empty()
+                && profile_folder(unsafe { bc::bc_space_profile(space) }) == profile
+        };
+        let shown = unsafe { bc::bc_window_space(crate::front().0) };
+        match users(shown) {
+            true => shown,
+            false => (ids(bc::bc_spaces).into_iter())
+                .find(|&space| users(space))
+                .unwrap_or(0),
+        }
+    }
+
+    fn has_profile(&self, profile: &str) -> bool {
+        (ids(bc::bc_profiles).into_iter()).any(|each| profile_folder(each) == profile)
+    }
+
+    fn private_space(&self, space: u64) -> bool {
+        space != 0
+            && WINDOWS.with_borrow(|windows| {
+                (windows.iter()).any(|window| {
+                    window.private && unsafe { bc::bc_window_space(window.id) } == space
+                })
+            })
     }
 
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
@@ -387,6 +460,35 @@ impl Browser for Core {
         };
         unsafe { bc::bc_profile_read(profile, read, url.as_ptr(), max_bytes, timeout_ms) };
     }
+
+    fn open_sign_in(&self, url: &str, cx: &mut App) -> Option<(u64, u64)> {
+        // The user's window in front, whose profile's private session the page opens in, as
+        // ⇧⌘N's window does.
+        let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())?;
+        let profile = unsafe { bc::bc_space_profile(bc::bc_window_space(from.id)) };
+        if profile == 0 {
+            return None;
+        }
+        let private = Some(crate::browser_windows::Own::Private(profile));
+        let window = crate::window_opening::open_window(Some(from), private, cx)?;
+        let tab = crate::tabs::open_typed(window, url, "", false);
+        if tab == 0 {
+            unsafe { bc::bc_window_close(window) };
+            return None;
+        }
+        unsafe { bc::bc_window_select(window, tab) };
+        // It names no address: a sign-in's can hold its state.
+        browser::log!("browser: sign-in page {tab} in private window {window}");
+        Some((tab, window))
+    }
+
+    fn close_sign_in(&self, tab: u64, window: u64, cx: &mut App) {
+        let space = unsafe { bc::bc_window_space(window) };
+        match self.space_tab_ids(space, cx).as_slice() {
+            [only] if *only == tab => unsafe { bc::bc_window_close(window) },
+            _ => unsafe { bc::bc_tab_close(tab, false) },
+        }
+    }
 }
 
 /// The core's answer to a saved read (bc_profile_read), for what waits on it.
@@ -417,7 +519,7 @@ fn path() -> std::path::PathBuf {
 }
 
 /// Makes the Agents, off, and reads what was saved in the background, which turns the server on
-/// if the user left it on. Once, as the first window's UI shows.
+/// if the user left it on. Once: as first run's card starts, else as the first window's UI shows.
 pub fn start(cx: &mut App) {
     if agents::global(cx).is_some() {
         return;
@@ -436,6 +538,7 @@ pub fn start(cx: &mut App) {
         bridge = agents::bridge::store_alias(&local);
     }
     let bridge = agents::bridge::launch(&bridge, agents::bridge::flatpak_id().as_deref());
+    profile_search_url();
     let made = Agents::new(
         Rc::new(Core),
         Arc::new(agents::System),
@@ -452,10 +555,12 @@ pub fn start(cx: &mut App) {
     cx.set_global(GlobalAgents(made.clone()));
     // The bar in an agent's Space follows what it does, and what the user holds from it.
     cx.observe(&made, |agents, cx| {
+        crate::broom_host::agents_changed(cx);
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);
-        browser::needs_you::follow(&cards, cx);
+        let when = agents.read(cx).notify();
+        browser::needs_you::follow(&cards, when, cx);
         // Each task that ended goes to Library › Agents of its home Space's profile, as its receipt
         // shows it, for 30 days (browser::agent_history).
         let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));
@@ -474,10 +579,11 @@ pub fn start(cx: &mut App) {
             );
         }
         let archived = agents.read(cx).archived_tasks(cx);
+        let kept = agents.read(cx).kept_cards(cx);
         let shells: Vec<_> = WINDOWS
             .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());
         let conversation = |agent: &str, cx: &App| agents.read(cx).conversation(agent, cx);
-        browser::shell::send_agents(status, cards, archived, conversation, &shells, cx);
+        browser::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx);
         browser::command_bar::task_agents_changed(cx);
     })
     .detach();
@@ -488,6 +594,14 @@ pub fn start(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// The name of `profile`'s own folder, "Default" or "Profile 2", or nothing for one the core
+/// doesn't know. The core's number for a profile is new each run; its folder's name isn't.
+pub fn profile_folder(profile: u64) -> String {
+    (crate::bar_picks_host::folder(profile))
+        .and_then(|folder| Some(folder.file_name()?.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
 /// Tells the Agents what the core reported, once the update the report came from, if any, is over.

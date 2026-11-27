@@ -1,8 +1,8 @@
 # check.sh runs this at 120.
 # ⌘F opens the find bar over the page with the keyboard, and what's typed right after it lands
-# there. Typing finds in the page, with "n/m", once Japanese input has committed, and return,
-# shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and from the
-# page. A text the page doesn't have shows NOT FOUND. A click
+# there. Typing finds in the page, with "n/m", once Japanese input has committed, and escape while
+# it composes cancels the composition and leaves the bar open. Return, shift-return, ⌘G and ⇧⌘G and
+# the bar's arrows go through the matches, from the bar and from the page. A text the page doesn't have shows NOT FOUND. A click
 # on the page leaves the bar open, and the bar keeps its place through a resize and full screen.
 # Each tab has its own find, which a new tab starts from the text found last; escape and the bar's
 # close button close it, and so does another page. ⌘J from the page and Edit › Find › Jump to
@@ -60,17 +60,22 @@ in_find_bar() {
 expect_find() {
   expect "^browser: find $1 $2\$" "$3: $(grep "^browser: find $1 " "$log" | tail -1)"
 }
-# The find bar is 300 points wide and 32 high, 20 from the window's top right corner, one of the
-# windows over the page, which in full screen can also be its toast. Sets $content to the window's
-# width.
+# The find bar is 300 points wide and 32 high, one of the windows over the page, which in full
+# screen can also be its toast. It's twice the card's inset from the window's top right corner
+# (find_bar.rs), and the page's right edge is the card's inset from the window's. Sets $content to
+# the window's width.
 check_find_bar() {
   send layout
   children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
     sed -n 's/^browser: layout child //p' | tr '\n' ';')
   content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
     sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+  page_right=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed -n 's/.*, WebContentsViewCocoa \([0-9]*\),[0-9]* \([0-9]*\)x.*/\1 + \2/p')
+  [ -n "$page_right" ] || fail "$1: the layout named no page"
+  page_inset=$((content - ($page_right)))
   case ";$children" in
-  *";$((content - 320)),20 300x32;"*) ;;
+  *";$((content - 300 - 2 * page_inset)),$((2 * page_inset)) 300x32;"*) ;;
   *) fail "$1: no find bar among the windows over the page (${children:-none}), $content wide" ;;
   esac
 }
@@ -123,20 +128,20 @@ else
   ../tools/window-screenshot.sh "$pid" "$out/find.png" || fail "no window to capture"
 
   # The pointer resting on next names it and its key in the tooltip, hung off its glyph as the
-  # header's buttons' are, and the click on it ends the tooltip. The bar is 20 in from the page's
-  # corner, and the button 2 under its top and 28 tall, so its middle is at 36 and the tooltip's
-  # top 7 under that, at 43.
-  send move $((content - 320 + 252)) 36
+  # header's buttons' are, and the click on it ends the tooltip. The bar is 16 down, twice the
+  # card's inset of 8, and the button 2 under its top and 28 tall, so its middle is at 32 and the
+  # tooltip's top 7 under that, at 39.
+  send move $((content - 320 + 252)) 32
   next_keys=⌘G
   [ "$(uname)" = Darwin ] || next_keys=Ctrl+G
   expect "^browser: tooltip shown Next $next_keys\$" \
     "resting on the find bar's next didn't show Next and $next_keys"
-  expect '^browser: tooltip at [0-9.]* 43 ' "the find bar's tooltip didn't hang off its next's glyph"
+  expect '^browser: tooltip at [0-9.]* 39 ' "the find bar's tooltip didn't hang off its next's glyph"
   expect '^browser: tooltip window shown$' "the find bar's next's tooltip didn't fade in"
   ../tools/window-screenshot.sh "$pid" "$out/find-tooltip.png" || fail "no window to capture"
 
   # The bar's next and previous go through the matches. Arc's are 28 pt at 212 and 238 in the bar.
-  send click $((content - 320 + 252)) 36
+  send click $((content - 320 + 252)) 32
   expect '^browser: tooltip hidden$' "a click on the find bar's next didn't end its tooltip"
   expect_find "$first" "open 2 of 3 apple" \
     "a click on the find bar's next didn't go to the next match"
@@ -181,6 +186,24 @@ else
   expect_find "$first" "open 1 of 1 日本語" "the find bar didn't find the committed text"
   grep -q '^browser: find [0-9]* open [0-9-]* of [0-9-]* n' "$log" &&
     fail "the find bar searched for the composition"
+  # Escape while a composition is open is the composition's: it cancels it and leaves the bar open,
+  # still finding what was committed, and the next Escape closes the bar (#4108).
+  send ime on
+  send type nihongo
+  [ "$marked" != none ] || fail "the find bar didn't take the second composition"
+  send key escape
+  [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
+  logged '^browser: find bar hidden$' && fail "escape closed the find bar while composing"
+  logged "^browser: find $first " && fail "escape changed the find while composing"
+  send ime off
+  send key escape
+  expect_find "$first" "closed" "escape after the composition didn't close the find"
+  expect '^browser: find bar hidden$' "escape after the composition didn't hide the find bar"
+  # Open again from the page, as it was, on its match.
+  send key f cmd
+  expect '^browser: find bar drew "日本語" 0/1$' "⌘F didn't open the find again with its text"
+  send key return
+  expect_find "$first" "open 1 of 1 日本語" "return didn't go to the match again"
 
   # A resize and full screen keep the bar by the window's top right corner.
   send resize 1000 700
@@ -276,11 +299,14 @@ else
   expect '^browser: zoom hud shown$' "⌘- didn't show the zoom HUD"
   send layout
   # The HUD's window reaches 40 past its pill on every side, for the popover level's shadow, so the
-  # pill sits 116 in from the content's right and 60 down.
+  # pill's right edge is the find bar's, its window 138 left of that, its top 8 under the bar's
+  # foot.
   hud=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child .* 178x122$' |
     sed 's/^browser: layout child //')
-  [ "$hud" = "$((content - 156)),20 178x122" ] ||
-    fail "the zoom HUD is at ${hud:-nowhere} in a window $content wide, under the find bar"
+  bar=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child .* 300x32$' |
+    sed 's/^browser: layout child \([0-9]*\),\([0-9]*\) .*/\1 \2/')
+  [ -n "$bar" ] && [ "$hud" = "$((${bar% *} + 300 - 138)),$((${bar#* } + 32 + 8 - 40)) 178x122" ] ||
+    fail "the zoom HUD is at ${hud:-nowhere}, the find bar at ${bar:-nowhere}: not under it"
   ../tools/window-screenshot.sh "$pid" "$out/zoom.png" || fail "no window to capture"
   send menu "Zoom In"
   expect '^browser: command zoom-in via ui$' "the View menu's Zoom In didn't reach the UI"
@@ -334,7 +360,7 @@ await_views() {
   done
   fail "$2: the window shows $(echo "$views" | wc -l | tr -d ' ') page views, not $1"
 }
-# DevTools fill the card, which is 228 from the left and 10 from the other edges, and the page
+# DevTools fill the card, which is 228 from the left and 8 from the other edges, and the page
 # keeps its left part.
 check_docked() {
   [ -n "$sees_devtools" ] || return 0
@@ -344,10 +370,10 @@ check_docked() {
   devtools=$(echo "$views" | sed -n 1p)
   docked=$(echo "$views" | sed -n 2p)
   docked_width=$(echo "$docked" | sed 's/.* \([0-9]*\)x.*/\1/')
-  [ "$devtools" = "228,10 $((width - 238))x$((height - 20))" ] ||
+  [ "$devtools" = "228,8 $((width - 236))x$((height - 16))" ] ||
     fail "$1: DevTools are at $devtools in a $content window"
-  [ "$docked" = "228,10 ${docked_width}x$((height - 20))" ] &&
-    [ "$docked_width" -gt 0 ] && [ "$docked_width" -lt $((width - 238)) ] ||
+  [ "$docked" = "228,8 ${docked_width}x$((height - 16))" ] &&
+    [ "$docked_width" -gt 0 ] && [ "$docked_width" -lt $((width - 236)) ] ||
     fail "$1: the page is at $docked, beside DevTools at $devtools"
 }
 send click $page_point
@@ -620,4 +646,4 @@ quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
 dock right
-echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. The pointer resting on next names it and its key in a tooltip hung off its glyph, which the click ends. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-tooltip.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"
+echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed and escape cancels a composition without closing the bar, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. The pointer resting on next names it and its key in a tooltip hung off its glyph, which the click ends. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-tooltip.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"

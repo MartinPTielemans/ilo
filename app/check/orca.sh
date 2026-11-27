@@ -137,46 +137,46 @@ rm -f "$saved" "$profile_dir/Account"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
 mkdir -p "$out/orca-home"
 orca_mark launch
-# A count endpoint nothing listens on, so the opt-ins offer the count's switch, as the prod build's
-# do, while it stays off and nothing is sent.
+# A count endpoint nothing listens on, so the last step offers Help improve's switch, as the prod
+# build's does, while it stays off and nothing is sent.
 DBUS_SESSION_BUS_ADDRESS=$orca_session BROWSER_IMPORT_HOME="$out/orca-home" BROWSER_DRIVE=1 \
   BROWSER_ONBOARDING=light "$browser" --daily-count-url=http://127.0.0.1:9/v1/daily \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
-await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
-orca_settled
-# The step after the intro, from the steps the app named at launch, marked once Orca is quiet on
-# the intro: the next thing is the intro leaving for it, and Orca speaks within milliseconds of
-# that, sooner than a wait for the app's line sees it.
-orca_next=$(sed -n 's/^browser: onboarding steps intro \([a-z-]*\).*/\1/p' "$log")
-[ -n "$orca_next" ] || fail "the app didn't name a step after the intro"
-orca_mark "$orca_next step"
-await '^browser: onboarding left intro ' || fail "the intro didn't go on by itself"
-await "^browser: onboarding step $orca_next settled\$" || fail "the $orca_next step didn't draw"
-orca_settled
-orca_press tab
-orca_press tab
-orca_press tab shift
-orca_press down
-# On through the steps as Esc goes, each one's speech recorded as it comes. At the opt-ins, whose
-# keyboard rests on Continue (#3498), ⇥ goes past Skip to each switch and on to Continue, and ⇧⇥
-# back to the last switch, before the Esc.
-orca_switches=
-for _ in $(seq 10); do
-  grep -q '^browser: onboarding done$' "$log" && break
-  if [ -z "$orca_switches" ] && grep -q '^browser: onboarding step opt-ins' "$log"; then
-    orca_switches=1
-    await '^browser: onboarding step opt-ins settled$' || fail "the opt-ins step didn't draw"
-    orca_settled
-    orca_press tab
-    orca_press tab
-    orca_press tab
-    orca_press tab
-    orca_press tab shift
-  fi
-  orca_press escape
+await '^browser: onboarding started$' || fail "the onboarding didn't start"
+# On through the card's steps, each left the way that takes nothing it offers (pass_step), each
+# one's speech recorded as it comes, marked once Orca is quiet on the step before: the next thing is
+# the key or click leaving it, and Orca speaks within milliseconds of that, sooner than a wait for
+# the app's line sees it. Your first Space (4), which every run shows, rests on its swatches, where
+# ⇥ goes on to Back and Next, ⇧⇥ back, and → picks a colour; step 7, the last, rests on
+# Start Browsing, where ⇥ goes round its row's button and Help improve's switch, and ⇧⇥ back. Each
+# goes back as far as it went, so the step's ↩ is still its main button's.
+for orca_step in $(onboarding_steps); do
+  step_settled "$orca_step" "the onboarding's step $orca_step didn't draw"
+  orca_settled
+  case $orca_step in
+    4)
+      orca_press tab
+      orca_press tab
+      orca_press tab shift
+      orca_press tab shift
+      orca_press right
+      ;;
+    7)
+      orca_press tab
+      orca_press tab
+      orca_press tab
+      orca_press tab shift
+      orca_press tab shift
+      orca_press tab shift
+      ;;
+  esac
+  orca_mark "leave $orca_step"
+  pass_step "$orca_step"
 done
+expect '^browser: onboarding done$' "the onboarding didn't end after its last step"
+orca_settled
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
 orca_mark "command bar after the onboarding"
 orca_settled

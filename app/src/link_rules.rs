@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    App, ClickEvent, Context, Entity, Focusable, Hsla, MouseButton, Pixels, Point, SharedString,
-    Subscription, Window, canvas, div, point, prelude::*, px, rgb, svg,
+    App, ClickEvent, Context, Entity, Focusable, MouseButton, Pixels, Point, SharedString,
+    Subscription, Window, canvas, div, point, prelude::*, px, svg,
 };
 
 use crate::settings_rows::{
@@ -16,7 +16,6 @@ use crate::settings_rows::{
 };
 use crate::shell::MenuEntry;
 use crate::text_input::TextInput;
-use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
 use crate::tokens::settings::{
     ADD_X, BUTTON_GLYPH, BUTTONS_TOP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     FIELD_PADDING, GROUP_GAP, ROW_X, RULE_CONDITION, RULE_GAP, RULE_SPACE, SHORT_PADDING,
@@ -65,10 +64,12 @@ fn rule_name(index: usize, part: &str) -> SharedString {
     format!("Rule {} {part}", index + 1).into()
 }
 
-/// Little ilo's name in the pop-ups, the rules' file and check.sh's lines.
-const LITTLE_NAME: &str = "Little ilo";
-/// What a rule to Little ilo's pop-up says while Little ilo is off.
-const LITTLE_OFF: &str = "Little ilo is off";
+/// Little Window's place in the rules' file, unchanged so profiles from before the name keep it.
+const LITTLE_KEY: &str = "Little ilo";
+/// Little Window's name in the pop-ups and check.sh's lines.
+const LITTLE_NAME: &str = "Little Window";
+/// What a rule to Little Window's pop-up says while Little Window is off.
+const LITTLE_OFF: &str = "Little Window is off";
 
 /// Where a rule sends a link in place of a Space: the Space the regular window in front shows, as
 /// Arc's Most Recent Space. No Space of the core's has this id.
@@ -223,7 +224,7 @@ impl Rules {
     /// Meet rule was added gets it after its own, as a profile from before it does.
     pub fn parse(text: &str, spaces: &[u64]) -> Rules {
         let space = |place: &str| match place {
-            LITTLE_NAME => Some(LITTLE),
+            LITTLE_KEY => Some(LITTLE),
             FRONT_KEY => Some(FRONT),
             place => {
                 let place = place.parse::<usize>().ok()?;
@@ -271,7 +272,7 @@ impl Rules {
     /// the Meet rule was added, so a trashed one stays gone.
     pub fn to_text(&self, spaces: &[u64]) -> String {
         let place = |space: u64| match spaces.iter().position(|&each| each == space) {
-            _ if space == LITTLE => LITTLE_NAME.to_string(),
+            _ if space == LITTLE => LITTLE_KEY.to_string(),
             _ if space == FRONT => FRONT_KEY.to_string(),
             Some(index) => (index + 1).to_string(),
             None => "-".to_string(),
@@ -437,25 +438,17 @@ impl LinkRulesView {
             return;
         }
         self.look = look;
-        let selection = Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION);
-        for field in &self.fields {
-            field.update(cx, |field, cx| {
-                field.set_colors(look.detail.into(), look.ink.into(), selection);
-                cx.notify();
-            });
-        }
         cx.notify();
     }
 
     /// A field for each rule, holding its text, whose typing changes the rule.
     fn make_fields(&mut self, cx: &mut Context<Self>) {
-        let look = self.look;
         self.fields = (self.rules.rules.iter().enumerate())
             .map(|(index, rule)| {
+                let colors = crate::settings_rows::field_colors(cx, |rules: &Self| rules.look);
                 cx.new(|cx| {
                     TextInput::new("example.com", cx)
-                        .placeholder_color(look.detail)
-                        .caret_color(look.ink)
+                        .follows(colors)
                         .with_text(rule.text.clone().into())
                         .spoken(rule_name(index, "Text"))
                 })

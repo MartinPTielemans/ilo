@@ -23,6 +23,7 @@ pub fn keeps_passkeys() -> bool {
 }
 
 unsafe extern "C" {
+    pub fn host_has_window_material() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_set_scripting(scripting: *const host_scripting);
     // Apple's Translation (platform/mac/translate.swift): the user's language, where the Mac
@@ -250,8 +251,6 @@ unsafe extern "C" {
     ) -> bool;
     #[cfg(target_os = "windows")]
     pub fn host_maximize_window(ui_view: *mut c_void);
-    #[cfg(target_os = "windows")]
-    pub fn host_set_window_buttons_right(ui_view: *mut c_void, right: bool);
     pub fn host_add_reveal(
         ui_view: *mut c_void,
         reveal_view: *mut c_void,
@@ -260,8 +259,6 @@ unsafe extern "C" {
     pub fn host_show_reveal(ui_view: *mut c_void, width: f64);
     pub fn host_hide_reveal(ui_view: *mut c_void);
     pub fn host_detent();
-    pub fn host_dock_dot_launch(profile_dir: *const c_char);
-    pub fn host_dock_dot(colored: bool, color: u32);
     pub fn host_app_active() -> bool;
     pub fn host_needs_you_badge(count: c_int);
     #[cfg(not(target_os = "linux"))]
@@ -337,6 +334,15 @@ unsafe extern "C" {
     pub fn host_add_settings(settings_view: *mut c_void);
     pub fn host_show_settings();
     pub fn host_hide_settings();
+    pub fn host_hold_window(ui_view: *mut c_void);
+    pub fn host_add_first_run(first_run_view: *mut c_void);
+    pub fn host_set_first_run_frame(width: f64, height: f64, radius: f64);
+    #[cfg(target_os = "macos")]
+    pub fn host_grow_first_run() -> bool;
+    #[cfg(target_os = "macos")]
+    pub fn host_set_first_run_reveal(window: f64, glass: f64);
+    pub fn host_show_first_run();
+    pub fn host_close_first_run();
     pub fn host_close_other_window() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_ask(
@@ -372,6 +378,19 @@ unsafe extern "C" {
         width: f64,
         height: f64,
     );
+    #[cfg(target_os = "macos")]
+    pub fn host_set_menu_glass(panels: *const f64, count: usize, light: bool);
+    #[cfg(target_os = "macos")]
+    pub fn host_set_glass(
+        view: *mut c_void,
+        left: f64,
+        top: f64,
+        width: f64,
+        height: f64,
+        radius: f64,
+        opacity: f64,
+        light: bool,
+    ) -> bool;
     pub fn host_hide_menu_window();
     pub fn host_menu_area(ui_view: *mut c_void, in_reveal: bool, area: *mut f64);
     pub fn host_show_site_controls(

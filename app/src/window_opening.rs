@@ -152,6 +152,31 @@ pub(crate) fn open_window_after(id: bc::bc_id, cx: &mut App) -> Option<bc::bc_id
 thread_local! {
     /// Whether the window opened last came on screen with its first frame drawn.
     static DRAWN_BEFORE_SHOWN: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// The first window's view, kept off screen while first run shows in its own window.
+    static HELD_FOR_FIRST_RUN: Cell<Option<*mut c_void>> = const { Cell::new(None) };
+}
+
+/// Puts the first window, which first run kept off screen, on screen as first run ends, drawn.
+pub(crate) fn show_window_held_for_first_run(cx: &mut App) {
+    if let Some(ui_view) = HELD_FOR_FIRST_RUN.take() {
+        // Drawn before it's on screen, as a later window is (#2141): the Mac draws a window only
+        // once it reports it visible, some frames on, which it would spend blank where first
+        // run's grown card just was.
+        #[cfg(target_os = "macos")]
+        if let Some(handle) = WINDOWS.with_borrow(|windows| {
+            (windows.iter())
+                .find(|each| each.ui_view == ui_view)
+                .map(|each| each.handle)
+        }) {
+            cx.update_window(handle, |_, window, cx| window.draw_and_present(cx))
+                .ok();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = cx;
+        unsafe { platform::host_show_window(ui_view) };
+        // check.sh reads this line.
+        log!("browser: window on screen after first run");
+    }
 }
 
 /// When the window opened last came on screen with its first frame drawn, so that frame was on
@@ -407,7 +432,7 @@ pub(crate) fn open_window_as(
         log!("browser: window back windowed until its UI shows");
     }
     if let Some(Own::Little { .. }) = own {
-        unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
+        unsafe { platform::host_set_window_little(ui_view, !browser::motion::still(cx)) };
     }
     // A later window comes on screen drawn, as the overlays do: AppKit reports a new window
     // visible, which GPUI on the Mac draws only once it has, about 100 ms after it's ordered in,
@@ -421,7 +446,15 @@ pub(crate) fn open_window_as(
             .is_ok();
     #[cfg(not(target_os = "macos"))]
     let drawn = false;
+    // First run is the only window on screen until it ends (spec-first-run.md), so a launch that
+    // starts it keeps the browser window off screen till then; the timer below finishes opening.
+    let held = first && window.read(cx).is_ok_and(|shell| shell.first_run_open());
     match (&from, saved) {
+        _ if held => unsafe {
+            platform::host_hold_window(ui_view);
+            HELD_FOR_FIRST_RUN.set(Some(ui_view));
+            log!("browser: window held for first run");
+        },
         (Some(from), Some(_)) => unsafe {
             platform::host_show_window_behind(ui_view, from.ui_view)
         },
@@ -644,7 +677,7 @@ pub(crate) fn finish_opening(
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
         platform::host_watch_ui_keyboard(ui_keyboard_left);
-        platform::host_watch_resigning_active(launch_picture_on_resigning);
+        platform::host_watch_resigning_active(resigning_active);
         platform::host_watch_active(became_active);
     }
     follow_reduce_motion(cx);
@@ -688,19 +721,6 @@ pub(crate) fn finish_opening(
                     let (x, y) = icon_picker::ARROW_TIP;
                     platform::host_set_overlay_growth(ICON_PICKER, x.into(), y.into());
                 }
-            }
-        },
-        cx,
-    );
-    when_asked::<agent_request::AgentRequest>(
-        |cx| {
-            if let Some(shown) = agent_request::open(Rc::new(AgentRequestHost), cx)
-                && let Ok(view) = shown.update(cx, |_, window, _| ns_view(window))
-            {
-                let radius = agent_request::RADIUS.into();
-                elevate(AGENT_REQUEST, Level::Popover);
-                let dismissed = agent_request_dismissed;
-                unsafe { platform::host_add_overlay(AGENT_REQUEST, view, radius, dismissed) };
             }
         },
         cx,
@@ -767,7 +787,8 @@ pub(crate) fn finish_opening(
         },
         cx,
     );
-    // The window the toast shows over gives its colour and palette.
+    // The window the toast and the link target show over gives its colour and palette; the toast
+    // takes only the palette, as its fill is what floats' (#4090).
     let look = |cx: &App| {
         let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
         let shell = shell?.upgrade()?;
@@ -782,7 +803,7 @@ pub(crate) fn finish_opening(
             move |cx| {
                 if let Some(toast) = toast::open(
                     toast_host.clone(),
-                    move |cx| look(cx).unwrap_or_default(),
+                    move |cx| look(cx).map(|(_, palette)| palette).unwrap_or_default(),
                     cx,
                 ) && let Ok(view) = toast.update(cx, |_, window, _| ns_view(window))
                 {
@@ -987,6 +1008,7 @@ pub(crate) unsafe extern "C" fn window_closed(_: *mut c_void, id: bc::bc_id) {
         update_app(|cx| {
             find_bar::window_closed(id, cx);
             offer::window_closed(id, cx);
+            broom_host::window_closed(id, cx);
             for child in window.children {
                 child.update(cx, |_, window, _| window.remove_window()).ok();
             }

@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.3.0"
+version = "0.1.0"
 dependencies = [
  "adblock",
  "async-io",
@@ -711,6 +711,7 @@ dependencies = [
  "raw-window-handle",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tiny-skia",
  "unicode-normalization",
  "unicode-properties",

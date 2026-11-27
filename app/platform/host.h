@@ -112,8 +112,15 @@ void host_set_window_little(void* ui_view, bool grows);
 void host_grow_little_window(void* ui_view);
 
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
-// app the active one.
+// app the active one. One already under first run's (host_grow_first_run) comes whole to the
+// front with the keyboard.
 void host_show_window(void* ui_view);
+
+// Keeps the window holding |ui_view|, which the core put on screen as it made it, off screen until
+// host_show_window, whatever else asks to show it: first run's window is the only one on screen
+// until it ends. It then comes on at its frame whole, without the system's motion for a window
+// ordered in. Off the Mac, nothing.
+void host_hold_window(void* ui_view);
 
 // Shows the window holding |ui_view| as host_show_window does, but right behind the browser window
 // of |above_ui_view|, neither key nor activating the app, as the windows a relaunch brings back
@@ -131,6 +138,12 @@ void host_set_window_title(void* ui_view, const char* title);
 // Draws the material under the UI of |ui_view|'s browser window light, Dia's material 13, or
 // dark, its material 29 (docs/ux-spec.md › Window material).
 void host_set_window_light(void* ui_view, bool light);
+
+// Whether this host's windows have a material behind them, the page and the desktop blurred, that
+// the transparency level can drive: the browser window's and the overlays' (#4090). The Mac's do.
+// Linux's and Windows' windows are opaque (#3676), so the level isn't offered there and what
+// floats stays opaque. Fixed while the app runs.
+bool host_has_window_material(void);
 
 // Gives the whole app, its menus, alerts and pages, an appearance of its own, 1 light or 2 dark, in
 // place of the system's, or with 0 the system's again (View › Appearance).
@@ -247,15 +260,13 @@ double host_since_launch(void);
 void host_forget_window(void* ui_view);
 
 // The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview, the
-// Boost editor, the switcher a held ⌃Tab shows and the whole of an agent's request beside its
-// question. One shows at a time.
+// Boost editor and the switcher a held ⌃Tab shows. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
 #define HOST_BOOST_EDITOR 4
 #define HOST_TAB_SWITCHER 5
-#define HOST_AGENT_REQUEST 6
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
 #define HOST_SITE_CONTROLS 7
 
@@ -725,10 +736,6 @@ bool host_window_restored_frame(void* ui_view, double* x, double* y, double* wid
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
 // a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
-// Puts |ui_view|'s window's minimize, maximize and close at its right corner with the sidebar on
-// the left, as the top bar has them (#3160), or back with the sidebar. The UI draws them; the frame
-// offers Snap layouts over maximize where they are.
-void host_set_window_buttons_right(void* ui_view, bool right);
 #endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its
@@ -758,6 +765,48 @@ void host_show_settings(void);
 // Hides the Settings window, which keeps its place for the next host_show_settings.
 void host_hide_settings(void);
 
+// Makes the window of |first_run_view| first run's window: a window of its own, the card's size,
+// that can't be resized, with no title bar, window buttons or frame of the system's, as the card
+// is the window. It starts hidden.
+void host_add_first_run(void* first_run_view);
+
+// Shapes first run's window as its card is now: |width| by |height| points centred in it, with
+// corners of |radius|. The system's blur, where the window has it, and its shadow are behind that
+// shape alone. The UI calls it on the entry's frames as the card grows and once as the entry ends,
+// and again only on the exit's frames after host_grow_first_run said yes, so nothing keeps it
+// alive. A host that can't shape a window does nothing.
+void host_set_first_run_frame(double width, double height, double radius);
+
+// Mac only: grows first run's window to the frame of the browser window held behind it, for the
+// card to grow in to that window's size (first-run v9 §10), and says whether it will. Asked once,
+// at the press that ends first run. It answers no and changes nothing unless the held window's
+// frame is whole on first run's own display, holds first run's window with the same centre to a
+// point, and is neither full screen nor in the Dock, and never with Stage Manager on, which
+// places windows itself. A yes says it has tested that it can, and it sets the frame on the main
+// queue's next turn, as the ask comes while the UI handles the press: in one step, with the glass
+// and the shadow kept where the card is and the UI's picture at the new size drawn before any is
+// shown, or not at all where either window is no longer the one it answered for, the card then
+// growing to the window as it is. With the frame, on that same turn, it puts the held browser
+// window right under first run's, all but transparent, neither key nor main, so the UI and its
+// pages draw it before the card gives way to it (host_set_first_run_reveal). It starts no timer.
+bool host_grow_first_run(void);
+
+// Mac only: the opacity, 0 to 1, of the browser window under a grown first run's window, and of
+// the glass behind first run's card. The UI says both on each frame of a grown exit, the window's
+// again though unchanged, as Chromium may put a new window's opacity back at its first frame.
+// Nothing where no window is under first run's.
+void host_set_first_run_reveal(double window, double glass);
+
+// Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
+// screen the browser window opens on, and takes the launch window down: until first run ends it's
+// the only window on screen.
+void host_show_first_run(void);
+
+// Takes first run's window off screen for good, before the UI closes it. Called once the window it
+// held is on (host_show_window), it goes at once, without the system's motion for a window ordered
+// out, so nothing of it is behind that window.
+void host_close_first_run(void);
+
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
 // Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did. A tab's dialog
 // isn't one: ⌘W on it closes its tab.
@@ -766,21 +815,12 @@ bool host_close_other_window(void);
 // A detent on the trackpad, as a swipe's nearest Space changes.
 void host_detent(void);
 
-// Gives the Dock icon's dot the color it had when the app last quit, kept in |profile_dir|, and
-// follows the user's icon style from now on (dock.mm). For the launch, before the browser starts.
-void host_dock_dot_launch(const char* profile_dir);
-
-// Gives the Dock icon's dot |color|, as 0xRRGGBB, or without |colored| the icon's own green, once
-// it's drawn off the main thread. In the Tinted and Clear icon styles the icon stays as macOS draws
-// it. Asked again for the same color, it checks the style again.
-void host_dock_dot(bool colored, uint32_t color);
-
 // Whether the app is the active one, its windows taking the keyboard.
 bool host_app_active(void);
 
 // |count| tasks wait for the user, or none at 0: the Dock icon's badge on the Mac, the taskbar
-// button's overlay on Windows, with the count up to 9 and then 9+ in place of the Space's dot, and
-// on Linux the browser windows' urgency hint, with no count. It stays while the app is active, and
+// button's overlay on Windows, with the count up to 9 and then 9+, and on Linux the browser
+// windows' urgency hint, with no count. It stays while the app is active, and
 // nothing bounces, flashes or sounds.
 void host_needs_you_badge(int count);
 
@@ -1037,6 +1077,9 @@ bool host_choose(const char* title);
 // For the test driver: the NSWindow of the browser window whose view host_ui_view made |index|th,
 // from 0, once it's shown, else null.
 void* host_browser_window(size_t index);
+
+// For the test driver: first run's window while it's on screen, else null. The Mac's alone.
+void* host_first_run_window(void);
 
 // AppleScript, the Mac's alone (scripting.mm, ilo.sdef): what a script may ask of the app's windows,
 // Spaces and tabs, which the app answers from what its UI shows, and the commands it may give,

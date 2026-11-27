@@ -529,14 +529,6 @@ impl Browser for Engine {
         list_captures(cx);
     }
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        unsafe { bc::bc_hover_kinds() as u32 }
-    }
-
-    fn set_hover_kinds(&self, kinds: u32, _: &mut App) {
-        unsafe { bc::bc_set_hover_kinds(kinds as c_int) };
-    }
-
     fn trash(&self, path: &str, _: &mut App) -> bool {
         CString::new(path).is_ok_and(|path| unsafe { platform::host_trash(path.as_ptr()) })
     }
@@ -641,15 +633,6 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_answer_permission(tab, answer as i32) };
     }
 
-    fn answer_agent(&self, question: u64, answer: browser::agents::Answer, _: &mut App) {
-        // After the shell's update, as the answer tells every window's shell the next question.
-        agents_core::update(move |agents, cx| agents.answer(question, answer, cx));
-    }
-
-    fn choose_agent_file(&self, question: u64, window: u64, _: &mut App) {
-        agents_core::update(move |agents, cx| agents.choose_file(question, window, cx));
-    }
-
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         agents_core::update(move |agents, cx| agents.take_over(&agent, tab, cx));
     }
@@ -677,9 +660,32 @@ impl Browser for Engine {
         });
     }
 
-    fn show_task(&self, _: SharedString, _: &mut App) {
-        // The Agents send a window its conversation as it changes; this sends it now.
-        agents_core::update(|_, cx| cx.notify());
+    fn ask_again(&self, asked: SharedString, cx: &mut App) {
+        // The bar's ask reads the front window's Shell, which asks this inside its own update.
+        cx.defer(move |cx| with_overlays(move |cx| command_bar::ask_again(asked, cx), cx));
+    }
+
+    fn show_task(&self, agent: SharedString, _: &mut App) {
+        // The Agents send a window its conversation as it changes; this sends it now, and a task
+        // a run before left asks for its kept log.
+        agents_core::update(move |agents, cx| {
+            agents.task_shown(&agent, cx);
+            cx.notify();
+        });
+    }
+
+    fn keeps_picture(&self, tab: u64, url: &str, cx: &App) -> bool {
+        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture_at(tab, url))
+    }
+
+    fn card_pictured(
+        &self,
+        agent: SharedString,
+        tab: u64,
+        picture: Option<Arc<gpui::RenderImage>>,
+        _: &mut App,
+    ) {
+        agents_core::update(move |agents, cx| agents.card_pictured(&agent, tab, picture, cx));
     }
 
     fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
@@ -1472,11 +1478,6 @@ impl Browser for Engine {
         unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
-    #[cfg(target_os = "windows")]
-    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
-        unsafe { platform::host_set_window_buttons_right(self.ui_view, right) };
-    }
-
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
@@ -1919,6 +1920,19 @@ impl Browser for Engine {
         command_bar::is_open(cx)
     }
 
+    fn command_bar_in_place(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> gpui::Entity<command_bar::CommandBar> {
+        // It's typed in only while its window is the one in front, which the host acts on.
+        command_bar::in_place(Rc::new(command_bar_host::Bar), window, cx)
+    }
+
+    fn files_available(&self, _: &App) -> bool {
+        browser::agents::wall::available().is_ok()
+    }
+
     fn field_window_typing(&self, cx: &mut App) -> bool {
         find_bar::typing(self.window, cx)
             || offer::typing(self.window, cx)
@@ -2063,6 +2077,14 @@ impl Browser for Engine {
         recent_host::fetch(self.window, tab);
     }
 
+    fn broom(&self) -> Option<shell::Broom> {
+        broom_host::shown(self.window)
+    }
+
+    fn start_broom(&self, cx: &mut App) {
+        broom_host::start(self.window, cx);
+    }
+
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
@@ -2073,6 +2095,10 @@ impl Browser for Engine {
 
     fn window(&self) -> u64 {
         self.window
+    }
+
+    fn shown_now(&self) -> u64 {
+        unsafe { bc::bc_window_selected(self.window) }
     }
 
     fn find_next(&self, tab: u64, forward: bool, cx: &mut App) {
@@ -2090,12 +2116,22 @@ impl Browser for Engine {
         settings::show(cx);
     }
 
-    fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
-        settings::set_sidebar_right(right, cx);
+    fn off_limits(&self, cx: &mut App) {
+        let section = browser::settings_column::Section::Access;
+        settings::show_row(section, browser::agents::fence::HEADING.into(), cx);
     }
 
-    fn keep_top_bar(&self, on: bool, cx: &mut App) {
-        settings::set_top_bar(on, cx);
+    fn agent_access(&self, cx: &mut App) {
+        let section = browser::settings_column::Section::Access;
+        settings::show_row(section, browser::agents::tier::ACCESS.into(), cx);
+    }
+
+    fn agents_settings(&self, cx: &mut App) {
+        settings::show_agents(cx);
+    }
+
+    fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
+        settings::set_sidebar_right(right, cx);
     }
 
     fn shortcuts(&self, cx: &mut App) {
@@ -2142,17 +2178,20 @@ impl Browser for Engine {
         settings::set_send_crash_reports(on, cx);
     }
 
-    // Every build has the agents' server. The first launch picks its steps before the first
-    // frame, when agents_core makes the Agents, and a new profile's are off until then.
-    fn agents(&self, cx: &App) -> Option<bool> {
-        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).is_on()))
+    // Every build has the agents' server, a new profile's off.
+    fn threads(&self, cx: &App) -> Option<bool> {
+        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).threads()))
     }
 
-    fn set_agents(&self, on: bool, cx: &mut App) {
+    fn set_threads(&self, on: bool, cx: &mut App) {
         agents_core::start(cx);
         if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.set_on(on, cx));
+            agents.update(cx, |agents, cx| agents.set_threads(on, cx));
         }
+    }
+
+    fn start_agents(&self, cx: &mut App) {
+        agents_core::start(cx);
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {
@@ -2273,6 +2312,50 @@ impl Browser for Engine {
         unsafe { platform::host_make_default_browser(settings::default_browser_answered) };
     }
 
+    // Settings' own switches, read and set as its rows do.
+    fn setting(&self, space: u64, setting: shell::Setting, _: &App) -> Option<bool> {
+        match setting {
+            shell::Setting::RestoreWindows => Some(unsafe { bc::bc_restore_windows() }),
+            shell::Setting::AdBlocking => Some(unsafe { bc::bc_ad_blocking() }),
+            shell::Setting::SavePasswords => {
+                let (profile, mut offers) = (unsafe { bc::bc_space_profile(space) }, false);
+                let what = bc::BC_SAVE_PASSWORDS as i32;
+                unsafe { bc::bc_profile_offers_to_save(profile, what, &mut offers) }
+                    .then_some(offers)
+            }
+        }
+    }
+
+    fn set_setting(&self, space: u64, setting: shell::Setting, on: bool, _: &mut App) {
+        match setting {
+            shell::Setting::RestoreWindows => unsafe { bc::bc_set_restore_windows(on) },
+            shell::Setting::AdBlocking => unsafe { bc::bc_set_ad_blocking(on) },
+            shell::Setting::SavePasswords => unsafe {
+                let profile = bc::bc_space_profile(space);
+                bc::bc_profile_set_offers_to_save(profile, bc::BC_SAVE_PASSWORDS as i32, on);
+            },
+        }
+    }
+
+    // A new profile's loads after the flow starts, and until then it's the time a profile takes
+    // the first time it's used, which Never (-1) isn't.
+    fn archive_after(&self, space: u64) -> Option<(f64, Vec<f64>)> {
+        let after = unsafe { bc::bc_profile_archive_after(bc::bc_space_profile(space)) };
+        let after = if after == 0. {
+            unsafe { bc::bc_archive_after() }
+        } else {
+            after
+        };
+        Some((after, settings::archive_times()))
+    }
+
+    fn set_archive_after(&self, space: u64, seconds: f64, _: &mut App) {
+        let profile = unsafe { bc::bc_space_profile(space) };
+        if !unsafe { bc::bc_profile_set_archive_after(profile, seconds) } {
+            unsafe { bc::bc_set_archive_after(seconds) };
+        }
+    }
+
     fn search_engines(&self, space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
         settings::search_engines(unsafe { bc::bc_space_profile(space) }).unwrap_or_default()
     }
@@ -2281,27 +2364,52 @@ impl Browser for Engine {
         settings::set_search_engine(unsafe { bc::bc_space_profile(space) }, keyword, name);
     }
 
-    fn welcome_window(&self, cx: &mut App) {
-        let id = self.window;
-        cx.defer(move |cx| {
-            let from = WINDOWS.with_borrow(|windows| {
-                let this = windows.iter().find(|w| w.id == id && w.regular());
-                this.or_else(|| windows.iter().find(|w| w.regular()))
-                    .cloned()
-            });
-            let Some(window) = from.and_then(|from| open_window(Some(from), None, cx)) else {
-                return;
-            };
-            let shell = WINDOWS.with_borrow(|windows| {
-                windows
-                    .iter()
-                    .find(|w| w.id == window)
-                    .and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = shell {
-                shell.update(cx, |shell, cx| shell.start_onboarding(None, cx));
+    fn show_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        let view = window.update(cx, |_, window, _| crate::ns_view(window));
+        if let Ok(view) = view {
+            unsafe {
+                platform::host_add_first_run(view);
+                platform::host_show_first_run();
             }
-        });
+        }
+    }
+
+    fn shape_first_run(&self, width: f32, height: f32, radius: f32) {
+        unsafe { platform::host_set_first_run_frame(width.into(), height.into(), radius.into()) }
+    }
+
+    // The Mac's host grows first run's window where it can (host_grow_first_run); no other does
+    // yet, so there the exit is the cross-fade.
+    fn grows_first_run(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            unsafe { platform::host_grow_first_run() }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
+    fn reveal_first_run(&self, window: f32, glass: f32) {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            platform::host_set_first_run_reveal(window.into(), glass.into())
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = (window, glass);
+    }
+
+    fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        // The browser window first, then first run's off on the same turn, as the launch window
+        // gives way: taken off first, it would still be leaving behind the browser window, and
+        // show through its material. Where a grow put it under first run's already, the host only
+        // gives it the keyboard.
+        show_window_held_for_first_run(cx);
+        unsafe { platform::host_close_first_run() };
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
     }
 
     fn new_private_window(&self, cx: &mut App) {
@@ -2475,17 +2583,22 @@ impl Browser for Engine {
 
     /// Asks first, as Arc does, unless the user said not to. Only the user's Quit asks: a quit from
     /// the Dock or at logout doesn't come here.
-    fn quit(&self, cx: &mut App) {
+    fn quit(&self, going: Rc<dyn Fn(&mut App)>, cx: &mut App) {
         // Once the shell that asked is done, as it reads the shell. Chromium's quit is posted, so
         // comes after.
         cx.defer(save_launch_picture);
         // With no window to ask over, there's nothing open to lose.
         if !unsafe { bc::bc_warn_before_quitting() } || front().1.is_null() {
-            return quit_because("the user's Quit, which had nothing to ask");
+            // Deferred, as `going` updates the shell that asked.
+            return cx.defer(move |cx| {
+                going(cx);
+                quit_because("the user's Quit, which had nothing to ask");
+            });
         }
+        let also_going = going.clone();
         let question = dialog::Question {
             icon: None,
-            message: concat!("Quit ", env!("APP_NAME"), "?").into(),
+            message: concat!("Quit ", env!("PRODUCT_NAME"), "?").into(),
             detail: "".into(),
             list: Vec::new(),
             action: "Quit".into(),
@@ -2493,10 +2606,11 @@ impl Browser for Engine {
             tone: dialog::Tone::Accent,
             also: Some((
                 "Quit, and don’t ask again".into(),
-                Box::new(|_| {
+                Box::new(move |cx| {
                     // check.sh waits for this line.
                     log!("browser: warn before quitting off");
                     unsafe { bc::bc_set_warn_before_quitting(false) };
+                    also_going(cx);
                     quit_because("the user's Quit, answered");
                 }),
             )),
@@ -2506,8 +2620,10 @@ impl Browser for Engine {
         };
         // A Quit as the window comes on screen, before its overlays are made, asks too (#905):
         // with no dialog to ask in, pose would drop it and the app would never quit.
-        let quit =
-            Box::new(|_: Vec<String>, _: &mut App| quit_because("the user's Quit, answered"));
+        let quit = Box::new(move |_: Vec<String>, cx: &mut App| {
+            going(cx);
+            quit_because("the user's Quit, answered");
+        });
         with_overlays(move |cx| dialog::pose(None, question, quit, cx), cx);
     }
 }

@@ -126,6 +126,9 @@ jobs:
             echo "::error::The tag is $TAG, but app/Cargo.toml's version is $version. Tag v$version, or change the version first."
             exit 1
           fi
+          # An install of the release before is offered this one by each updater, though the shown
+          # version may start again (#4086).
+          python3 -I tools/update-order.py "$TAG"
           # On a tag push, checkout writes the tag it ran for as a lightweight one on the commit
           # (actions/checkout#290), so the annotated tag, and its message, comes again from the
           # remote. A run by hand before the tag exists finds none, and stays a trial.

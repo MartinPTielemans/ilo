@@ -39,12 +39,12 @@ names_said() {
 }
 step=0
 rm -f "$saved" "$launch_frame"
-# An MCP client's token, saved with Settings › Agents on, which the app reads as it starts. The file
-# goes once the server is up, so a run that stops early leaves the next checks' agents off.
+# An MCP client's token, saved with Settings › Threads on, which the app reads as it starts. The
+# file goes once the server is up, so a run that stops early leaves the next checks' agents off.
 serve
 agents_file="$profile_dir/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 # Showing the file on Linux, with no file manager on the bus, falls to xdg-open, which tries
 # $BROWSER before the runner's own browsers: true ends it there, so none stays on the display.
@@ -345,12 +345,6 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the agent's card didn't show its conversation"
-  await '^browser: task pages at ' || fail "the conversation's header drew no Pages"
-  read -r gx gy gw gh <<CHIP
-$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
-CHIP
-  send click $((gx + gw / 2)) $((gy + gh / 2))
-  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
   await "^browser: task picture $agent_tab at " || fail "the conversation didn't picture the agent's tab $agent_tab"
   read -r wx wy ww wh <<PICTURE
 $(grep "^browser: task picture $agent_tab at " "$log" | tail -1 | cut -d' ' -f6-)
@@ -890,8 +884,8 @@ offered=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
   grep '^browser: command bar \(commands\|lists\) "new board": ' | grep 'New Board' | head -1)
 [ -z "$offered" ] || fail "a private window's command bar offers New Board: $offered"
 send key escape
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the private window's command bar"
+# The private window's empty Space rests on its bar, which ⌘T gives the keyboard.
+resting_key t "private window"
 send insert "chrome://board/$id"
 send key return
 expect "^browser: loaded [0-9]* chrome://board/$id\$" "the Board's address didn't load in the private window"

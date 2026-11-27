@@ -297,6 +297,11 @@ void host_watch_fd(int fd, void (*ready)(void)) {
 // The core shows the browser window as it opens it, in front or for a saved window behind,
 // since the window is Chromium's. host_show_window_behind is frames.rs's, which stacks it.
 void host_show_window(void* ui_view) {}
+void host_hold_window(void* ui_view) {}
+
+// The card draws its own shape in a clear window, and the compositor puts no shadow or blur of
+// its own round one the app decorates.
+void host_set_first_run_frame(double width, double height, double radius) {}
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
@@ -342,13 +347,6 @@ void host_watch_finished_launching(void (*finished)(void)) {
   finished();
 }
 
-// No dock dot. The docks that badge a launcher, KDE's, Dash to Dock and Plank among them, read the
-// Unity LauncherEntry API, which gives it a count, progress or urgency but no colour, so the
-// Space's has nothing to show in.
-void host_dock_dot_launch(const char* profile_dir) {}
-
-void host_dock_dot(bool colored, uint32_t color) {}
-
 // host_cascaded is frames.rs's too.
 
 // Through the core, as the window is Chromium's: under Wayland its toplevel, which GPUI's window is
@@ -361,6 +359,8 @@ void host_set_window_title(void* ui_view, const char* title) {
 
 // The window has no material under the UI, whose tint is the window's look.
 void host_set_window_light(void* ui_view, bool light) {}
+
+bool host_has_window_material(void) { return false; }
 
 // The UI takes the choice itself; GTK and the pages keep the desktop's.
 void host_set_app_appearance(int appearance) {}

@@ -83,11 +83,11 @@ none_since 'browser: battery saver on at 18%' "$eighteen" ||
 # Settings' Battery Saver switch: off, it goes at once and stays off lower still; on again, it's
 # back, below 20% on battery.
 send menu Settings…
-expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_on_general "Settings… didn't show Settings"
 settings_drew General
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 in_sight "switch battery saver setting" || fail "Settings didn't draw Battery Saver's switch"
 ../tools/window-screenshot.sh "$pid" "$out/battery-setting.png" all || fail "no window to capture"
 send clickkey $at

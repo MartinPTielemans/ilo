@@ -28,12 +28,83 @@ cased() {
   }'
 }
 
-# A Space's theme in its menu: the theme picker, and once it has a colour, the way back to none.
+# A Space's theme in its menu: the theme panel, and once it has a colour, the way back to none.
 colors=$(cased "Edit Theme Color…")
 themed=$(cased "$colors, Remove Theme Color")
-# Where the theme picker's swatches are, from its top left: 13 for its arrow, then a 29.5 pitch.
-swatch_y=380
-swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
+# Where the theme panel's parts are, in points from the top left of its window, which is the
+# panel's own, worked out from design/tokens.toml's [theme-panel] as app/src/theme_picker/layout.rs
+# lays them out. panel_at palette <n>: palette disc n, 0 for no colour; look <automatic|light|dark>:
+# that segment; field <x> <y>: where the pad shows the field's point (x, y); plus <count>: the Points
+# chip's + after count colours; value: the value field; bar <intensity|transparency|grain> <0-1>:
+# that bar's thumb at that value; note <along>: the note's words, along from their left, where a
+# press finds nothing; beside: how far right of the sidebar it hangs; size: its width and height.
+panel_at() {
+  awk -v part="$1" -v a="${2:-0}" -v b="${3:-0}" '
+    /^\[/ { inside = ($0 == "[theme-panel]"); next }
+    inside && $2 == "=" {
+      t[$1] = $3
+      if ($1 == "palette-colors") t[$1] = gsub(/,/, ",") + 1
+    }
+    END {
+      p = t["padding"]; w = t["width"]; inner = w - 2 * p
+      palettes = p + t["head"] + t["gap"] + t["label"] + t["palettes-gap"]
+      pad = palettes + t["slot"] + t["gap"]
+      chip = pad + t["pad-height"] - t["chip-inset"] - t["chip-height"] / 2
+      bars = pad + t["pad-height"] + t["gap"]
+      step = t["label"] + t["bar-label-gap"] + t["thumb"] + t["bar-gap"]
+      note = bars + 2 * step + t["label"] + t["bar-label-gap"] + t["thumb"] + t["gap"]
+      if (part == "palette") {
+        print p + t["slot"] / 2 + a * (inner - t["slot"]) / t["palette-colors"], palettes + t["slot"] / 2
+      } else if (part == "look") {
+        i = a == "light" ? 1 : a == "dark" ? 2 : 0
+        print w - p - 3 * t["segment-width"] - t["segment-inset"] + (i + 0.5) * t["segment-width"], p + t["head"] / 2
+      } else if (part == "field") {
+        hue = atan2(b, a) / (2 * atan2(0, -1))
+        if (hue < 0) hue += 1
+        across = hue - t["hue-start"]
+        if (across < 0) across += 1
+        down = (sqrt(a * a + b * b) - t["light-top"]) / (t["light-bottom"] - t["light-top"])
+        if (down < 0) down = 0
+        if (down > 1) down = 1
+        print p + t["dot-left"] + across * t["dot-pitch"] * (t["dots-across"] - 1), pad + t["dot-top"] + down * t["dot-pitch"] * (t["dots-down"] - 1)
+      } else if (part == "plus") {
+        print p + t["chip-inset"] + t["chip-left"] + a * (t["chip-dot"] + t["chip-gap"]) + t["plus"] / 2, chip
+      } else if (part == "value") {
+        print p + t["pad-width"] - t["chip-inset"] - t["field-width"] / 2, chip
+      } else if (part == "bar") {
+        i = a == "transparency" ? 1 : a == "grain" ? 2 : 0
+        print p + t["label-inset"] + t["thumb"] / 2 + b * (inner - 2 * t["label-inset"] - t["thumb"]), bars + i * step + t["label"] + t["bar-label-gap"] + t["thumb"] / 2
+      } else if (part == "note") {
+        print p + t["label-inset"] + a, note + t["label"] / 2
+      } else if (part == "beside") {
+        print t["beside"] + 0
+      } else if (part == "size") {
+        print w + 0, note + t["label"] + p
+      }
+    }' design/tokens.toml
+}
+# Palette $1's first colour, as six hex digits, from the same tokens.
+panel_color() {
+  awk -v n="$1" '
+    /^\[/ { inside = ($0 == "[theme-panel]"); next }
+    inside && $1 == "palette-colors" { line = $0; sub(/^[^[]*\[/, "", line); gsub(/[] ]/, "", line); split(line, counts, ",") }
+    inside && $1 == "palettes" { line = $0; sub(/^[^[]*\[/, "", line); gsub(/[] ]/, "", line); split(line, colors, ",") }
+    END { first = 1; for (i = 1; i < n; i++) first += counts[i]; c = colors[first]; sub(/^0x/, "", c); print c }' design/tokens.toml
+}
+# Channel $2 of colour $1, six hex digits, as a number: 1 is red, 2 green, 3 blue. Cut out, as the
+# checks run under sh, which has no ${name:offset:length}.
+channel() {
+  echo $((0x$(printf %s "$1" | cut -c"$(($2 * 2 - 1))-$(($2 * 2))")))
+}
+# Whether colours $1 and $2, six hex digits each, are two steps of a channel apart at most, as a
+# palette's colour comes back from the field it's placed in (layout.rs's same_colors).
+near_color() {
+  local i d
+  for i in 1 2 3; do
+    d=$(($(channel "$1" $i) - $(channel "$2" $i)))
+    [ "$d" -le 2 ] && [ "$d" -ge -2 ] || return 1
+  done
+}
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
 profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
 # A Space menu's Export “name” into Folder ›, a Space an item, wherever a run doesn't check it
@@ -46,6 +117,8 @@ empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Pr
 # its defaults by its own id, not the dev build's (#3614). The dev build's is dev.browser.app
 # (build.sh), which the runs off the Mac keep too.
 app_name=$(cat branding/name)
+# The name the app's own windows, dialogs and Settings say, which can differ from the bundle's.
+product=$(cat branding/product)
 checked_app_id=dev.browser.app
 if [ "$(uname)" = Darwin ]; then
   checked_app_id=$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist") || {
@@ -516,29 +589,29 @@ appearance() {
     -e "tell appearance preferences to set dark mode to $1" -e 'end tell' > /dev/null
 }
 # Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
-# Dock and Control Center do, keeping what they were in $bars for show_bars.
+# Dock and Control Center do, keeping what they were in $bars for show_bars. The Dock hides through
+# System Events, as Settings asks it to: the Dock's own autohide default, with the Dock restarted,
+# left a check VM's Dock on screen.
 hide_bars() {
-  bars="$(defaults read com.apple.dock autohide 2>/dev/null || echo none)"
+  system_events_answers || fail "System Events didn't answer, so the Dock couldn't hide"
+  bars=$(osascript -e 'tell application "System Events" to get autohide of dock preferences') ||
+    fail "System Events didn't say whether the Dock hides"
   bars="$bars $(defaults read -g _HIHideMenuBar 2>/dev/null || echo none)"
-  defaults write com.apple.dock autohide -bool true
+  osascript -e 'tell application "System Events" to set autohide of dock preferences to true' \
+    > /dev/null || fail "System Events didn't hide the Dock"
   defaults write -g _HIHideMenuBar -bool true
-  killall Dock 2>/dev/null || true
 }
 # Puts the Dock and the menu bar back as hide_bars found them.
 show_bars() {
   set -- $bars
   bars=
-  case $1 in
-    none) defaults delete com.apple.dock autohide ;;
-    1) defaults write com.apple.dock autohide -bool true ;;
-    *) defaults write com.apple.dock autohide -bool false ;;
-  esac
+  osascript -e "tell application \"System Events\" to set autohide of dock preferences to $1" \
+    > /dev/null || echo "show_bars: System Events didn't put the Dock's autohide back to $1" >&2
   case $2 in
     none) defaults delete -g _HIHideMenuBar ;;
     1) defaults write -g _HIHideMenuBar -bool true ;;
     *) defaults write -g _HIHideMenuBar -bool false ;;
   esac
-  killall Dock 2>/dev/null || true
 }
 quit() {
   quit_app
@@ -746,6 +819,16 @@ settings_drew() {
   fi
   fail "Settings didn't draw ${1:-its tab}; no report of its window's visibility came since the command"
 }
+# Settings, just shown with no page named, then on General: it opens on Overview (S1), so a click
+# on the toolbar's General shows it, as everyday_section clicks its section. $1 is the row's
+# failure message for the show.
+settings_on_general() {
+  expect '^browser: settings shown Overview$' "$1"
+  settings_drew Overview
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  settings_drew General
+}
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
 # draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
 # waited for, which drawn_after leaves out.
@@ -810,9 +893,10 @@ in_sight() {
 # one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the
 # driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
 # a mark it awaits from, keeps.
+# With $3, the place is one drawn after the last line matching it, as in_sight's $2.
 click_in_sight() {
   local at sight top bottom y by rest
-  in_sight "$1" || fail "Settings didn't draw $1"
+  in_sight "$1" "${3:-}" || fail "Settings didn't draw $1"
   send "${2:-clickkey}" $at
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
@@ -825,6 +909,12 @@ new_window_bar() {
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
 }
+# ⌘$1 in a window whose Space shows no page gives the bar it rests on the keyboard, where ⌘T's bar
+# opened over the card before (#4140). $2 names the window in the fail line.
+resting_key() {
+  send key "$1" cmd
+  expect '^browser: resting field has the keyboard$' "⌘$1 didn't give the $2's resting bar the keyboard"
+}
 # What the app logged since the last command was sent, or since command $1.
 since() {
   sed -n "/^browser: drive ${1:-$step}: /,\$p" "$log"
@@ -834,6 +924,93 @@ since() {
 # comes, so a later step's expect is what says it has.
 none_since() {
   ! since "${2:-}" | grep -q "$1"
+}
+# Clicks first run's Skip, which only the import (3) and the favorites (3b) have, where step $1
+# last said it's drawn: each step logs where once it has settled, in the frame after the line
+# saying so.
+skip_step() {
+  local at=
+  for _ in $(seq 100); do
+    at=$(awk -v settled="browser: onboarding step $1 settled" '
+      $0 == settled { at = ""; on = 1; next }
+      on && /^browser: onboarding skip at / { at = $5 " " $6 }
+      END { print at }' "$log")
+    [ -n "$at" ] && break
+    sleep 0.1
+  done
+  [ -n "$at" ] || fail "the $1 step didn't say where its Skip is"
+  send click $at
+}
+# The steps first run's card shows this time, by number, as it said when it last started.
+onboarding_steps() {
+  await '^browser: onboarding steps ' || fail "first run's card didn't say its steps"
+  grep '^browser: onboarding steps ' "$log" | tail -1 | cut -d' ' -f4-
+}
+# Waits up to 30 s for first run's step $1 to settle since the card last started or last left a
+# step, which a step that settles before any command, as the first does, needs, and fails with $2.
+step_settled() {
+  local line="browser: onboarding step $1 settled"
+  wait_begins
+  for _ in $(seq 300); do
+    awk -v want="$line" '
+      $0 == "browser: onboarding started" || index($0, "browser: onboarding left ") == 1 { seen = 0 }
+      $0 == want { seen = 1 }
+      END { exit !seen }' "$log" && return 0
+    kill -0 "$pid" 2>/dev/null || {
+      ran_out "^$line\$" "" exited
+      fail "the app exited: $2"
+    }
+    sleep 0.1
+  done
+  ran_out "^$line\$" ""
+  fail "$2"
+}
+# Leaves first run's step $1, settled with the keyboard where it rests, the way that takes nothing
+# it offers, and checks the step was left, $2 starting each failure: the line says its number
+# alone, never what was picked. A bare button with the
+# keyboard takes ↩ as its own press. The Welcome (1) rests on Continue, whose ↩ signs in, so ⇥ to
+# Not Now; the import (3) and the favorites (3b) have Skip; the rest, ↩ for their main button. The
+# assistants' (2) have none with nobody signed in, where ↩ does nothing and the step rests on its
+# dialog, from which ⇧⇥ comes to Just the Browser, the last of its stops.
+pass_step() {
+  local how=return from
+  case $1 in
+    1)
+      send key tab
+      send key return
+      how=not-now
+      ;;
+    2)
+      send key return
+      from=$step
+      # Handled after the key, so by its end ↩ has done what it does.
+      send state
+      if ! logged '^browser: onboarding left 2$' "$from"; then
+        send key tab shift
+        send key return
+        how=just-the-browser
+      fi
+      ;;
+    3 | 3b)
+      skip_step "$1"
+      how=skip
+      ;;
+    *) send key return ;;
+  esac
+  [ -n "${from:-}" ] && [ "$how" = return ] || from=$step
+  expect "^browser: onboarding left $1\$" "${2:-}$how didn't leave first run's step $1" "$from"
+}
+# Goes through first run's card from its first step, each left by pass_step, until step $1 has
+# settled, or with no $1 until the card has ended; $2 starts each failure, saying which run.
+walk_steps() {
+  local each
+  for each in $(onboarding_steps); do
+    step_settled "$each" "${2:-}first run's step $each didn't come"
+    [ "$each" = "${1:-}" ] && return 0
+    pass_step "$each" "${2:-}"
+  done
+  [ -z "${1:-}" ] || fail "${2:-}first run's card showed no step $1, only $(onboarding_steps)"
+  expect '^browser: onboarding done$' "${2:-}first run's card didn't end after its last step"
 }
 # Nothing logged while the driver handled the last command matches $1: what it did at once, not
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
@@ -876,7 +1053,7 @@ detents() {
 # driver's last command: the app doesn't report it done.
 quit_by_key() {
   post key q cmd
-  expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+  expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
   expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
   post key return
   exec 3>&-
@@ -1014,10 +1191,10 @@ switch() {
   send key $1
   expect "^browser: selected $2 in " "key $1 didn't show tab $2 of \"$(today)\""
 }
-# The center of row $1 of Today, counting from 0: rows are 41 apart under "+ New Tab", which is
-# under the divider, 15 tall, and the Space's name, 44 tall and 90 below the window's top.
+# The center of row $1 of Today, counting from 0: rows are 34 apart under "+ New Tab", which is
+# under the gap over Today, 6 tall, and the Space's name, 42 tall and 86 below the window's top.
 row() {
-  echo "100 $((90 + 44 + 15 + 41 * ($1 + 1) + 20))"
+  echo "100 $((86 + 42 + 6 + 34 * ($1 + 1) + 17))"
 }
 # The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
 # from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
@@ -1071,9 +1248,11 @@ runner_cpu() {
   echo "${model:-a CPU that names no model}, ${count:-an unknown number of} CPUs"
 }
 
-# The page view keeps the sidebar's 228 points on its left and 10 on its other sides, over GPUI's
-# view, which fills the window. A full-screen page ("fills") covers the whole window, and with the
-# sidebar hidden ("inset") it's 10 in from every side.
+# The page view keeps the sidebar's 228 points on its left and 8 on its other sides, over GPUI's
+# view, which fills the window. A full-screen page ("fills") covers the whole window, and so does
+# one with the sidebar hidden ("inset"), with no rim: the card's radius, shell.card-radius, goes
+# with its rim, none of which shows then (Shell::card_radius), so the page has the window's own
+# corners and no radius of its own.
 check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
@@ -1086,11 +1265,11 @@ check_layout() {
   # Past the sidebar, 228 wide unless $2 gives its width.
   left=228
   case "${2:-}" in [0-9]*) left=$2 ;; esac
-  expected="$left,10 $((width - left - 10))x$((height - 20))"
+  expected="$left,8 $((width - left - 8))x$((height - 16))"
   # Rounded as the card's corners, square when it fills the window.
-  expected_radius=6
+  expected_radius=10
   [ "${2:-}" = fills ] && expected="0,0 $content" && expected_radius=
-  [ "${2:-}" = inset ] && expected="10,10 $((width - 20))x$((height - 20))"
+  [ "${2:-}" = inset ] && expected="0,0 $content" && expected_radius=
   [ "$view" = "$expected" ] || fail "$1: the page view is at $view in a $content window"
   [ "$radius" = "$expected_radius" ] ||
     fail "$1: the page's corners have a radius of ${radius:-0}, not ${expected_radius:-0}"
@@ -1156,14 +1335,14 @@ plus_adds() {
 # The centre of pinned row $1, counting from 0, under the Space's name, and of the ✕ it shows
 # under the pointer.
 pinned_row() {
-  echo "100 $((90 + 44 + 41 * $1 + 20))"
+  echo "100 $((86 + 42 + 34 * $1 + 17))"
 }
 pinned_close() {
-  echo "202 $((90 + 44 + 41 * $1 + 20))"
+  echo "202 $((86 + 42 + 34 * $1 + 17))"
 }
 # Its favicon's.
 pinned_favicon() {
-  echo "26 $((90 + 44 + 41 * $1 + 20))"
+  echo "26 $((86 + 42 + 34 * $1 + 17))"
 }
 
 # What the profile keeps for Safari's engine, as JSON: its sites, the notes it closed and the listed
@@ -1270,6 +1449,13 @@ display_bounds() {
     const frame = (own || screens[0]).frame;
     [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
      frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
+}
+# The value design/tokens.toml gives <key> in its [<section>], as the app is built with it, a whole
+# number without its ".0": so a check measures the look the app has, not a copy of it.
+token() {
+  awk -v section="[$1]" -v key="$2" '
+    /^\[/ { in_section = ($0 == section) }
+    in_section && $1 == key && $2 == "=" { sub(/\.0$/, "", $3); print $3; exit }' design/tokens.toml
 }
 # Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
 # serves every run after, so only cleanup stops it: a run that did would leave the next its address
@@ -1475,4 +1661,127 @@ other_app_closes() {
   wait "$other_app" || true
   other_app=
   other_app_token=
+}
+# The perf runs' own measures, which perf, perf-native and perf-threads share.
+# Writes the perf runs' page in the check's site, and sets $page to it. Its page is Ardia's: 60
+# boxes, 120 paragraphs and a clock each second, which puts in its title when it first painted
+# ("<id> fcp <ms>") and, each time it's shown, two frames after it became visible
+# ("<id> shown <n> <ms>"), both in Unix ms.
+perf_page() {
+  cat > "$out/site/perf.html" << 'HTML'
+<!doctype html><meta charset=utf-8><title>loading</title>
+<style>
+body { font: 14px/1.4 sans-serif; margin: 16px }
+.box { display: inline-block; width: 72px; height: 40px; margin: 4px; border-radius: 6px }
+</style>
+<h1>ilo perf page</h1><p id=clock></p><div id=boxes></div><div id=text></div>
+<script>
+const id = location.search.slice(1);
+for (let i = 0; i < 60; i++) {
+  const box = document.createElement("div");
+  box.className = "box";
+  box.style.background = `hsl(${i * 6} 60% 60%)`;
+  boxes.append(box);
+}
+for (let i = 0; i < 120; i++) {
+  const p = document.createElement("p");
+  p.textContent = `Paragraph ${i}: the quick brown fox jumps over the lazy dog, again and again.`;
+  text.append(p);
+}
+setInterval(() => clock.textContent = new Date().toLocaleTimeString(), 1000);
+// Unix ms as the shell's clock reads it: Date.now() is the system's clock now, where timeOrigin's is
+// the one the renderer took at its start, which a VM's clock drifts from, by 70 ms in 10 minutes.
+const at = (t) => Math.round(Date.now() - performance.now() + t);
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (entry.name == "first-contentful-paint") {
+      document.title = `${id} fcp ${at(entry.startTime)}`;
+      performance.mark(document.title);
+    }
+  }
+}).observe({ type: "paint", buffered: true });
+// Each stamp is also a mark, which a trace with blink.user_timing has on its own clock, to pair the
+// trace's events with the run's Unix ms.
+const stamped = (n) => requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.title = `${id} shown ${n} ${Date.now()}`;
+  performance.mark(document.title);
+}));
+let shown = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState == "visible") {
+    stamped(++shown);
+  }
+});
+// A page loaded again in its tab as it's shown, as a tab without its page gets it back, has no
+// visibilitychange, so it's stamped shown 0. A new tab's page, which perf times to its paint, isn't.
+if (document.visibilityState == "visible" && performance.getEntriesByType("navigation")[0]?.type != "navigate") {
+  stamped(0);
+}
+</script>
+HTML
+  page="${site}perf.html"
+}
+# Sets $stamp to Unix time in ms. Bash 5 has it in EPOCHREALTIME, which Git Bash's is, as a process
+# start there takes tens of ms; Linux's sh is dash, so date, and the Mac's bash 3.2 and BSD date have
+# neither, so Perl.
+if [ -n "${EPOCHREALTIME:-}" ]; then
+  perf_clock=bash
+elif [ "$(uname)" = Darwin ]; then
+  perf_clock=perl
+else
+  perf_clock=date
+fi
+perf_stamp() {
+  case $perf_clock in
+    bash)
+      stamp=$EPOCHREALTIME
+      stamp_us=${stamp#*[.,]}
+      stamp="${stamp%[.,]*}${stamp_us%???}"
+      ;;
+    perl) stamp=$(perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000') ;;
+    *) stamp=$(date +%s%3N) ;;
+  esac
+}
+# Sorts the numbers on standard input, one a line, and says their median, range and count, each
+# number as $1 formats it.
+perf_stats() {
+  sort -n | awk -v f="$1" '{ v[NR] = $1 } END {
+    if (!NR) { print "no samples"; exit }
+    m = NR % 2 ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
+    printf "median " f " (" f "–" f ", n=%d)", m, v[1], v[NR], NR }'
+}
+# Says row $1, labelled $2, measured as $3, against its target $4, and keeps it for the summary.
+perf_row() {
+  echo "perf: $2: $3; target $4"
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$perf_dir/rows.tsv"
+}
+# Snapshots what the browser's processes use, or those of $snap_procs, as $1.
+perf_snap() {
+  # shellcheck disable=SC2086 # kinds, or nothing
+  python3 -I check/usage.py snap "${snap_procs:-$procs}" "$perf_dir/$1.json" ${2:-} ||
+    fail "the browser's usage didn't read"
+}
+# Waits until $1, in Unix seconds, checking the app is still there.
+perf_until() {
+  while [ "$(date +%s)" -lt "$1" ]; do
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+}
+# Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats,
+# and $wake_kinds to the minute's wakeups a second by kind of process.
+perf_idle() {
+  files=
+  for n in 0 1 2 3 4 5 6; do
+    [ "$n" = 0 ] || perf_until $(($(date +%s) + 10))
+    perf_snap "$1-$n"
+    files="$files $perf_dir/$1-$n.json"
+  done
+  # shellcheck disable=SC2086 # the files, a word each
+  python3 -I check/usage.py idle $files > "$perf_dir/$1.txt"
+  cpu=$(cut -d' ' -f1 < "$perf_dir/$1.txt" | perf_stats '%.2f')
+  wakeups=$(cut -d' ' -f2 < "$perf_dir/$1.txt" | perf_stats '%.1f')
+  cpu="$cpu % ($(python3 -I check/usage.py idle-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json") over the minute)"
+  # Which processes wake, as the CPU's kinds say which spend it.
+  wake_kinds=$(python3 -I check/usage.py wake-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json")
 }

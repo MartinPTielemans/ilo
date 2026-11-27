@@ -14,10 +14,11 @@
 # with its focus back on its first and last control, and have NVDA say the page, and the Library's
 # key has it on the Library's search field, where ↓ has it say the row ringed and where it stands
 # and Tab has it on the Library's sections. ⇧Tab goes round the page's stops backwards, and
-# escape or F6 from the ring gives the page the keyboard, read as the page (#4030). Focus Agent
-# Question's key has it say an agent card's first answer (#3869). Elsewhere it records, a Board's
-# cards among them: read as the keyboard reaches them, moved and deleted, and what an agent's card
-# arriving made it say.
+# escape or F6 from the ring gives the page the keyboard, read as the page (#4030). An agent's
+# change ilo refuses has it say the task needs the user, and Focus Agent Question's key, with the
+# task's conversation shown, the first button of ilo's line (#4086, #4244). Elsewhere it records,
+# a Board's cards among them: read as the keyboard reaches them, moved and deleted, and what the
+# ring on a task's header made it say.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -314,11 +315,11 @@ press() {
 log="$out/screen-reader.log"
 step=0
 rm -f "$saved" "$profile_dir/Account"
-# An agent of the run's own, whose change asks with a card (#3869), and a page for its tab.
+# An agent of the run's own, whose change ilo refuses with a line (#4086), and a page for its tab.
 serve
 printf '%s' '<title>agent</title>' > "$out/site/agent.html"
 agent_token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$agent_token" \
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$agent_token" "$product" \
   > "$profile_dir/Agents"
 chmod 600 "$profile_dir/Agents"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
@@ -327,24 +328,29 @@ BROWSER_IMPORT_HOME=$(cygpath -aw "$out/screen-reader-home") BROWSER_DRIVE=1 BRO
   "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
-await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+await '^browser: onboarding started$' || fail "the onboarding didn't start"
 judging=1
-spoken launch
-await '^browser: onboarding left intro ' || fail "the intro didn't go on by itself"
-await '^browser: onboarding step [a-z-]* settled$' || fail "no step came after the intro"
-spoken "$(grep '^browser: onboarding step [a-z-]* settled$' "$log" | tail -1 | cut -d' ' -f4) step"
-press tab
-press tab
-press tab shift
-# An arrow on a button has nothing new to say.
-judging=
-press down
-judging=1
-# On through the steps as Esc goes, each one's speech recorded as it comes.
-for _ in $(seq 10); do
-  grep -q '^browser: onboarding done$' "$log" && break
-  press escape
+# On through the card's steps, each left the way that takes nothing it offers (pass_step), each
+# one's speech recorded as it comes. Your first Space (4), which every run shows, rests on its
+# swatches, where ⇥ goes on to Back and Next and ⇧⇥ back as far, so its ↩ is still Next's.
+for at in $(onboarding_steps); do
+  step_settled "$at" "the onboarding's step $at didn't draw"
+  spoken "step $at"
+  if [ "$at" = 4 ]; then
+    press tab
+    press tab
+    press tab shift
+    press tab shift
+    # An arrow on the swatches picks one, which may have nothing new to say.
+    judging=
+    press right
+    judging=1
+  fi
+  heard=$(wc -l < "$nvda_log")
+  pass_step "$at"
 done
+expect '^browser: onboarding done$' "the onboarding didn't end after its last step"
+spoken "leaving the last step"
 judging=
 expect '^browser: command bar shown$' "the command bar didn't come up after the onboarding"
 spoken "command bar after the onboarding"
@@ -543,7 +549,7 @@ says "$at" "'Second', 'document'" "NVDA didn't say the page after F10 from the m
 # it said only the window's before (#3238).
 judging=1
 press l cmd shift
-tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search history", framework AccessKit' ||
   fail "UI Automation's focus isn't on the Library's search field after ⇧⌃L: $focus_file"
 # ↓ from the field rings History's first row, this run's pages, and NVDA says it and where it
 # stands, as it says the command bar's selected suggestion, while the field keeps the keyboard.
@@ -563,7 +569,7 @@ expect '^browser: menu highlights .* at ' "the row's menu from ⇧F10 didn't hig
 expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 press escape
 expect '^browser: menu closed$' "escape didn't close History's row's menu"
-tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search History", framework AccessKit' ||
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: [A-Za-z ]* "Search history", framework AccessKit' ||
   fail "UI Automation's focus isn't back on the Library's search field after the row's menu: $focus_file"
 none_since '^browser: library rows ring ended$' "$at" || fail "the row's menu ended the ring on History's row"
 # Tab from the field goes on to the Library's other controls, its sections first, which ↓ walks,
@@ -583,14 +589,14 @@ press down
 in_library Downloads down
 press tab shift
 press tab shift
-in_library "Search History" "⇧Tab twice"
+in_library "Search history" "⇧Tab twice"
 judging=
 press escape
-# An agent's card (#3869): arriving, it's an alert dialog named by its title, ending in a full stop
-# so the line after it is heard apart, and described by the key that reaches it, in words, which
-# its live region says as it comes, as NVDA reads no dialog nobody moved to. Focus Agent
-# Question's key gives the card the keyboard on its first answer, and Escape answers it as its
-# Deny does.
+# An agent's change that ilo refuses (#4086, #4244) asks nothing and takes no keyboard. With its
+# conversation not shown, NVDA is told the task needs the user as its sidebar line says it, once,
+# as it comes. The keyboard shows the conversation, from the ring on the task's header at the
+# sidebar's foot, where Focus Agent Question's key gives ilo's line the keyboard on its first
+# button, which NVDA says by its label, and Escape gives the keyboard back, pressing nothing.
 await '^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ||
   fail "the saved switch didn't start the agents' server"
 socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
@@ -618,28 +624,58 @@ await "^browser: loaded $agent_tab $agent_page\$" || fail "the agent's tab didn'
 spoken "the agent's tab"
 at=$(wc -l < "$nvda_log")
 printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"request\",\"arguments\":{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/api/screen-reader-note\",\"body\":{},\"what\":\"change the note on the agent page\"}]}}}" >&4
-expect '^browser: agent mcp-client asks ' "the agent's change didn't ask"
-q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-expect "^browser: agent question $q at " "the agent's change drew no card"
-says "$at" "asks to make a change on localhost\..*Press Alt Shift A to answer\." \
-  "NVDA didn't say the agent's card, its title then the key's line, as it arrived"
-spoken "the agent's card arriving"
+expect '^browser: agent mcp-client stopped Request at Work on pages: localhost$' \
+  "the agent's change wasn't refused at Work on pages"
+stopped=$(agent_line) || fail "the browser didn't answer the agent's refused change"
+case "$stopped" in
+  *"$product stopped this: "*) ;;
+  *) fail "the agent's change at Work on pages answered: $stopped" ;;
+esac
+says "$at" "Needs you" "NVDA didn't say the agent's task needs the user as ilo refused its change"
+spoken "the agent's change refused"
 arrival=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tr '\n' ' ')
-echo "note: NVDA on the agent's card arriving: $arrival"
+echo "note: NVDA on the agent's change refused: $arrival"
+# The task's header is at the sidebar's foot, which the Library stands in while it's open.
+if [ "$(grep -c '^browser: library shown$' "$log" || true)" -gt "$(grep -c '^browser: library hidden$' "$log" || true)" ]; then
+  press l cmd shift
+  expect '^browser: library hidden$' "the Library's key didn't put the Library away"
+fi
+# From the page, as F6 from the ring would give the page the keyboard back.
+heard=$(wc -l < "$nvda_log")
+send click $page_point
+spoken "a click on the page"
+press f6
+expect '^browser: sidebar keyed ' "F6 didn't ring a row of the sidebar"
+headers=$(grep -c '^browser: strip keyed header$' "$log" || true)
+at=$(wc -l < "$nvda_log")
+for _ in $(seq 12); do
+  press down
+  [ "$(grep -c '^browser: strip keyed header$' "$log" || true)" -gt "$headers" ] && break
+done
+[ "$(grep -c '^browser: strip keyed header$' "$log" || true)" -gt "$headers" ] ||
+  fail "↓ from the sidebar's rows never rang the agent's task's header at its foot"
+on_header=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tail -1)
+echo "note: NVDA on the task's header: $on_header"
+press return
+expect '^browser: task session-[0-9]* shown$' "↩ on the task's header didn't show its conversation"
+expect '^browser: ilo line [0-9]* Take Over at ' "the refused change's line drew no Take Over"
 at=$(wc -l < "$nvda_log")
 press a ctrl shift
-expect "^browser: agent card keys on $q Allow\$" "Focus Agent Question's key didn't give the agent's card the keyboard on Allow"
-says "$at" "'Allow'" "NVDA didn't say Allow when Focus Agent Question's key gave the card the keyboard"
+chord=$step
+expect '^browser: ilo keys on [0-9]* TakeOver$' \
+  "Focus Agent Question's key didn't give ilo's line the keyboard on Take Over"
+says "$at" "'Take Over'" "NVDA didn't say Take Over when Focus Agent Question's key gave ilo's line the keyboard"
 landing=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tr '\n' ' ')
 echo "note: NVDA on Focus Agent Question's key: $landing"
-case "$landing" in
-  *'Press Alt Shift A to answer.'*) echo "note: NVDA said the key's line on the landing: yes" ;;
-  *) echo "note: NVDA said the key's line on the landing: no" ;;
-esac
-expect "^browser: agent card keys ready on $q\$" "the app never said the card's protection had passed"
+expect '^browser: ilo keys ready on [0-9]*$' "the app never said a key on ilo's line would press"
 press escape
-expect '^browser: agent card key escape$' "Escape on the agent's card didn't answer it as its Deny does"
-agent_line > /dev/null || fail "the browser didn't answer the agent's denied change"
+expect '^browser: ilo keys back by escape$' "Escape on ilo's line didn't give the keyboard back"
+sed -n "/^browser: drive $chord: /,\$p" "$log" |
+  grep -E '^browser: ilo key pressed |^browser: agent mcp-client taken over |^browser: task [^ ]* access ' &&
+  fail "Focus Agent Question's key or Escape pressed a button of ilo's line"
+# The conversation is put away, so the steps after start from a page as they did.
+press escape
+expect '^browser: task area [0-9]* closed$' "Escape didn't put the agent's task's conversation away"
 exec 4>&-
 for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done
 bridge_pid=

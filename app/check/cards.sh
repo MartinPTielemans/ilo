@@ -100,18 +100,17 @@ send move $page_point
 expect '^browser: hover card hidden$' "leaving the rows didn't hide the recorded card"
 recorded
 
-# A light theme for the Space: the theme picker's first swatch, then the sun. The card takes the
+# A light theme for the Space: the theme panel's first palette, then Light. The card takes the
 # Space's look.
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, ")" "the Space's menu didn't offer its theme"
 send choose "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-send clickkey "$(swatch_x 0)" $swatch_y
-expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
-# The sun, the second appearance button, 13 right of the picker's arrow.
-send clickkey 191.3 49
-expect '^browser: themed space [0-9]* .*appearance=light' "the sun didn't make the Space's theme light"
+send clickkey $(panel_at palette 1)
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
+send clickkey $(panel_at look light)
+expect '^browser: themed space [0-9]* .*appearance=light' "Light didn't make the Space's theme light"
 send key escape
 expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 send move $(row 1)
@@ -139,8 +138,8 @@ switches: $(since | grep "^browser: tab [0-9]* picturing \|^browser: hover card 
 send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar for the card over the sidebar out"
 send move 400 300
-send move 3 300
-send move 3 306
+send move 0 300
+send move 0 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 send move $(row 1)

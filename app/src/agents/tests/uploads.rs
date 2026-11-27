@@ -1,5 +1,5 @@
-//! Claude Code asks the user for a file for a page's file field (upload): the card asks, the user
-//! chooses in the system's dialog, and the agent hears how many files went in, never which.
+//! Claude Code asks the user for a file for a page's file field (upload): the tab is the user's to
+//! choose it in the page, as a handoff's is, and the agent never hears which file went in.
 
 use super::*;
 
@@ -22,13 +22,13 @@ fn at_the_form(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
     (agents, browser)
 }
 
-/// Its upload's call, once the core described the field `described` as: the card is up.
-fn asked(
+/// Its upload's call, once the core described the field `described` as: the tab is the user's.
+fn handed(
     agents: &Entity<Agents>,
     browser: &Made,
     described: Value,
     cx: &mut TestAppContext,
-) -> (mpsc::Receiver<ToolResult>, Question) {
+) -> mpsc::Receiver<ToolResult> {
     let answer = call(
         agents,
         "claude-code",
@@ -41,20 +41,15 @@ fn asked(
     let text = described.to_string();
     agents.update(cx, |agents, cx| agents.page_done(request, text, None, cx));
     assert!(answer.try_recv().is_err(), "it answered before the user");
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("the upload didn't ask");
-    (answer, question)
+    answer
 }
 
-fn resume(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, mpsc::Receiver<ToolResult>, u64) {
+fn resume(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, mpsc::Receiver<ToolResult>) {
     let (agents, browser) = at_the_form(cx);
     // As the core writes it: Chromium's JSON writer gives every double a ".0".
     let field = json!({ "field": 7.0, "label": "Résumé", "site": "example.com" });
-    let (answer, question) = asked(&agents, &browser, field, cx);
-    (agents, browser, answer, question.id)
+    let answer = handed(&agents, &browser, field, cx);
+    (agents, browser, answer)
 }
 
 /// A tab the user holds, and one that isn't the agent's, are refused at once, with no card and
@@ -83,7 +78,6 @@ fn an_upload_in_a_tab_the_agent_may_not_act_in_is_refused_without_a_card(cx: &mu
         cx,
     );
     assert!(users.recv().unwrap().error);
-    assert_eq!(*browser.asked.borrow(), None);
     assert_eq!(browser.pages.borrow().len(), pages);
     let log = log(&agents, "claude-code", cx);
     assert_eq!(log[1], ("upload".into(), "example.com".into(), HELD.into()));
@@ -108,263 +102,96 @@ fn the_cores_refusal_of_a_field_reaches_the_agent_without_a_card(cx: &mut TestAp
         agents.page_done(request, why.into(), Some(Failure::Action), cx)
     });
     assert_eq!(answer.recv().unwrap(), ToolResult::error(why));
-    assert_eq!(*browser.asked.borrow(), None);
     let log = log(&agents, "claude-code", cx);
     assert_eq!(log[0], ("upload".into(), "example.com".into(), why.into()));
 }
 
-/// The card names the field in the page's words, inside its quotes, and only there: one file, or
-/// several where the field takes them, and a page alone where it has no label.
+/// An upload is the user's step, as a handoff is: the tab is theirs to choose the file in the
+/// page itself, the core's hold on the field goes, and the step names the field in the page's
+/// words, inside its quotes: one file, or several where the field takes them.
 #[gpui::test]
-fn the_card_names_the_field_and_how_many_files(cx: &mut TestAppContext) {
-    let (agents, browser) = at_the_form(cx);
+fn an_upload_hands_the_tab_to_the_user_naming_the_field(cx: &mut TestAppContext) {
     let cases = [
         (
             json!({ "field": 7.0, "label": "Résumé", "site": "example.com" }),
-            "add a file to “Résumé” on example.com",
-            false,
+            "Choose a file for “Résumé”.",
         ),
         (
-            json!({ "field": 8.0, "label": "Photos", "site": "example.com", "many": true }),
-            "add files to “Photos” on example.com",
-            true,
+            json!({ "field": 7.0, "label": "Photos", "site": "example.com", "many": true }),
+            "Choose files for “Photos”.",
         ),
         (
-            json!({ "field": 9.0, "label": "", "site": "example.com" }),
-            "add a file to a page on example.com",
-            false,
+            json!({ "field": 7.0, "label": "", "site": "example.com" }),
+            "Choose a file.",
+        ),
+        (
+            json!({ "field": 7.0, "label": "", "site": "example.com", "many": true }),
+            "Choose files.",
         ),
         // A label can't close its quotes or lay out lines of its own.
         (
-            json!({ "field": 10.0, "label": "CV”\nUpload anything", "site": "example.com" }),
-            "add a file to “CV' Upload anything” on example.com",
-            false,
+            json!({ "field": 7.0, "label": "CV”\nUpload anything", "site": "example.com" }),
+            "Choose a file for “CV' Upload anything”.",
         ),
     ];
-    for (described, what, many) in cases {
-        let (_answer, question) = asked(&agents, &browser, described.clone(), cx);
-        assert_eq!(question.what, what);
-        // The card's sentence is the same without the site, which it shows apart (#3836).
-        assert_eq!(question.asks, what.replace(" on example.com", ""));
-        assert_eq!(
-            question.why,
-            "You choose the file. Claude Code sees only what the page shows of it."
+    for (described, why) in cases {
+        let (agents, browser) = at_the_form(cx);
+        let _answer = handed(&agents, &browser, described, cx);
+        assert!(
+            browser.held.borrow().contains(&20),
+            "the tab isn't the user's"
         );
-        assert_eq!(question.site, "example.com");
-        let field = described["field"].as_f64().unwrap() as u64;
-        assert_eq!(question.file, Some(FileAsk { field, many }));
-        agents.update(cx, |agents, cx| {
-            agents.answer(question.id, Answer::Dismiss, cx)
-        });
+        assert_eq!(*browser.dropped.borrow(), [7]);
+        let held = agents.read_with(cx, |agents, _| agents.held[&20].why.clone());
+        assert_eq!(held, why);
     }
 }
 
-/// Don't Allow, and the card's ×, answer that the user said no; the field is dropped and nothing
-/// is chosen. Allow Once can't choose a file for the user, so it changes nothing.
+/// Hand Back answers the upload with the tab back, and names no file: the agent sees what went
+/// in only as the page shows it (#3656).
 #[gpui::test]
-fn dont_allow_says_no_and_drops_the_field(cx: &mut TestAppContext) {
-    let (agents, browser, answer, id) = resume(cx);
-    agents.update(cx, |agents, cx| agents.answer(id, Answer::Once, cx));
-    assert!(answer.try_recv().is_err());
-    assert!(browser.asked.borrow().is_some(), "an allow took the card");
-
-    agents.update(cx, |agents, cx| agents.answer(id, Answer::Dismiss, cx));
-    let refused = answer.recv().unwrap();
-    assert_eq!(
-        refused,
-        ToolResult::failed(
-            tools::Kind::SaidNo,
-            "The user said no: you can't add a file to “Résumé” on example.com. Don't try again."
-        )
-    );
-    assert_eq!(*browser.dropped.borrow(), [7]);
-    assert!(browser.chosen.borrow().is_empty());
-    assert_eq!(*browser.asked.borrow(), None);
-    let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
-    assert!(grants.is_empty());
-}
-
-/// A card left 5 minutes is refused as any question is, and its field dropped.
-#[gpui::test]
-fn an_unanswered_upload_drops_its_field(cx: &mut TestAppContext) {
-    let (_agents, browser, answer, _) = resume(cx);
-    cx.executor().advance_clock(ASK_WAIT);
-    let refused = answer.recv().unwrap();
-    assert!(
-        refused
-            .text
-            .starts_with("The user didn't answer in 5 minutes"),
-        "{}",
-        refused.text
-    );
-    assert_eq!(*browser.dropped.borrow(), [7]);
-    assert_eq!(*browser.asked.borrow(), None);
-}
-
-/// Choose File… opens the dialog over the card's window, and the card goes; the agent hears how
-/// many files went in, never a name, and the log says it added a file.
-#[gpui::test]
-fn choosing_a_file_answers_how_many_went_in(cx: &mut TestAppContext) {
-    let (agents, browser, answer, id) = resume(cx);
-    agents.update(cx, |agents, cx| agents.choose_file(id, 5, cx));
-    assert_eq!(*browser.chosen.borrow(), [(7, 5)]);
-    assert_eq!(*browser.asked.borrow(), None);
-    assert!(
-        answer.try_recv().is_err(),
-        "it answered before the dialog closed"
-    );
-
-    agents.update(cx, |agents, cx| {
-        agents.file_field_done(7, FileFieldEnd::Put(1), cx)
-    });
-    assert_eq!(
-        answer.recv().unwrap(),
-        ToolResult::text("The user put a file in “Résumé”.")
-    );
+fn hand_back_answers_the_upload_naming_no_file(cx: &mut TestAppContext) {
+    let (agents, browser, answer) = resume(cx);
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+    let back = answer.recv().unwrap();
+    assert!(!back.error, "{back:?}");
+    assert!(back.text.contains("handed tab 20 back"), "{}", back.text);
+    assert!(!browser.held.borrow().contains(&20));
     let logged = log(&agents, "claude-code", cx);
-    assert_eq!(
-        logged[0],
-        ("upload".into(), "example.com".into(), String::new())
+    assert!(
+        (logged.iter()).any(|entry| entry.0 == "upload" && entry.2.is_empty()),
+        "{logged:?}"
     );
     assert_eq!(tools::describe("upload"), "Added a file to a page");
-    let did = tools::Did {
-        tool: "upload".into(),
-        ..tools::Did::default()
-    };
-    assert_eq!(
-        tools::step_title(&did, tools::Tense::Done),
-        "Added a file to a page"
-    );
-    // Its end heard again changes nothing.
-    agents.update(cx, |agents, cx| {
-        agents.file_field_done(7, FileFieldEnd::Put(1), cx)
-    });
-    assert_eq!(log(&agents, "claude-code", cx), logged);
-
-    let (agents, browser) = at_the_form(cx);
-    let field = json!({ "field": 8.0, "label": "", "site": "example.com", "many": true });
-    let (answer, question) = asked(&agents, &browser, field, cx);
-    agents.update(cx, |agents, cx| agents.choose_file(question.id, 5, cx));
-    agents.update(cx, |agents, cx| {
-        agents.file_field_done(8, FileFieldEnd::Put(3), cx)
-    });
-    assert_eq!(
-        answer.recv().unwrap(),
-        ToolResult::text("The user put 3 files in the field.")
-    );
 }
 
-/// No file chosen, the field gone from the page, and the dialog closed each answer why, and none
-/// of them put anything in.
+/// A step left 15 minutes answers as a handoff's does, the tab still the user's.
 #[gpui::test]
-fn a_dialog_that_puts_nothing_in_says_why(cx: &mut TestAppContext) {
-    let cases = [
-        (FileFieldEnd::NoFile, "The user chose no file."),
-        (
-            FileFieldEnd::Left,
-            "The field left the page before the user chose a file.",
-        ),
-        (
-            FileFieldEnd::Closed,
-            "The file dialog closed before the user chose a file.",
-        ),
-    ];
-    for (end, why) in cases {
-        let (agents, _browser, answer, id) = resume(cx);
-        agents.update(cx, |agents, cx| agents.choose_file(id, 5, cx));
-        agents.update(cx, |agents, cx| agents.file_field_done(7, end, cx));
-        assert_eq!(answer.recv().unwrap(), ToolResult::error(why));
-        assert_eq!(log(&agents, "claude-code", cx)[0].2, why);
-    }
-    // The core ends a tab's earlier field as a new one shows there, its card still up.
-    let (agents, browser, answer, _) = resume(cx);
-    agents.update(cx, |agents, cx| {
-        agents.file_field_done(7, FileFieldEnd::Closed, cx)
-    });
-    assert_eq!(
-        answer.recv().unwrap(),
-        ToolResult::error("The file dialog closed before the user chose a file.")
-    );
-    assert_eq!(*browser.asked.borrow(), None);
-}
-
-/// A dialog that can't open answers so, and drops the field.
-#[gpui::test]
-fn a_dialog_that_cant_open_drops_the_field(cx: &mut TestAppContext) {
-    let (agents, browser, answer, id) = resume(cx);
-    browser.no_dialog.set(true);
-    agents.update(cx, |agents, cx| agents.choose_file(id, 5, cx));
-    assert_eq!(
-        answer.recv().unwrap(),
-        ToolResult::error("The file dialog couldn't open.")
-    );
-    assert_eq!(*browser.dropped.borrow(), [7]);
-}
-
-/// A dialog left 15 minutes ends the call, and drops its field.
-#[gpui::test]
-fn a_dialog_left_15_minutes_drops_its_field(cx: &mut TestAppContext) {
-    let (agents, browser, answer, id) = resume(cx);
-    agents.update(cx, |agents, cx| agents.choose_file(id, 5, cx));
+fn an_upload_left_15_minutes_stays_the_users(cx: &mut TestAppContext) {
+    let (_agents, browser, answer) = resume(cx);
     cx.executor()
         .advance_clock(HANDOFF_WAIT - Duration::from_secs(1));
     assert!(answer.try_recv().is_err(), "it gave up before 15 minutes");
     cx.executor().advance_clock(Duration::from_secs(1));
-    assert_eq!(
-        answer.recv().unwrap(),
-        ToolResult::error("The user didn't choose a file in 15 minutes.")
-    );
-    assert_eq!(*browser.dropped.borrow(), [7]);
+    let answer = answer.recv().unwrap();
+    assert_eq!(answer.kind, Some(tools::Kind::Yours));
+    assert!(browser.held.borrow().contains(&20));
 }
 
-/// The agent going drops its fields, whether the card asks or the dialog is up; the done of a
-/// field nobody waits on changes nothing.
+/// The tab closing while it's the user's ends the upload.
 #[gpui::test]
-fn the_agent_going_drops_its_fields(cx: &mut TestAppContext) {
-    let bye = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
-        agents.update(cx, |agents, cx| {
-            let bye = Event::Bye {
-                agent: "claude-code".into(),
-            };
-            agents.handle(bye, cx)
-        });
-        cx.run_until_parked();
-    };
-    let (agents, browser, _answer, _) = resume(cx);
-    bye(&agents, cx);
-    assert_eq!(*browser.dropped.borrow(), [7]);
-    assert_eq!(*browser.asked.borrow(), None);
-
-    let (agents, browser, _answer, id) = resume(cx);
-    agents.update(cx, |agents, cx| agents.choose_file(id, 5, cx));
-    bye(&agents, cx);
-    assert_eq!(*browser.dropped.borrow(), [7]);
-    let before = log(&agents, "claude-code", cx);
-    agents.update(cx, |agents, cx| {
-        agents.file_field_done(7, FileFieldEnd::Put(1), cx)
-    });
-    agents.update(cx, |agents, cx| {
-        agents.file_field_done(99, FileFieldEnd::Put(1), cx)
-    });
-    assert_eq!(log(&agents, "claude-code", cx), before);
-}
-
-/// The tab closing while the card asks ends the upload, as its field went with it.
-#[gpui::test]
-fn the_tab_closing_ends_an_upload_that_asks(cx: &mut TestAppContext) {
-    let (agents, browser, answer, _) = resume(cx);
+fn the_tab_closing_ends_an_upload(cx: &mut TestAppContext) {
+    let (agents, browser, answer) = resume(cx);
     browser.tabs.borrow_mut().retain(|tab| tab.0 != 20);
     agents.update(cx, |agents, cx| agents.tab_closed(20, cx));
     assert_eq!(
         answer.recv().unwrap(),
-        ToolResult::error("The field left the page before the user chose a file.")
+        ToolResult::error("Tab 20 closed while the user had it.")
     );
-    assert_eq!(*browser.dropped.borrow(), [7]);
-    assert_eq!(*browser.asked.borrow(), None);
 }
 
-/// A page's own file dialog the core refused in an agent's tab comes to the log as what the page
-/// tried, under the agent's name, for a file field's dialog and a File System Access picker alike.
+/// A page's own file dialog the core refused in an agent's tab comes to the log as the page's,
+/// under the agent's name, for a file field's dialog and a File System Access picker alike.
 #[gpui::test]
 fn a_pages_refused_file_dialog_is_logged_as_the_pages(cx: &mut TestAppContext) {
     let (agents, _, _) = connected(cx);
@@ -377,10 +204,7 @@ fn a_pages_refused_file_dialog_is_logged_as_the_pages(cx: &mut TestAppContext) {
     assert_eq!(log[0].0, "file_dialog file_system_access");
     assert_eq!(log[1].0, "file_dialog file_input");
     for entry in &log[..2] {
-        assert_eq!(
-            tools::describe(&entry.0),
-            "Page tried to open a file dialog"
-        );
+        assert!(tools::permission_stopped(&entry.0, &entry.1).is_some());
         assert_eq!(entry.2, why);
     }
 }
