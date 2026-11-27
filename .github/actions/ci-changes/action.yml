@@ -7,14 +7,16 @@ outputs:
     value: ${{ steps.detect.outputs.core_linux }}
   app_linux:
     value: ${{ steps.detect.outputs.app_linux }}
+  # Not on the rework line, where Check on macOS covers the Mac at each build's cut and the iPhone
+  # app isn't reworked (.github/scripts/rework-head.sh).
   app_mac:
-    value: ${{ steps.detect.outputs.app_mac }}
+    value: ${{ steps.detect.outputs.app_mac == 'true' && steps.rework.outputs.rework != 'true' }}
   engine_windows:
     value: ${{ steps.detect.outputs.engine_windows }}
   app_windows:
     value: ${{ steps.detect.outputs.app_windows }}
   mobile_ios:
-    value: ${{ steps.detect.outputs.mobile_ios }}
+    value: ${{ steps.detect.outputs.mobile_ios == 'true' && steps.rework.outputs.rework != 'true' }}
   site:
     value: ${{ steps.detect.outputs.site }}
 runs:
@@ -86,3 +88,24 @@ runs:
           echo "$path"
         done < "$RUNNER_TEMP/changed-paths" > "$RUNNER_TEMP/compiled-paths"
         decide --paths "$RUNNER_TEMP/compiled-paths"
+
+    # A commit on the rework line skips the Mac app's and the iPhone app's jobs, and says so. One it
+    # can't place runs them.
+    - id: rework
+      shell: bash
+      env:
+        APP_MAC: ${{ steps.detect.outputs.app_mac }}
+        MOBILE_IOS: ${{ steps.detect.outputs.mobile_ios }}
+      run: |
+        rework=false
+        said=$(.github/scripts/rework-head.sh) && rework=true
+        echo "$said"
+        echo "rework=$rework" >> "$GITHUB_OUTPUT"
+        skipped=
+        [ "$APP_MAC" != true ] || skipped="UI on macOS"
+        [ "$MOBILE_IOS" != true ] || skipped="${skipped:+$skipped and }ilo for iPhone"
+        if [ "$rework" = true ] && [ -n "$skipped" ]; then
+          why="Skipped $skipped, which this change would start: $said Check on macOS covers the Mac at each build's cut, and the iPhone app isn't reworked. Both run again once main has the rework."
+          echo "$why"
+          echo "$why" >> "$GITHUB_STEP_SUMMARY"
+        fi
