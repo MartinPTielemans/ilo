@@ -33,15 +33,14 @@ pub(super) const LINK: &str = "icons/link.svg";
 pub(super) const UNDO: &str = "icons/undo-2.svg";
 /// No glyph, for one that comes and goes.
 pub(super) const NONE: &str = "";
-// The check draws in 250 ms, ease-in-out (ours), while the link leaves as above.
-const CHECK_DRAW: f32 = 0.25;
 // Lucide's check in its 24 box, from its left end down to its point and up to its right end,
 // stroked as the icons are, with round ends and join.
 const CHECK_LINE: [(f32, f32); 3] = [(4., 12.), (9., 17.), (20., 6.)];
 use crate::tokens::shell::swap::CHECK_BOX;
 use crate::tokens::shell::swap::CHECK_STROKE;
-// A glyph's change, [shell.swap.motion]: an import tile's badge changes by it too.
-use crate::tokens::shell::swap::motion::{COME, LEAVE, SHRUNK, SMALL, SWAP};
+// A glyph's change, [shell.swap.motion]: an import tile's badge changes by it too, and an import
+// card's badge draws its check as Copy URL does.
+use crate::tokens::shell::swap::motion::{CHECK as CHECK_DRAW, COME, LEAVE, SHRUNK, SMALL, SWAP};
 
 struct Swap {
     what: Swapped,
@@ -219,7 +218,7 @@ impl Swaps {
                 .into_any_element()
         };
         let coming = match path {
-            CHECK => drawing_check(ease(elapsed / CHECK_DRAW), color).into_any_element(),
+            CHECK => drawing_check(check_drawn(elapsed), color).into_any_element(),
             _ => {
                 let (opacity, scale) = arriving(elapsed);
                 glyph(path, opacity, scale)
@@ -284,9 +283,14 @@ pub(crate) fn arriving(elapsed: f32) -> (f32, f32) {
 /// glyph faded in.
 fn arrived(to: &'static str, elapsed: f32) -> f32 {
     match to {
-        CHECK => ease(elapsed / CHECK_DRAW),
+        CHECK => check_drawn(elapsed),
         _ => coming(elapsed),
     }
+}
+
+/// How far a check has drawn along its stroke, `elapsed` seconds in, 0 to 1.
+pub(crate) fn check_drawn(elapsed: f32) -> f32 {
+    ease(elapsed / CHECK_DRAW)
 }
 
 /// Ease-in-out, exactly 0 and 1 at its ends, which the curve's search only comes near.

@@ -2845,9 +2845,8 @@ kind-chip-fill = 0.2
 [shell.import.motion]
 # Seconds. A card comes as a task's chips do ([shell.task.motion] chips, chips-stagger,
 # chips-rise, on its ease), and its count rolls as a task's status ([shell.task.motion] roll,
-# roll-rise), once a roll at most. Its badge's check draws in `check`, ease-in-out (ux-spec, Check
-# draw), and its waiting dot breathes once in `breath` (ux-spec, Status dot breath).
-check = 0.25
+# roll-rise), once a roll at most. Its badge's check draws as Copy URL's ([shell.swap.motion]
+# check), and its waiting dot breathes once in `breath` (ux-spec, Status dot breath).
 breath = 1.6
 
 [shell.permission]
@@ -3063,11 +3062,14 @@ check-stroke = 2.25
 # reload into stop and back). From one moment, linearly, about the glyph's middle, the old one
 # fades out and shrinks to `shrunk` over `leave`, and the new one fades in over `come` and grows
 # from `small` over `swap`: the header's and the rows' glyphs, and an import tile's badge (#4108).
+# A check draws along its stroke in `check`, ease-in-out (ux-spec, Check draw), in place of the
+# new glyph's fade: Copy URL's after a click, and an import card's badge once its tabs are in.
 swap = 0.08
 leave = 0.07
 come = 0.04
 shrunk = 0.6
 small = 0.8
+check = 0.25
 
 [shell.media.motion]
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
