@@ -53,6 +53,26 @@ tile="114 114"
 tiled_row() {
   echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
 }
+# Ends the run when another app has taken the Mac, as the badges guards below do.
+skip_cards() {
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the hover cards weren't checked"
+  exit 0
+}
+# expect, for a card line: another app taking the Mac mid-wait closes the card with the keyboard
+# (#968), so the wait skips the run instead of reading the close as a failure the app never made.
+expect_card() {
+  wait_begins
+  for _ in $(seq 100); do
+    logged "$1" "${3:-}" && return 0
+    since "${3:-}" | grep -q '^browser: app activated ' && skip_cards
+    exited_without "$1" "$2" "${3:-}"
+    sleep 0.1
+  done
+  ran_out "$1" "${3:-$step}"
+  fail "$2"
+}
 open_from_bar "http://localhost:$port/two.html"
 b=$tab
 expect_tabs "$b $a" "$b" "after opening a tab"
@@ -93,17 +113,17 @@ expect "^browser: today $b\$" "the favorite is still in Today: Today is \"$(toda
 # be before the move onto it. It's the tab shown, so its card has no picture, and a favorite's only
 # button takes it out of the favorites.
 send move $tile
-expect "^browser: hover card shown $a unfavorite none\$" \
+expect_card "^browser: hover card shown $a unfavorite none\$" \
   "resting on the tile the row was dropped on didn't show its card" "$released"
 send move 100 400
 expect '^browser: hover card hidden$' "the pointer leaving the tile didn't hide its card"
 # The press showed the favorite, so the click on its tile below has a tab to change from.
 switch "2 cmd" "$b"
 send move $tile
-expect "^browser: hover card shown $a unfavorite \(picture\|favicon\)\$" \
+expect_card "^browser: hover card shown $a unfavorite \(picture\|favicon\)\$" \
   "resting on the tile again didn't show its card"
-expect '^browser: hover card window shown$' "the tile's card didn't show"
-expect '^browser: hover card settled$' "the tile's card didn't come to rest"
+expect_card '^browser: hover card window shown$' "the tile's card didn't show"
+expect_card '^browser: hover card settled$' "the tile's card didn't come to rest"
 # It starts at the tile's top, 90 down, right of the tile's middle, beside the rows, and the window
 # the host put over the page is where the UI asked.
 since_move() {
@@ -603,9 +623,9 @@ fi
 switch "1 cmd" "$a"
 # Two tiles across the sidebar: the split's is the second, 118 in and 102 wide.
 send move 169 113
-expect "^browser: hover card shown $x unfavorite \(picture\|favicon\)\$" \
+expect_card "^browser: hover card shown $x unfavorite \(picture\|favicon\)\$" \
   "resting on the split's tile didn't show its card"
-expect '^browser: hover card settled$' "the split's card didn't settle"
+expect_card '^browser: hover card settled$' "the split's card didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-split-card.png" || fail "no window to capture"
 send move $page_point
 post rightclick 169 113
@@ -701,6 +721,7 @@ card_settled() {
   for _ in $(seq 100); do
     [ "$(grep -E '^browser: hover card (settled|hidden)$' "$log" | tail -1)" = 'browser: hover card settled' ] &&
       return 0
+    since | grep -q '^browser: app activated ' && skip_cards
     sleep 0.1
   done
   fail "$1"
@@ -709,8 +730,8 @@ card_settled() {
 # inside the window, placed where the UI asked. Sets $left to where it starts.
 beside() {
   send move $1 110
-  expect "^browser: hover card shown $2 " "resting on the tile at $1 didn't show tab $2's card"
-  expect '^browser: hover card window at ' "tab $2's card wasn't put over the window"
+  expect_card "^browser: hover card shown $2 " "resting on the tile at $1 didn't show tab $2's card"
+  expect_card '^browser: hover card window at ' "tab $2's card wasn't put over the window"
   asked=$(since_move '^browser: hover card at ')
   placed=$(since_move '^browser: hover card window at ')
   echo "$asked $placed" | awk -v window=$(drawn_width) '
