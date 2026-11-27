@@ -31,6 +31,7 @@ if [ "$(uname)" = Linux ]; then
 fi
 # The recording is this process, so ending it ends the recording (#3191).
 PID="$1" SECONDS_LONG="$2" OUT="$3" exec swift - <<'SWIFT'
+import AVFoundation
 import Foundation
 import ScreenCaptureKit
 
@@ -44,20 +45,44 @@ func fail(_ message: String) -> Never {
   exit(1)
 }
 
-final class Finished: NSObject, SCRecordingOutputDelegate {
-  var done: CheckedContinuation<Void, Never>?
-  func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
-    done?.resume()
+// The stream's frames, written as they come. Not SCRecordingOutput, which needs macOS 15, and the
+// app runs on 14 (#4354). ScreenCaptureKit also sends frames with no new picture, while nothing on
+// screen moves; only complete ones are written, and the last holds to the recording's end.
+final class Writer: NSObject, SCStreamOutput {
+  let queue = DispatchQueue(label: "window-record")
+  let writer: AVAssetWriter
+  let input: AVAssetWriterInput
+  var first: CMTime?
+  var began: CheckedContinuation<Void, Never>?
+  init(width: Int, height: Int) throws {
+    writer = try AVAssetWriter(outputURL: out, fileType: .mp4)
+    input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+      AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
+    ])
+    input.expectsMediaDataInRealTime = true
+    writer.add(input)
   }
-  func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) {
-    fail("recording failed: \(error)")
+  func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer,
+              of type: SCStreamOutputType) {
+    guard type == .screen, buffer.isValid,
+      let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false)
+        as? [[SCStreamFrameInfo: Any]],
+      let status = attachments.first?[.status] as? Int, SCFrameStatus(rawValue: status) == .complete
+    else { return }
+    if first == nil {
+      guard writer.startWriting() else { fail("writing failed: \(String(describing: writer.error))") }
+      first = buffer.presentationTimeStamp
+      writer.startSession(atSourceTime: buffer.presentationTimeStamp)
+      began?.resume()
+      began = nil
+    }
+    if input.isReadyForMoreMediaData { input.append(buffer) }
   }
 }
 
 // A stream can end by itself before it's stopped, and then stopping it says only that it had
 // (-3808, #2280), so this says why it ended and when, a line check.sh's FAIL or skip carries. The
-// recording ends with it: one the system stops as it's being stopped gets no finish, and stopping
-// it no error, so nothing else would end the wait for it (#3417).
+// recording ends with it, as nothing else would end the wait for its frames (#3417).
 final class Ended: NSObject, SCStreamDelegate {
   var began: Date?
   var planned = 0.0
@@ -83,44 +108,58 @@ else { fail("no display shows the window") }
 let filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
 let config = SCStreamConfiguration()
 config.sourceRect = main.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
-config.width = Int(main.frame.width * CGFloat(filter.pointPixelScale))
-config.height = Int(main.frame.height * CGFloat(filter.pointPixelScale))
+// Even, as H.264 wants.
+config.width = Int(main.frame.width * CGFloat(filter.pointPixelScale)) / 2 * 2
+config.height = Int(main.frame.height * CGFloat(filter.pointPixelScale)) / 2 * 2
 config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
 config.showsCursor = false
 
-let recording = SCRecordingOutputConfiguration()
-recording.outputURL = out
-recording.outputFileType = .mp4
-recording.videoCodecType = .h264
-let finished = Finished()
-let output = SCRecordingOutput(configuration: recording, delegate: finished)
+try? FileManager.default.removeItem(at: out)
+let writer = try Writer(width: config.width, height: config.height)
 let ended = Ended()
 ended.planned = seconds
 let stream = SCStream(filter: filter, configuration: config, delegate: ended)
-try? FileManager.default.removeItem(at: out)
-try stream.addRecordingOutput(output)
+try stream.addStreamOutput(writer, type: .screen, sampleHandlerQueue: writer.queue)
 // The handler forms, since Swift can pick a startCapture() that returns before capture starts.
 try await withCheckedThrowingContinuation { (started: CheckedContinuation<Void, Error>) in
   stream.startCapture { error in
     if let error { started.resume(throwing: error) } else { started.resume() }
   }
 }
+// Frames are being written once the first is.
+await withCheckedContinuation { continuation in
+  writer.queue.async {
+    if writer.first == nil { writer.began = continuation } else { continuation.resume() }
+  }
+}
 ended.began = Date()
 print("recording")
 fflush(stdout)
 try await Task.sleep(for: .seconds(seconds))
-// The file is complete only once the recording output says so, after the stream stops. That takes
-// well under a second, so one that hasn't come in 5 s isn't coming, and the caller hears why rather
-// than waiting with the helper (#3417).
+// The file is complete only once the writer says so, after the stream stops. That takes well under
+// a second, so one that hasn't come in 5 s isn't coming, and the caller hears why rather than
+// waiting with the helper (#3417).
 do {
-  let late = String(format: "no recordingOutputDidFinishRecording came in 5 s after stopCapture, "
+  let late = String(format: "the recording wasn't finished 5 s after stopCapture, "
     + "at the end of its %.1f s recording", seconds)
   DispatchQueue.global().asyncAfter(deadline: .now() + 5) { fail(late) }
 }
-await withCheckedContinuation { continuation in
-  finished.done = continuation
+await withCheckedContinuation { (stopped: CheckedContinuation<Void, Never>) in
   stream.stopCapture { error in
     if let error { fail("stopping failed: \(error)") }
+    stopped.resume()
+  }
+}
+await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+  writer.queue.async {
+    writer.input.markAsFinished()
+    writer.writer.endSession(atSourceTime: writer.first! + CMTime(seconds: seconds, preferredTimescale: 600))
+    writer.writer.finishWriting {
+      if writer.writer.status != .completed {
+        fail("recording failed: \(String(describing: writer.writer.error))")
+      }
+      finished.resume()
+    }
   }
 }
 SWIFT
