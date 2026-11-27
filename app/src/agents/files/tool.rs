@@ -269,10 +269,7 @@ pub fn told(not: NotRead) -> String {
         NotRead::Refused(Refused::TooLarge) | NotRead::TooLarge => {
             "Not done: read_file reads text files of at most 1 MB.".into()
         }
-        NotRead::Refused(Refused::NotText) | NotRead::Other => {
-            "Not done: read_file reads text, PDFs, and PNG, JPEG, GIF or WebP pictures, and this file is none of them."
-                .into()
-        }
+        NotRead::Other => words::told(Op::Read, Refused::NotText),
         NotRead::Refused(why) => words::told(Op::Read, why),
         NotRead::Heif => format!(
             "Not done: {PRODUCT} can't open HEIC pictures yet. Ask the user for a PNG or JPEG copy, or go on without it."

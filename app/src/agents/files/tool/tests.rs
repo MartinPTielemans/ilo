@@ -182,7 +182,11 @@ fn a_file_is_read_as_what_its_bytes_are() {
     );
     assert_eq!(
         line("archive.zip", Err(NotRead::Other)),
-        "Couldn't read \u{201c}archive.zip\u{201d}: it isn't text"
+        "Couldn't read \u{201c}archive.zip\u{201d}: it isn't text, a PDF or a picture"
+    );
+    assert_eq!(
+        told(NotRead::Other),
+        "Not done: read_file reads text, PDFs and pictures, and this file is none of them."
     );
     assert_eq!(line("scan.png", Ok(None)), "Read \u{201c}scan.png\u{201d}");
 }
@@ -252,7 +256,7 @@ fn a_pdfs_pages_are_numbered_with_their_pictures_and_which_they_are() {
     let read = pdf_answer(&read, 30).unwrap();
     assert_eq!(
         read.text,
-        "Page 31 of 40\n\nAnnual statement\n\nPage 32 of 40\n\n[Its picture is picture 1 below.]\n\nPage 33 of 40\n\nTotals\n\nOnly pages 31\u{2013}33 of 40 are included. Read more with pages."
+        "Page 31 of 40\n\nAnnual statement\n\nPage 32 of 40\n\n[Its picture is picture 1 below.]\n\nPage 33 of 40\n\nTotals\n\nOnly pages 31\u{2013}33 of 40 are included. Use the pages parameter to read more."
     );
     assert_eq!(
         (read.pictures.as_slice(), read.cut),
@@ -285,9 +289,16 @@ fn a_page_that_doesnt_fit_is_the_next_reads() {
     );
     let read = pdf_answer(&read, 0).unwrap();
     assert_eq!(read.cut, Some((1, 1, 30)));
+    // One page read says so in its own form, in the step and to the assistant.
     assert!(
         read.text
-            .ends_with("Only pages 1\u{2013}1 of 30 are included. Read more with pages.")
+            .ends_with("Only page 1 of 30 is included. Use the pages parameter to read more."),
+        "{}",
+        read.text
+    );
+    assert_eq!(
+        line("statement.pdf", Ok(read.cut)),
+        "Read \u{201c}statement.pdf\u{201d} \u{b7} page 1 of 30"
     );
     let scans = vec![("", true); 12];
     let read = pdf_answer(&pdf(PDF_READ, 12, &scans), 0).unwrap();
@@ -341,7 +352,7 @@ fn a_pdf_or_picture_not_read_says_why() {
     // One that took too long is told so, and how to ask for less, not that it won't open.
     assert_eq!(
         told(NotRead::Unread(Unread::TimedOut)),
-        "Not done: this PDF took too long to open. Ask for fewer pages with pages, or go on without it."
+        "Not done: this PDF took too long to open. Try fewer pages with the pages parameter, or go on without it."
     );
     assert_eq!(
         line("scan.pdf", Err(NotRead::Unread(Unread::Stopped))),

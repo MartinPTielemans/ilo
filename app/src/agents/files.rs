@@ -143,7 +143,7 @@ pub enum Refused {
     Cloud,
     /// A write over the cap.
     TooLarge,
-    /// read_file on a file that isn't text.
+    /// read_file on a file that isn't text, a PDF or a picture.
     NotText,
 }
 
@@ -872,19 +872,26 @@ pub mod words {
             Refused::NotOpened => format!("{PRODUCT} doesn't open this kind of file"),
             Refused::Cloud => "it isn't downloaded".into(),
             Refused::TooLarge => "it's over 1 MB".into(),
-            Refused::NotText => "it isn't text".into(),
+            Refused::NotText => "it isn't text, a PDF or a picture".into(),
         };
         format!("{}: {reason}", failed(step))
     }
 
     /// A PDF read that isn't the whole of it, its pages `a` to `b` of `n`: the trace's done line
-    /// (PD1), and what the assistant is told after the pages (PD1a).
+    /// (PD1), and what the assistant is told after the pages (PD1a), each with a one-page form.
     pub fn read_pages(file: &str, (a, b, n): (usize, usize, usize)) -> String {
-        format!("Read {} \u{b7} pages {a}\u{2013}{b} of {n}", quoted(file))
+        match a == b {
+            true => format!("Read {} \u{b7} page {a} of {n}", quoted(file)),
+            false => format!("Read {} \u{b7} pages {a}\u{2013}{b} of {n}", quoted(file)),
+        }
     }
 
     pub fn pages_included((a, b, n): (usize, usize, usize)) -> String {
-        format!("Only pages {a}\u{2013}{b} of {n} are included. Read more with pages.")
+        let read_more = "Use the pages parameter to read more.";
+        match a == b {
+            true => format!("Only page {a} of {n} is included. {read_more}"),
+            false => format!("Only pages {a}\u{2013}{b} of {n} are included. {read_more}"),
+        }
     }
 
     /// Why a PDF or a picture wasn't read (PD2–PD7).
@@ -919,7 +926,7 @@ pub mod words {
                 "Not done: this PDF is locked with a password, and {PRODUCT} doesn't unlock it. Ask the user for a copy without one, or go on without it."
             ),
             Unopened::Damaged => "Not done: this PDF couldn't be opened. Go on without it.".into(),
-            Unopened::TimedOut => "Not done: this PDF took too long to open. Ask for fewer pages with pages, or go on without it.".into(),
+            Unopened::TimedOut => "Not done: this PDF took too long to open. Try fewer pages with the pages parameter, or go on without it.".into(),
             Unopened::PdfOver => format!("Not done: {PRODUCT} reads PDFs up to 200 MB."),
             Unopened::PixelsOver => {
                 format!("Not done: {PRODUCT} reads pictures up to 64 megapixels.")
@@ -986,7 +993,8 @@ pub mod words {
             ),
             Refused::TooLarge => "Not done: one write can be at most 1 MB.".into(),
             Refused::NotText => {
-                "Not done: read_file reads only text, and this file isn't text.".into()
+                "Not done: read_file reads text, PDFs and pictures, and this file is none of them."
+                    .into()
             }
         }
     }
@@ -1712,7 +1720,7 @@ mod tests {
             ),
             (Refused::Cloud, "it isn't downloaded".into()),
             (Refused::TooLarge, "it's over 1 MB".into()),
-            (Refused::NotText, "it isn't text".into()),
+            (Refused::NotText, "it isn't text, a PDF or a picture".into()),
         ] {
             let line = refused(Step::Change("plan.md"), why);
             assert_eq!(
