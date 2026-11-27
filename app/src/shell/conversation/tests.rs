@@ -4246,22 +4246,17 @@ fn a_failed_line_wears_no_red() {
     }
 }
 
-/// The user's message wraps inside the panel's column beside a page, never wider than it, so none
-/// of it leaves the panel; the stage's measure wouldn't fit there.
+/// The user's message wraps inside the panel's column beside a page, a share of it, so none of it
+/// leaves the panel, in the panel's smaller type.
 #[test]
 fn a_users_message_in_the_panel_fits_its_column() {
-    use crate::tokens::shell::conversation::panel::BODY_X;
-    use crate::tokens::shell::task_area::BESIDE;
-    let column = BESIDE - 2. * BODY_X;
     let (panel, stage) = (super::Bubble::of(true), super::Bubble::of(false));
-    assert!(
-        panel.most <= column,
-        "{panel:?} is wider than the panel's {column}"
-    );
-    assert!(
-        stage.most > column,
-        "the stage's {stage:?} would fit the panel"
-    );
+    for bubble in [panel, stage] {
+        assert!(
+            0. < bubble.share && bubble.share <= 1.,
+            "{bubble:?} isn't a share of its column"
+        );
+    }
     assert!(panel.text < stage.text && panel.line < stage.line);
 }
 
