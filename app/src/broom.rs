@@ -135,9 +135,8 @@ pub fn parse(said: &[u8], handed: usize) -> Option<Vec<Folder>> {
     for folder in folders {
         let folder = folder.as_object().filter(|folder| folder.len() == 2)?;
         let name = folder.get("name")?.as_str()?.trim();
-        let fits = name.chars().count() <= LONGEST_NAME && name.chars().all(plain);
         let again = made.iter().any(|made: &Folder| same_name(&made.name, name));
-        if name.is_empty() || !fits || again {
+        if !name_fits(name) || again {
             return None;
         }
         let numbers = folder
@@ -158,6 +157,12 @@ pub fn parse(said: &[u8], handed: usize) -> Option<Vec<Folder>> {
         });
     }
     Some(made)
+}
+
+/// Whether `name` may name a folder: some plain text of `LONGEST_NAME` characters at most, as a
+/// sort's answer and a thread's put_in_folder give it.
+pub fn name_fits(name: &str) -> bool {
+    !name.is_empty() && name.chars().count() <= LONGEST_NAME && name.chars().all(plain)
 }
 
 /// Whether `c` may be in a folder's name: no control character and none that turns or overrides

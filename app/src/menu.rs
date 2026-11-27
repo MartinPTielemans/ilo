@@ -2101,9 +2101,10 @@ impl ContextMenu {
             (None, false) => None,
         };
         let a11y = self.a11y;
-        let name = match &entry.detail {
-            Some(detail) => format!("{}, {detail}", entry.title).into(),
-            None => entry.title.clone(),
+        let name = match (&entry.spoken, &entry.detail) {
+            (Some(spoken), _) => spoken.clone(),
+            (None, Some(detail)) => format!("{}, {detail}", entry.title).into(),
+            (None, None) => entry.title.clone(),
         };
         let enabled = entry.enabled || entry.header;
         let (checked, keys) = (entry.checked, shortcut.clone());

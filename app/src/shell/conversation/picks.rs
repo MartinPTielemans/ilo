@@ -15,6 +15,7 @@ impl TalkView {
             return None;
         }
         let (agent, picked, flips) = (self.agent.clone(), self.picks.tabs(), cx.weak_entity());
+        let sets = flips.clone();
         Some(tab_picks::row(
             // The add menu opened: the tabs this thread may be handed, asked now and here
             // alone, with which of them are picked.
@@ -23,7 +24,16 @@ impl TalkView {
                 let picked = flips.update(cx, |view, cx| view.flip_pick(space, offered, cx));
                 picked.unwrap_or(false)
             },
+            move |space, listed, pick, cx| {
+                (sets.update(cx, |view, cx| view.pick_all(space, &listed, pick, cx))).ok();
+            },
         ))
+    }
+
+    /// The user's click on the menu's All Tabs row.
+    fn pick_all(&mut self, space: u64, listed: &[Offered], pick: bool, cx: &mut Context<Self>) {
+        self.picks.set_all(space, listed, pick);
+        self.picks_changed(cx);
     }
 
     /// The user's click on a tab's row of the menu. Whether it is picked now.

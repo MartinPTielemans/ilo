@@ -354,6 +354,19 @@ impl Browser for Core {
         }
     }
 
+    fn archive_handed(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> agents::Closed {
+        let Ok(agent) = CString::new(agent) else {
+            return agents::Closed::Refused;
+        };
+        match unsafe { bc::bc_agent_archive_tab(agent.as_ptr(), tab, discard) } as u32 {
+            bc::BC_AGENT_CLOSED => agents::Closed::Closed,
+            bc::BC_AGENT_CLOSE_RETURNED => agents::Closed::Returned,
+            bc::BC_AGENT_CLOSE_ASKS => agents::Closed::Asks,
+            bc::BC_AGENT_CLOSE_PINNED => agents::Closed::Pinned,
+            _ => agents::Closed::Refused,
+        }
+    }
+
     fn close_user_tab(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_close(tab, false) };
     }
@@ -465,6 +478,32 @@ impl Browser for Core {
 
     fn return_tab(&self, tab: u64, _: &mut App) -> bool {
         unsafe { bc::bc_tab_return_from_agent(tab) }
+    }
+
+    fn put_in_today_folder(&self, tab: u64, with: &[u64], called: &str, cx: &mut App) -> bool {
+        let space = self.space_of(tab, cx);
+        let today = tabs(bc::bc_space_today, space);
+        let loose = |tab: &u64| today.contains(tab) && unsafe { bc::bc_folder_of(*tab) } == 0;
+        if space == 0 || !loose(&tab) {
+            return false;
+        }
+        let lower = called.to_lowercase();
+        let same = |folder: &u64| name(bc::bc_folder_name, *folder).to_lowercase() == lower;
+        let folders = today.iter().map(|&each| unsafe { bc::bc_folder_of(each) });
+        if let Some(folder) = folders.filter(|&folder| folder != 0).find(same) {
+            unsafe { bc::bc_tab_move(tab, false, folder, usize::MAX) };
+            return true;
+        }
+        let mut tabs: Vec<u64> = (with.iter().copied())
+            .filter(|each| *each != tab && loose(each))
+            .collect();
+        tabs.push(tab);
+        let Some(called) = CString::new(called).ok().filter(|_| tabs.len() >= 2) else {
+            return false;
+        };
+        unsafe {
+            bc::bc_folder_create_today(space, called.as_ptr(), tabs.as_ptr(), tabs.len()) != 0
+        }
     }
 
     fn in_use(&self, tab: u64, cx: &App) -> bool {

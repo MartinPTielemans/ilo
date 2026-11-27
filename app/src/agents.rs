@@ -153,6 +153,9 @@ pub enum Closed {
     /// It stays for another reason: it went to another page, or its page was unloaded, before its
     /// page answered.
     Stays,
+    /// bc_agent_archive_tab's alone: it went back to the place the user handed it from, but stays
+    /// open there, theirs again, and nothing is archived (#4278).
+    Returned,
 }
 
 /// An agent's close_tab waiting on its page's answer.
@@ -302,6 +305,10 @@ pub trait Browser {
     /// handler is asked, and Pending is answered later with close_answered. `discard` closes it at
     /// once and loses what it holds unsaved.
     fn close_tab(&self, agent: &str, tab: u64, discard: bool, cx: &mut App) -> Closed;
+    /// Archives `tab`, which the user handed `agent`'s thread, as their own close does, never with
+    /// its page's dialog: back to its place, then closed there into their Archive
+    /// (bc_agent_archive_tab). A page that may hold unsaved changes stays handed unless `discard`.
+    fn archive_handed(&self, agent: &str, tab: u64, discard: bool, cx: &mut App) -> Closed;
     /// Closes `tab` as the user would (bc_tab_close): a Today tab goes to the archive. For what the
     /// user does to an agent's tabs, as dropping a done session's.
     fn close_user_tab(&self, tab: u64, cx: &mut App);
@@ -357,6 +364,11 @@ pub trait Browser {
     /// Returns `tab`, which the user gave an agent and which is in its Space still, to the place
     /// it left, on the page it's at now (bc_tab_return_from_agent). Whether it moved.
     fn return_tab(&self, tab: u64, cx: &mut App) -> bool;
+    /// Puts `tab`, a Today tab of the user's in no folder, into the today's folder of its Space
+    /// named `name`, letter case aside, at its end; else makes a today's folder of that name of
+    /// those of `with` that are Today tabs of that Space in no folder, then `tab`
+    /// (bc_folder_create_today), which takes two. Whether it's in one now.
+    fn put_in_today_folder(&self, tab: u64, with: &[u64], name: &str, cx: &mut App) -> bool;
     /// Whether `tab`'s page is using the camera or the microphone, as the core last said of it
     /// (bc_tab_state). Asked of an agent's own page only, for what a task below Full access may
     /// do there (access.rs): no tool's answer and no log line has it.
@@ -2932,6 +2944,9 @@ impl Agents {
                 }
             }
             "title" => self.name_task(&agent, connection, id, &arguments, at, reply, cx),
+            "put_in_folder" if is_task(&agent) => {
+                self.put_in_folder((&agent, connection, id), &arguments, reply, cx);
+            }
             "ask" | "finish" if is_task(&agent) => {
                 self.task_tool(&agent, &tool, &arguments, reply, cx)
             }
@@ -4779,13 +4794,23 @@ impl Agents {
         // The user said yes to closing a page the agent didn't open without saving.
         if action == "discard_tab" {
             let site = site(&self.browser.tab(tab, cx).url);
-            let closed = match self.may_act(&agent, tab, "close_tab", cx) {
-                Ok(()) => self.browser.close_tab(&agent, tab, true, cx),
-                Err(refused) => {
-                    let act = act_of(&agent, connection, call, tab, reply);
-                    return self.refuse(act, &site, refused, cx);
-                }
-            };
+            if let Err(refused) = self.may_act(&agent, tab, "close_tab", cx) {
+                let act = act_of(&agent, connection, call, tab, reply);
+                return self.refuse(act, &site, refused, cx);
+            }
+            // A tab the user handed the thread is archived, as without the discard.
+            if self.archives_handed(&agent, tab) {
+                let closing = Closing {
+                    agent,
+                    connection,
+                    call,
+                    discard: true,
+                    site,
+                    reply,
+                };
+                return self.archive_handed(tab, closing, true, cx);
+            }
+            let closed = self.browser.close_tab(&agent, tab, true, cx);
             return self.closed(
                 &agent, connection, call, tab, true, closed, &site, reply, cx,
             );
@@ -5920,6 +5945,18 @@ impl Agents {
             let act = act_of(agent, connection, call, tab, reply);
             return self.refuse(act, &site, refused, cx);
         }
+        // From Work on pages up a thread's close of a tab the user handed it archives it.
+        if self.archives_handed(agent, tab) {
+            let closing = Closing {
+                agent: agent.into(),
+                connection,
+                call,
+                discard,
+                site,
+                reply,
+            };
+            return self.archive_handed(tab, closing, false, cx);
+        }
         if self.close_gives_back(agent, tab, &reply, cx) {
             return;
         }
@@ -6024,7 +6061,7 @@ impl Agents {
         }
         let answer = match closed {
             Closed::Closed if discarded => Ok(format!("Closed tab {tab} without saving.")),
-            Closed::Closed => Ok(format!("Closed tab {tab}.")),
+            Closed::Closed | Closed::Returned => Ok(format!("Closed tab {tab}.")),
             Closed::Pinned => Err(format!("Tab {tab} stays open: the user pinned it.")),
             Closed::Asks => Err(format!(
                 "Tab {tab} stays open: {}. close_tab with discard: true closes it without \
@@ -6217,7 +6254,7 @@ impl Agents {
             false => log!("browser: agent logged {agent} {action} {site} refused: {refused}"),
         }
         if refused.is_empty() {
-            let doing = match (task::handed::entry(action, site), site.is_empty()) {
+            let doing = match (task::handed::entry(action, site, target), site.is_empty()) {
                 (Some(whole), _) => whole,
                 (None, true) => tools::describe(action).to_string(),
                 (None, false) => format!("{} · {site}", tools::describe(action)),

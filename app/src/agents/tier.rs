@@ -129,6 +129,8 @@ pub enum Why {
     /// Anything but reading, on a page that is using the camera or the microphone
     /// (access::IN_USE_ANSWERS).
     InUse,
+    /// Puts a tab the user handed the thread in a today's folder of theirs (#4278).
+    Folder,
 }
 
 /// A row: what each tier, Look only, Work on pages and Full access, does with an act of `why`.
@@ -141,7 +143,7 @@ struct Row {
     refused: &'static str,
 }
 
-const ROWS: [Row; 12] = [
+const ROWS: [Row; 13] = [
     Row {
         why: Why::Act,
         allowed: [false, true, true],
@@ -201,6 +203,12 @@ const ROWS: [Row; 12] = [
         why: Why::InUse,
         allowed: [false, false, true],
         refused: "",
+    },
+    // Z37c.
+    Row {
+        why: Why::Folder,
+        allowed: [false, true, true],
+        refused: "Putting a tab in a folder isn't part of {level}.",
     },
 ];
 
@@ -454,6 +462,7 @@ mod tests {
         assert_eq!(at(Never), [false, false, false]);
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInSensitive), [false, false, true]);
+        assert_eq!(at(Folder), [false, true, true]);
         assert_eq!(at(InUse), [false, false, true]);
         assert_eq!(Tier::default(), Work);
         assert_eq!(Look.lifting(Act), Some(Work));

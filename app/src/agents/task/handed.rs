@@ -10,7 +10,11 @@ use std::sync::mpsc;
 use gpui::{App, Context, SharedString};
 use serde_json::Value;
 
-use crate::agents::{Agents, Gone, TabInfo, ToolResult, held, site, tools};
+use crate::agents::tier::{Tier, Why};
+use crate::agents::{
+    Act, Agents, Closed, Closing, Gone, TabInfo, ToolResult, act_of, held, site, tools,
+};
+use crate::broom;
 
 /// The activity log's entry of a tab the user handed to a thread, as the log file names it. The
 /// app's own give alone makes one, so the entry says who did it.
@@ -19,6 +23,19 @@ pub const HANDED: &str = "tab_handed";
 pub const TAKEN_BACK: &str = "tab_taken_back";
 /// The entry of a handed tab its thread gave back: by closing it, or by being no longer under way.
 pub const GIVEN_BACK: &str = "tab_given_back";
+/// The entry of a handed tab its thread put in a today's folder (#4278).
+pub const FOLDERED: &str = "tab_put_in_folder_by_thread";
+/// The entry of a handed tab its thread archived by closing it, from Work on pages up (#4278).
+pub const ARCHIVED: &str = "tab_archived_by_thread";
+
+/// put_in_folder's answers (#4278): a name the broom wouldn't give a folder; a tab not handed to
+/// the thread; one name more than a thread may give. Look only refuses it on the user's line
+/// (tier.rs, Z37c).
+const FOLDER_NAME: &str = "folder is the folder's name: plain text of 24 characters at most, such as \u{201c}Trip to Lisbon\u{201d}.";
+const FOLDER_TABS: &str =
+    "tabs is a list of the tabs the user handed you for this task, by their ids from list_tabs.";
+const FOLDER_MOST: &str =
+    "You've named 8 folders for this task already. Put these tabs into one of those.";
 
 /// What a call on a tab the user returned to their own tabs is answered, and all its assistant
 /// hears of the return.
@@ -288,22 +305,32 @@ impl Sends {
 struct Handed {
     agent: String,
     tab: u64,
+    /// The user's Space it was handed from, the one a folder it's put in is made in.
+    from: u64,
+    /// The today's folder its thread put it in, by name, which it goes into as it comes back to
+    /// `from` (put_in_folder).
+    folder: Option<String>,
 }
 
-/// The tabs the threads hold of the user's, in the order handed. In memory alone.
+/// The tabs the threads hold of the user's, in the order handed, and those that came back to a
+/// folder their thread named that couldn't be made yet: a new today's folder takes two tabs. In
+/// memory alone.
 #[derive(Default)]
 pub(in crate::agents) struct Records {
     held: Vec<Handed>,
+    waiting: Vec<Handed>,
 }
 
 /// What the activity log says of a handed tab's entry, if `action` is one: the whole sentence,
-/// with the page's host as the one moved.
-pub fn entry(action: &str, site: &str) -> Option<String> {
+/// with the page's host as the one moved, and for a folder, its name as the sidebar shows it.
+pub fn entry(action: &str, site: &str, folder: &str) -> Option<String> {
     let site = tools::stopped_site(site);
     match action {
         HANDED => Some(format!("You moved {site} to the thread")),
         TAKEN_BACK => Some(format!("You returned {site} to your tabs")),
         GIVEN_BACK => Some(format!("{site} returned to your tabs")),
+        FOLDERED => Some(format!("The thread put {site} in \u{201c}{folder}\u{201d}")),
+        ARCHIVED => Some(format!("The thread archived {site}")),
         _ => None,
     }
 }
@@ -373,6 +400,8 @@ impl Agents {
         self.tasks.handed.held.push(Handed {
             agent: agent.clone(),
             tab,
+            from,
+            folder: None,
         });
         // It stays the user's in what the thread keeps, after it has gone back too.
         if let Some(task) = self.task_mut(&agent) {
@@ -403,7 +432,8 @@ impl Agents {
     /// Whether `tab` is one the app would hand from the user's Space `from` to a thread of the
     /// Space `own`: the user's own tab, in the Space the window shows, never a private window's
     /// and never one of another profile than the thread's, on a page on the web, as every page a
-    /// thread has.
+    /// thread has, and never at a site the user put Off limits, whose page no thread reads at any
+    /// level, so handing it would give nothing (#4278).
     fn fits(&self, own: u64, from: u64, tab: u64, cx: &App) -> bool {
         self.space_fits(own, from) && self.tab_fits(from, tab, cx)
     }
@@ -416,7 +446,11 @@ impl Agents {
 
     /// What `fits` asks of `tab` itself.
     fn tab_fits(&self, from: u64, tab: u64, cx: &App) -> bool {
-        self.browser.shows(tab, from, cx) && self.browser.off_limits(tab, cx).is_none()
+        let fenced = || {
+            self.fence_of(&site(&self.browser.tab(tab, cx).url))
+                .is_some()
+        };
+        self.browser.shows(tab, from, cx) && self.browser.off_limits(tab, cx).is_none() && !fenced()
     }
 
     /// Whether the composer may offer `tab`, and keep its chip, seen from the user's Space
@@ -564,9 +598,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> bool {
         // No longer the thread's from here, whatever the core's report of the move then asks.
-        if !self.forget_handed_of(agent, tab) {
+        let Some(record) = self.forget_handed_of(agent, tab) else {
             return false;
-        }
+        };
         let site = match at {
             Some(url) => site(url),
             None => site(&self.browser.tab(tab, cx).url),
@@ -597,6 +631,7 @@ impl Agents {
             By::User => TAKEN_BACK,
             By::Thread | By::Ended => GIVEN_BACK,
         };
+        self.into_folder(record, cx);
         self.note_page(agent, (0, tab), entry, &site, "");
         cx.notify();
         true
@@ -718,6 +753,138 @@ impl Agents {
         true
     }
 
+    /// Whether `agent`'s close of `tab` archives it: one the user handed its thread, from Work on
+    /// pages up. Below that the close gives it back (`close_gives_back`).
+    pub(in crate::agents) fn archives_handed(&self, agent: &str, tab: u64) -> bool {
+        self.is_handed(agent, tab) && self.task(agent).is_some_and(|task| task.tier >= Tier::Work)
+    }
+
+    /// The thread's close of `tab`, which the user handed it: the core gives it back and closes it
+    /// there into the user's Archive, never with its page's dialog (bc_agent_archive_tab), with
+    /// `discard` once the user's access said yes to losing what it holds. One that went back but
+    /// stays open is the user's again, a give-back; one the core couldn't take back is given back
+    /// as below Work; one that may hold unsaved changes, or pinned, stays handed and is answered
+    /// as the thread's own tab is, a discard asking first.
+    pub(in crate::agents) fn archive_handed(
+        &mut self,
+        tab: u64,
+        closing: Closing,
+        discard: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let held = &self.tasks.handed.held;
+        let Some(at) = held
+            .iter()
+            .position(|each| each.tab == tab && each.agent == closing.agent)
+        else {
+            return;
+        };
+        // No longer the thread's from here, as in return_tab_at: the core reports its move.
+        let record = self.tasks.handed.held.remove(at);
+        let closed = self
+            .browser
+            .archive_handed(&closing.agent, tab, discard, cx);
+        let (agent, site) = (closing.agent.clone(), closing.site.clone());
+        let gone = |agents: &mut Self, entry: &str, cx: &mut Context<Self>| {
+            agents.let_go(tab, held::Event::GivenBack { stopped: false }, cx);
+            agents.forget_page(tab);
+            agents.went(tab, &agent, Gone::Itself);
+            agents.note_page(&agent, (0, tab), entry, &site, "");
+            cx.notify();
+        };
+        let answer = match closed {
+            Closed::Closed => {
+                self.tasks.handed.waiting.retain(|each| each.tab != tab);
+                gone(self, ARCHIVED, cx);
+                match discard {
+                    true => format!("Archived tab {tab} without saving."),
+                    false => format!("Archived tab {tab}."),
+                }
+            }
+            Closed::Returned => {
+                gone(self, GIVEN_BACK, cx);
+                self.into_folder(record, cx);
+                format!("Closed tab {tab}.")
+            }
+            _ => {
+                let held = &mut self.tasks.handed.held;
+                held.insert(at.min(held.len()), record);
+                if closed == Closed::Refused {
+                    self.close_gives_back(&closing.agent, tab, &closing.reply, cx);
+                } else {
+                    _ = self.close_came_to(tab, closing, closed, cx);
+                }
+                return;
+            }
+        };
+        _ = closing.reply.send(ToolResult::text(answer));
+    }
+
+    /// put_in_folder: `agent`'s thread puts tabs the user handed it into the today's folder it
+    /// names, which they go into as they come back to the user (`into_folder`), from Work on pages
+    /// up. The name is held to the broom's rules (#4252), and a thread names 8 folders at most.
+    /// Each tab's entry has its host alone: the folder's name is in no log line.
+    pub(in crate::agents) fn put_in_folder(
+        &mut self,
+        (agent, connection, call): (&str, u64, u64),
+        arguments: &Value,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let name = (arguments.get("folder").and_then(Value::as_str)).map_or("", str::trim);
+        if !broom::name_fits(name) {
+            _ = reply.send(ToolResult::error(FOLDER_NAME));
+            return;
+        }
+        let tabs: Option<Vec<u64>> = (arguments.get("tabs").and_then(Value::as_array))
+            .filter(|tabs| !tabs.is_empty())
+            .and_then(|tabs| tabs.iter().map(Value::as_u64).collect());
+        let handed = |tabs: &Vec<u64>| tabs.iter().all(|&tab| self.is_handed(agent, tab));
+        let Some(tabs) = tabs.filter(handed) else {
+            _ = reply.send(ToolResult::error(FOLDER_TABS));
+            return;
+        };
+        // Look only refuses it on the user's line, by the first tab's site, with its step up.
+        let tier = self.task(agent).map_or(Tier::default(), |task| task.tier);
+        if !tier.allows(Why::Folder) {
+            let site = site(&self.browser.tab(tabs[0], cx).url);
+            let act = Act {
+                action: "put_in_folder",
+                what: format!("put tabs in the folder \u{201c}{name}\u{201d}"),
+                ..act_of(agent, connection, call, tabs[0], reply)
+            };
+            return self.stopped(act, site, Why::Folder, tier, cx);
+        }
+        let mut named: Vec<String> = (self.tasks.handed.held.iter())
+            .filter(|each| each.agent == agent)
+            .filter_map(|each| each.folder.as_ref().map(|name| name.to_lowercase()))
+            .collect();
+        named.sort();
+        named.dedup();
+        if !named.contains(&name.to_lowercase()) && named.len() >= broom::MOST_NEW {
+            _ = reply.send(ToolResult::error(FOLDER_MOST));
+            return;
+        }
+        for &tab in &tabs {
+            let held = self.tasks.handed.held.iter_mut();
+            if let Some(record) = held.into_iter().find(|each| each.tab == tab) {
+                record.folder = Some(name.to_string());
+            }
+            let site = site(&self.browser.tab(tab, cx).url);
+            let entry = ("", Vec::new(), "");
+            self.note_entry(agent, (0, tab), FOLDERED, &site, name, "", entry);
+        }
+        cx.notify();
+        let named: Vec<String> = tabs.iter().map(u64::to_string).collect();
+        let (named, go) = match named.len() {
+            1 => (format!("Tab {}", named[0]), "goes into the folder"),
+            _ => (format!("Tabs {}", named.join(", ")), "go into the folder"),
+        };
+        _ = reply.send(ToolResult::text(format!(
+            "{named} {go} \u{201c}{name}\u{201d} when it's back with the user: at your task's end, or when they take it back. A folder of that name the user has takes it; a new one is made once two tabs are back for it."
+        )));
+    }
+
     /// The user returned `tab` from `agent`'s thread: every call on it from here is answered so,
     /// those under way too, which are dropped.
     fn returned_by_user(&mut self, agent: &str, tab: u64) {
@@ -756,12 +923,41 @@ impl Agents {
             if self.browser.space_of(tab, cx) == 0 {
                 continue;
             }
-            self.forget_handed_of(&agent, tab);
+            let record = self.forget_handed_of(&agent, tab);
             let site = site(&self.browser.tab(tab, cx).url);
             self.let_go(tab, held::Event::GivenBack { stopped: false }, cx);
             self.forget_page(tab);
             self.note_page(&agent, (0, tab), GIVEN_BACK, &site, "");
+            if let Some(record) = record {
+                self.into_folder(record, cx);
+            }
             cx.notify();
+        }
+    }
+
+    /// The handed tab of `record`, back with the user, goes into the today's folder its thread put
+    /// it in, where it came back to the Space it was handed from as a Today tab in no folder of the
+    /// user's: into one of that name there, letter case aside, else into a new one with a tab that
+    /// came back to that name before, else it waits at its place for one. Every way back reaches
+    /// here: the app's own returns (`return_tab_at`) and the core's (`handed_left`).
+    fn into_folder(&mut self, record: Handed, cx: &mut Context<Self>) {
+        let Some(name) = &record.folder else { return };
+        if self.browser.space_of(record.tab, cx) != record.from {
+            return;
+        }
+        let waiting = &mut self.tasks.handed.waiting;
+        waiting.retain(|each| each.tab != record.tab);
+        let with: Vec<u64> = (waiting.iter())
+            .filter(|each| each.from == record.from && each.folder == record.folder)
+            .map(|each| each.tab)
+            .collect();
+        match self
+            .browser
+            .put_in_today_folder(record.tab, &with, name, cx)
+        {
+            true => (self.tasks.handed.waiting)
+                .retain(|each| !(each.from == record.from && each.folder == record.folder)),
+            false => self.tasks.handed.waiting.push(record),
         }
     }
 
@@ -794,18 +990,16 @@ impl Agents {
         self.current.retain(|_, last| *last != tab);
     }
 
-    /// `tab` is no longer one `agent`'s thread holds. Whether it was one.
-    fn forget_handed_of(&mut self, agent: &str, tab: u64) -> bool {
+    /// `tab` is no longer one `agent`'s thread holds. Its record, if it was one.
+    fn forget_handed_of(&mut self, agent: &str, tab: u64) -> Option<Handed> {
         let held = &mut self.tasks.handed.held;
-        let Some(at) = (held.iter()).position(|each| each.tab == tab && each.agent == agent) else {
-            return false;
-        };
-        held.remove(at);
-        true
+        let at = (held.iter()).position(|each| each.tab == tab && each.agent == agent)?;
+        Some(held.remove(at))
     }
 
-    /// `tab` closed: no thread holds it.
+    /// `tab` closed: no thread holds it, and no folder waits for it.
     pub(in crate::agents) fn forget_handed(&mut self, tab: u64) {
+        self.tasks.handed.waiting.retain(|each| each.tab != tab);
         let held = &self.tasks.handed.held;
         let whose = (held.iter().find(|each| each.tab == tab)).map(|each| each.agent.clone());
         if let Some(agent) = whose {

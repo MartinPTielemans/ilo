@@ -22,10 +22,11 @@ pub const FILE_OR_FOLDER: &str = "File or Folder";
 const FILE_OR_FOLDER_ICON: &str = "icons/file.svg";
 
 /// The rows of a row's second menu, listed as the add menu opens.
-type Under = Box<dyn FnOnce(&mut App) -> Vec<MenuEntry>>;
+type Under = Box<dyn FnOnce(&mut App) -> Vec<Row>>;
 
-/// A row of the add menu: its entry, and what a pick of it does; or the rows of the second menu
-/// it opens, each of which does its own (`MenuEntry::stays`).
+/// A row of the add menu, or of a second menu: its entry, and what a pick of it does; or the
+/// rows of the second menu it opens; or, in a second menu, nothing but what its entry does each
+/// time it's chosen (`MenuEntry::stays`, `Row::staying`).
 pub struct Row {
     entry: MenuEntry,
     picked: Option<Box<dyn FnOnce(&mut Window, &mut App)>>,
@@ -44,14 +45,20 @@ impl Row {
     /// A row that opens a second menu, as the user's tabs' does (`crate::tab_picks`): `under`
     /// lists its rows once, as the add menu opens and not before, and with none the row is left
     /// out of the menu.
-    pub fn over(
-        entry: MenuEntry,
-        under: impl FnOnce(&mut App) -> Vec<MenuEntry> + 'static,
-    ) -> Self {
+    pub fn over(entry: MenuEntry, under: impl FnOnce(&mut App) -> Vec<Row> + 'static) -> Self {
         Row {
             entry,
             picked: None,
             under: Some(Box::new(under)),
+        }
+    }
+
+    /// A second menu's row that leaves the menu open, doing what `entry`'s `stays` does.
+    pub fn staying(entry: MenuEntry) -> Self {
+        Row {
+            entry,
+            picked: None,
+            under: None,
         }
     }
 }
@@ -180,9 +187,9 @@ impl Plus {
             for under in under.into_iter().flatten() {
                 entries.push(MenuEntry {
                     parent: Some(parent),
-                    ..under
+                    ..under.entry
                 });
-                picks.push(None);
+                picks.push(under.picked);
             }
         }
         if entries.is_empty() {

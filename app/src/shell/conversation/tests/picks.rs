@@ -2,7 +2,7 @@
 //! and what the reply carries, on a host that records what the shell asks of the core.
 
 use super::*;
-use crate::tab_picks::YOUR_TABS;
+use crate::tab_picks::{ALL_TABS, YOUR_TABS};
 
 /// Task-1's conversation shown in a window whose Space lists today's 10 and 11, each on a page
 /// of the web, and the view that draws it.
@@ -83,7 +83,7 @@ fn the_reply_fields_add_menu_lists_the_users_tabs(cx: &mut TestAppContext) {
     assert!(host.hand_asks.borrow().is_empty(), "asked before the menu");
     let rows = add_menu(&view, cx).expect("the plus showed no menu");
     let titles: Vec<_> = rows.iter().map(|row| row.title.to_string()).collect();
-    assert_eq!(titles, [YOUR_TABS, "Ten", "Eleven"]);
+    assert_eq!(titles, [YOUR_TABS, ALL_TABS, "Ten", "Eleven"]);
     assert_eq!(
         *host.hand_asks.borrow(),
         [(Some("task-1".to_string()), 1, 2)]
@@ -92,7 +92,7 @@ fn the_reply_fields_add_menu_lists_the_users_tabs(cx: &mut TestAppContext) {
     assert_eq!(chips(&view, cx), [11]);
     let rows = add_menu(&view, cx).unwrap();
     assert!(
-        rows[2].checked && !rows[1].checked,
+        rows[3].checked && !rows[2].checked && !rows[1].checked,
         "the pick isn't checked"
     );
 }
@@ -104,6 +104,7 @@ fn a_tab_the_thread_cant_be_handed_isnt_in_the_reply_fields_menu(cx: &mut TestAp
     host.not_to_hand.borrow_mut().push(10);
     let rows = add_menu(&view, cx).expect("the plus showed no menu");
     let titles: Vec<_> = rows.iter().map(|row| row.title.to_string()).collect();
+    // One tab left, so no All Tabs either.
     assert_eq!(titles, [YOUR_TABS, "Eleven"]);
 }
 

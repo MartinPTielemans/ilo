@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gpui::TestAppContext;
 
-use super::{Offer, Offered, Picks, entries, not_moved, remove};
+use super::{Offer, Offered, Picks, all_checked, entries, not_moved, remove};
 
 fn offered(tab: u64, title: &'static str) -> Offered {
     Offered {
@@ -142,4 +142,43 @@ fn the_menu_lists_the_offer_and_a_click_flips_its_tab(cx: &mut TestAppContext) {
 fn the_spoken_words_carry_the_tabs_title() {
     assert!(remove("Ten").ends_with("Ten"));
     assert!(not_moved("Ten").starts_with("Ten"));
+}
+
+/// All Tabs picks each listed tab not picked yet, after the chips already there, in the menu's
+/// order; unpicking takes each listed tab's chip and leaves the rest.
+#[test]
+fn all_tabs_picks_the_rest_in_order_and_unpicks_them_all() {
+    let listed = offer(4, &[(10, "Ten"), (11, "Eleven"), (12, "Twelve")]);
+    let mut picks = Picks::default();
+    assert!(picks.flip(4, offered(11, "Eleven")));
+    picks.set_all(4, &listed.tabs, true);
+    assert_eq!(picks.tabs(), [11, 10, 12]);
+    picks.set_all(4, &listed.tabs, true);
+    assert_eq!(picks.tabs(), [11, 10, 12]);
+    picks.set_all(4, &listed.tabs[..2], false);
+    assert_eq!(picks.tabs(), [12]);
+    picks.set_all(4, &listed.tabs, false);
+    assert!(picks.is_empty());
+}
+
+/// All Tabs of another Space's menu starts that Space's picks afresh, as a tab's row does.
+#[test]
+fn all_tabs_of_another_space_drops_this_ones_picks() {
+    let mut picks = Picks::default();
+    assert!(picks.flip(4, offered(10, "Ten")));
+    let there = offer(5, &[(20, "Twenty"), (21, "Twenty-one")]);
+    picks.set_all(5, &there.tabs, true);
+    assert_eq!(picks.tabs(), [20, 21]);
+    assert_eq!(picks.take().tabs(), [20, 21]);
+}
+
+/// All Tabs is in the menu with two tabs or more, checked only while each is picked; with one
+/// it would be that tab's row again.
+#[test]
+fn all_tabs_is_listed_with_two_tabs_and_checked_while_each_is_picked() {
+    let two = offer(4, &[(10, "Ten"), (11, "Eleven")]);
+    assert_eq!(all_checked(&offer(4, &[(10, "Ten")]), &[]), None);
+    assert_eq!(all_checked(&two, &[]), Some(false));
+    assert_eq!(all_checked(&two, &[11]), Some(false));
+    assert_eq!(all_checked(&two, &[11, 10]), Some(true));
 }

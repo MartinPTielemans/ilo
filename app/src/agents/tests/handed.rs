@@ -11,6 +11,7 @@ use crate::agents::runner::{Cli, Out};
 use crate::agents::task::handed::{self, Picked, Waiting};
 use crate::agents::task::ilo::IloKind;
 use crate::agents::task::{AskedOn, Line, Start, State, TaskAction};
+use crate::agents::tier::{self, Tier, Why};
 
 /// The user's Space, and a thread's, the first the browser makes.
 const USERS: u64 = 1;
@@ -42,6 +43,16 @@ fn send(
         ..Start::default()
     };
     send_with(run, asked, start, cx)
+}
+
+/// As `send`, from the Space USERS, for a task at `tier`.
+fn send_at(run: &Run, tier: Tier, tabs: &[u64], cx: &mut TestAppContext) -> String {
+    let start = Start {
+        tier,
+        tabs: Picked::of_chips(USERS, tabs.to_vec()),
+        ..Start::default()
+    };
+    send_with(run, ASKED, start, cx).expect("started")
 }
 
 fn send_with(run: &Run, asked: &str, start: Start, cx: &mut TestAppContext) -> Option<String> {
@@ -632,7 +643,7 @@ fn a_handed_tabs_entry_is_its_whole_sentence() {
         tools::step_title(&did, tools::Tense::Done),
         "example.com returned to your tabs"
     );
-    assert_eq!(handed::entry("open_tab", "www.example.com"), None);
+    assert_eq!(handed::entry("open_tab", "www.example.com", ""), None);
 }
 
 /// Return to Your Tabs takes a handed tab back at once, mid-step: the call under way on it hears
@@ -939,13 +950,14 @@ fn a_tab_the_core_cant_put_back_is_still_the_users(cx: &mut TestAppContext) {
     );
 }
 
-/// A thread's close of a handed tab gives it back: no close reaches the core, the tab is at its
-/// place among the user's on the page it's at, the entry says it returned, and the thread hears
-/// what its close of a page of its own says, then and after. A page it opened closes as ever.
+/// At Look only, a thread's close of a handed tab gives it back: no close reaches the core, the
+/// tab is at its place among the user's on the page it's at, the entry says it returned, and the
+/// thread hears what its close of a page of its own says, then and after. A page it opened closes
+/// as ever.
 #[gpui::test]
-fn a_threads_close_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
+fn at_look_only_a_threads_close_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
     let run = run("handed-close", cx);
-    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    let agent = send_at(&run, Tier::Look, &[TRAINS.0, SEATS.0], cx);
     let opened = call(
         &run.agents,
         &agent,
@@ -1021,6 +1033,234 @@ fn a_remove_of_a_handed_tab_gives_it_back(cx: &mut TestAppContext) {
         entries(&run, &agent, handed::GIVEN_BACK, cx),
         ["example.com"]
     );
+}
+
+/// At Look only, put_in_folder is refused on the user's line, with its step up (Z37c), by the
+/// first tab's site, and puts nothing anywhere.
+#[gpui::test]
+fn at_look_only_putting_a_handed_tab_in_a_folder_is_refused_on_the_users_line(
+    cx: &mut TestAppContext,
+) {
+    let run = run("handed-folder-look", cx);
+    let agent = send_at(&run, Tier::Look, &[TRAINS.0, SEATS.0], cx);
+    let arguments = json!({ "tabs": [TRAINS.0, SEATS.0], "folder": "Trip" });
+    let answer = call(&run.agents, &agent, "put_in_folder", arguments, cx);
+    cx.run_until_parked();
+    assert!(answer.try_recv().expect("answered at once").error);
+    let stops = (run.agents).read_with(cx, |agents, _| agents.stops(&agent));
+    let [stop] = stops.as_slice() else {
+        panic!("{stops:?}");
+    };
+    assert_eq!(
+        (stop.why, stop.tab, stop.tier),
+        (Why::Folder, TRAINS.0, Tier::Look)
+    );
+    assert_eq!(
+        tier::why_line(stop.why, stop.tier, &stop.site),
+        "Putting a tab in a folder isn't part of Look only."
+    );
+    assert_eq!(Tier::Look.lifting(Why::Folder), Some(Tier::Work));
+    assert!(entries(&run, &agent, handed::FOLDERED, cx).is_empty());
+    run.finish(&agent, cx);
+    assert!(run.browser.folders.borrow().is_empty());
+}
+
+/// put_in_folder puts handed tabs into the folder named, from Work on pages up, under the broom's
+/// rules for a name, each with its entry by its host alone and the folder as the sidebar shows
+/// it (Z37b). They go into it as they come back: together at the thread's end, a new folder of
+/// them in the Space they left.
+#[gpui::test]
+fn a_thread_puts_handed_tabs_in_a_folder_they_go_into_as_they_come_back(cx: &mut TestAppContext) {
+    let run = run("handed-folder", cx);
+    let put = |agent: &str, arguments: Value, cx: &mut TestAppContext| {
+        let answer = call(&run.agents, agent, "put_in_folder", arguments, cx);
+        cx.run_until_parked();
+        answer.try_recv().expect("answered at once")
+    };
+    let both = json!({ "tabs": [TRAINS.0, SEATS.0], "folder": "Trip" });
+    let agent = send_at(&run, Tier::Work, &[TRAINS.0, SEATS.0], cx);
+    for folder in ["", "  ", "A name of twenty-five chars", "Trip\u{202e}"] {
+        let named = json!({ "tabs": [TRAINS.0], "folder": folder });
+        assert!(put(&agent, named, cx).error, "{folder:?}");
+    }
+    for tabs in [json!([]), json!([TRAINS.0, 10]), json!(["11"])] {
+        let wrong = json!({ "tabs": tabs, "folder": "Trip" });
+        assert!(put(&agent, wrong, cx).error, "{tabs}");
+    }
+    assert!(entries(&run, &agent, handed::FOLDERED, cx).is_empty());
+    let answer = put(&agent, both, cx);
+    assert!(!answer.error, "{answer:?}");
+    assert_eq!(
+        handed::entry(handed::FOLDERED, "example.com", "Trip").as_deref(),
+        Some("The thread put example.com in \u{201c}Trip\u{201d}")
+    );
+    assert_eq!(
+        entries(&run, &agent, handed::FOLDERED, cx),
+        ["example.com", "tickets.example"]
+    );
+    assert!(
+        run.browser.folders.borrow().is_empty(),
+        "made before it came back"
+    );
+    run.finish(&agent, cx);
+    assert_eq!(
+        *run.browser.folders.borrow(),
+        [(USERS, "Trip".to_string(), vec![TRAINS.0, SEATS.0])]
+    );
+}
+
+/// A tab back on its own waits at its place for its folder, unless the user has one of that
+/// name; the next back for the name makes it with it. Every way back reaches it: the user's Take
+/// Back, a return the core made, as a deleted Space's, and the thread's own close.
+#[gpui::test]
+fn a_folder_takes_its_tabs_on_every_way_back(cx: &mut TestAppContext) {
+    let run = run("handed-folder-ways", cx);
+    run.browser.tabs.borrow_mut().extend([
+        (13, USERS, "Fares", "https://fares.example/"),
+        (14, USERS, "Hotel", "https://hotel.example/"),
+    ]);
+    (run.browser.folders.borrow_mut()).push((USERS, "Stay".to_string(), vec![10]));
+    let agent = send_at(&run, Tier::Work, &[TRAINS.0, SEATS.0, 13, 14], cx);
+    let put = |tabs: &[u64], folder: &str, cx: &mut TestAppContext| {
+        let arguments = json!({ "tabs": tabs, "folder": folder });
+        let answer = call(&run.agents, &agent, "put_in_folder", arguments, cx);
+        cx.run_until_parked();
+        assert!(!answer.try_recv().expect("answered").error);
+    };
+    put(&[TRAINS.0, SEATS.0, 13], "Lisbon", cx);
+    put(&[14], "stay", cx);
+    let folders = |run: &Run| run.browser.folders.borrow().clone();
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert_eq!(folders(&run).len(), 1, "a folder of one tab");
+    press_return(&run, &agent, 14, cx);
+    assert_eq!(folders(&run)[0], (USERS, "Stay".to_string(), vec![10, 14]));
+    // The core gives one back, as when the thread's Space is deleted.
+    let at = (run.browser.tabs.borrow().iter()).position(|each| each.0 == SEATS.0);
+    run.browser.tabs.borrow_mut()[at.expect("open")].1 = USERS;
+    let left = tabs_of(&run, THREADS);
+    (run.agents).update(cx, |agents, cx| agents.handed_left(THREADS, &left, cx));
+    assert_eq!(
+        folders(&run)[1],
+        (USERS, "Lisbon".to_string(), vec![TRAINS.0, SEATS.0])
+    );
+    // The thread's close of one the core takes back but can't close, as between windows.
+    run.browser.stays_open.borrow_mut().insert(13);
+    _ = answered(&run, &agent, "close_tab", 13, cx);
+    assert_eq!(folders(&run)[1].2, [TRAINS.0, SEATS.0, 13]);
+}
+
+/// From Work on pages up, a thread's close of a handed tab archives it: the core takes it back
+/// and closes it there, the entry says the thread archived it (Z37a), and the thread hears it was
+/// archived. One the core takes back but can't close is the user's again, a give-back with its
+/// entry, answered as a close; a_folder_takes_its_tabs_on_every_way_back has its folder.
+#[gpui::test]
+fn from_work_a_threads_close_of_a_handed_tab_archives_it(cx: &mut TestAppContext) {
+    let run = run("handed-archive", cx);
+    let agent = send_at(&run, Tier::Work, &[TRAINS.0, SEATS.0], cx);
+    let archived = answered(&run, &agent, "close_tab", TRAINS.0, cx);
+    assert!(!archived.error, "{archived:?}");
+    assert_eq!(archived.text, format!("Archived tab {}.", TRAINS.0));
+    assert_eq!(*run.browser.archived.borrow(), [(TRAINS.0, false)]);
+    assert_eq!(space_of(&run, TRAINS.0), 0);
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    assert_eq!(entries(&run, &agent, handed::ARCHIVED, cx), ["example.com"]);
+    assert_eq!(
+        handed::entry(handed::ARCHIVED, "example.com", "").as_deref(),
+        Some("The thread archived example.com")
+    );
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
+
+    run.browser.stays_open.borrow_mut().insert(SEATS.0);
+    let returned = answered(&run, &agent, "close_tab", SEATS.0, cx);
+    assert!(!returned.error, "{returned:?}");
+    assert_eq!(returned.text, format!("Closed tab {}.", SEATS.0));
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert!(!is_handed(&run, &agent, SEATS.0, cx));
+    assert_eq!(
+        entries(&run, &agent, handed::GIVEN_BACK, cx),
+        ["tickets.example"]
+    );
+    assert_eq!(entries(&run, &agent, handed::ARCHIVED, cx).len(), 1);
+    let stops = (run.agents).read_with(cx, |agents, _| agents.stops(&agent));
+    assert!(stops.is_empty(), "{stops:?}");
+}
+
+/// A handed tab whose page asks before it's left, or that the user pinned, stays handed at a
+/// thread's close, nothing closing. Archiving it without saving is refused on the user's line at
+/// Work and archives it at Full.
+#[gpui::test]
+fn a_handed_tab_that_asks_or_is_pinned_stays_and_full_access_discards(cx: &mut TestAppContext) {
+    let run = run("handed-archive-asks", cx);
+    run.browser.asks.borrow_mut().insert(TRAINS.0);
+    run.browser.pinned.borrow_mut().insert(SEATS.0);
+    let agent = send_at(&run, Tier::Work, &[TRAINS.0, SEATS.0], cx);
+    let kept = answered(&run, &agent, "close_tab", TRAINS.0, cx);
+    assert!(kept.error, "{kept:?}");
+    assert!(
+        (kept.text).starts_with(&format!("Tab {} stays open: its page asks", TRAINS.0)),
+        "{kept:?}"
+    );
+    let pinned = answered(&run, &agent, "close_tab", SEATS.0, cx);
+    assert_eq!(
+        pinned.text,
+        format!("Tab {} stays open: the user pinned it.", SEATS.0)
+    );
+    let discard = |agent: &str, cx: &mut TestAppContext| {
+        let arguments = json!({ "tab": TRAINS.0, "discard": true });
+        let answer = call(&run.agents, agent, "close_tab", arguments, cx);
+        cx.run_until_parked();
+        answer.try_recv().expect("answered at once")
+    };
+    assert!(discard(&agent, cx).error);
+    let stops = (run.agents).read_with(cx, |agents, _| agents.stops(&agent));
+    let [stop] = stops.as_slice() else {
+        panic!("{stops:?}");
+    };
+    assert_eq!(
+        (stop.why, stop.tab, stop.tier),
+        (Why::Discard, TRAINS.0, Tier::Work)
+    );
+    for tab in [TRAINS.0, SEATS.0] {
+        assert!(is_handed(&run, &agent, tab, cx), "{tab} left the thread");
+        assert_eq!(space_of(&run, tab), THREADS);
+    }
+    assert!(run.browser.archived.borrow().is_empty());
+    assert!(entries(&run, &agent, handed::ARCHIVED, cx).is_empty());
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
+    run.finish(&agent, cx);
+
+    let agent = send_at(&run, Tier::Full, &[TRAINS.0], cx);
+    let archived = discard(&agent, cx);
+    assert!(!archived.error, "{archived:?}");
+    assert_eq!(
+        archived.text,
+        format!("Archived tab {} without saving.", TRAINS.0)
+    );
+    assert_eq!(*run.browser.archived.borrow(), [(TRAINS.0, true)]);
+    assert_eq!(entries(&run, &agent, handed::ARCHIVED, cx), ["example.com"]);
+}
+
+/// A thread names 8 folders at most: a ninth name is refused, and one of the 8 again is not.
+#[gpui::test]
+fn a_thread_names_eight_folders_at_most(cx: &mut TestAppContext) {
+    let run = run("handed-folder-most", cx);
+    let tabs: Vec<u64> = (30..39).collect();
+    (run.browser.tabs.borrow_mut()).extend(
+        tabs.iter()
+            .map(|&tab| (tab, USERS, "Page", "https://page.example/")),
+    );
+    let agent = send_at(&run, Tier::Work, &tabs, cx);
+    let put = |tab: u64, folder: &str, cx: &mut TestAppContext| {
+        let arguments = json!({ "tabs": [tab], "folder": folder });
+        let answer = call(&run.agents, &agent, "put_in_folder", arguments, cx);
+        cx.run_until_parked();
+        answer.try_recv().expect("answered")
+    };
+    for (at, &tab) in tabs[..8].iter().enumerate() {
+        assert!(!put(tab, &format!("Folder {at}"), cx).error);
+    }
+    assert!(put(tabs[8], "Folder 8", cx).error);
+    assert!(!put(tabs[8], "folder 3", cx).error);
 }
 
 /// The address the user's window has of each page, which it gives with its close or move of one.
@@ -1783,7 +2023,7 @@ fn nothing_kept_has_a_handed_tabs_title_or_address(cx: &mut TestAppContext) {
     let run = run("handed-kept", cx);
     let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
     run.ran(1);
-    // The thread ends with it, is handed two, closes one, the user returns the other, and it
+    // The thread ends with it, is handed two, archives one, the user returns the other, and it
     // ends again.
     run.finish(&agent, cx);
     reply(&run, &agent, "And then?", &[TRAINS.0, SEATS.0], cx);
@@ -1805,7 +2045,8 @@ fn nothing_kept_has_a_handed_tabs_title_or_address(cx: &mut TestAppContext) {
         ["example.com", "example.com", "tickets.example"]
     );
     assert_eq!(noted(handed::TAKEN_BACK), ["tickets.example"]);
-    assert_eq!(noted(handed::GIVEN_BACK), ["example.com", "example.com"]);
+    assert_eq!(noted(handed::GIVEN_BACK), ["example.com"]);
+    assert_eq!(noted(handed::ARCHIVED), ["example.com"]);
     (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
     cx.run_until_parked();
     let files = run.files();
@@ -2141,6 +2382,28 @@ fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
     (run.agents).update(cx, |agents, cx| agents.set_threads(false, cx));
     assert!(!fits(None, USERS, TRAINS.0, cx));
     assert!(!fits(Some(&agent), USERS, TRAINS.0, cx));
+}
+
+/// A tab at a site the user put Off limits is offered to no thread, at any level, as none reads
+/// its page: left out of the composer's menu, and handed by no send. Once the site is off the
+/// list, the tab is offered again.
+#[gpui::test]
+fn an_off_limits_site_is_never_offered_or_handed(cx: &mut TestAppContext) {
+    let run = run("handed-off-limits", cx);
+    (run.agents).update(cx, |agents, cx| agents.fence("tickets.example", cx));
+    let among = |agent: Option<&str>, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, cx| {
+            agents.fits_among(agent, USERS, &[TRAINS.0, SEATS.0], cx)
+        })
+    };
+    assert_eq!(among(None, cx), [TRAINS.0]);
+    let agent = send(&run, ASKED, USERS, &[SEATS.0], cx).expect("started on its words");
+    run.ran(1);
+    assert!(given(&run).is_empty());
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert_eq!(among(Some(&agent), cx), [TRAINS.0]);
+    (run.agents).update(cx, |agents, cx| agents.unfence("tickets.example", cx));
+    assert_eq!(among(Some(&agent), cx), [TRAINS.0, SEATS.0]);
 }
 
 /// The composer's menu of the user's tabs asks once for them all: its answer is the tabs
