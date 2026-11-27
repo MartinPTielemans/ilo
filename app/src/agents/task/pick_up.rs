@@ -1022,6 +1022,7 @@ impl Task {
             files: crate::agents::files::Given::default(),
             rising: None,
             rewalled: Vec::new(),
+            seen_tabs: Vec::new(),
             ran_walled: Vec::new(),
             restart: None,
             copying: false,

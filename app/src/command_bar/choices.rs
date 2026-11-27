@@ -21,7 +21,8 @@ use crate::tokens::command_bar::{
 };
 
 /// The line under the levels every level holds to, which picks nothing.
-pub const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
+pub const NEVER_GETS: &str =
+    "A thread never gets passwords or cookies, and sees your open tabs only as titles and sites.";
 
 /// The sizes one composer draws its row at.
 #[derive(Clone, Copy, Debug)]

@@ -526,6 +526,9 @@ pub struct Task {
     /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
     /// `told`, which that one start carries (`attached`).
     pub(in crate::agents) copying: bool,
+    /// The user's tabs its last your_tabs listed, by their numbers there less one, which
+    /// open_your_tab reads (#4403). Kept in memory only, and dropped as it ends.
+    pub(super) seen_tabs: Vec<u64>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -585,6 +588,7 @@ impl Task {
         self.end_entry = super::next_entry_id();
         // Its strands end with it, each call of theirs answered as stopped.
         self.helpers.end_strands(self.trace.len());
+        self.seen_tabs.clear();
         // A refusal is passed once its task ends: there's nothing left to raise or take over.
         for stop in &mut self.stops {
             stop.settled = true;
@@ -2090,6 +2094,7 @@ impl Agents {
             names: self.names_at_start(),
             rising: None,
             rewalled: Vec::new(),
+            seen_tabs: Vec::new(),
             ran_walled: Vec::new(),
             restart: None,
             copying: false,
@@ -2443,8 +2448,11 @@ impl Agents {
             },
             model,
             effort,
-            instructions: tools::task_instructions(task.tier),
-            tools: tools::names(agent),
+            instructions: tools::task_instructions(task.tier, self.your_tabs()),
+            // With the user's tabs off, neither of their tools is allowed it either.
+            tools: (tools::names(agent).into_iter())
+                .filter(|tool| self.your_tabs() || !tools::YOUR_TABS.contains(&tool.as_str()))
+                .collect(),
             wall,
             // The files it starts with: a task whose wall was refused has none by now.
             reads: (task.files.folder.iter())
@@ -3810,6 +3818,7 @@ impl Agents {
             names: Default::default(),
             rising: None,
             rewalled: Vec::new(),
+            seen_tabs: Vec::new(),
             ran_walled: Vec::new(),
             restart: None,
             copying: false,
@@ -4342,7 +4351,7 @@ impl Agents {
                 };
             }
             "check" => did.target = format!("“{}”", page::clip(&string("text"), 40)),
-            "list_tabs" | "ask" => {
+            "list_tabs" | "your_tabs" | "ask" => {
                 (did.site, did.tab, did.page, did.title) =
                     (String::new(), None, String::new(), String::new())
             }
@@ -5468,7 +5477,10 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
         let did = &step.did;
         let opens = matches!(did.tool.as_str(), "open_tab" | tools::SEARCHED);
         let groups = (did.tab.is_some() || opens)
-            && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+            && !matches!(
+                did.tool.as_str(),
+                "thought" | "ask" | "list_tabs" | "your_tabs"
+            );
         // Closes join only those their pages answered alike.
         let like = |line: &Together| {
             matches!(line, Together::Steps(steps)
@@ -5609,7 +5621,11 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
 /// The page a step acted on, as the log groups it: a step on a tab, or one that opened a page.
 fn on_page(did: &tools::Did) -> Option<OnPage> {
     let went = matches!(did.tool.as_str(), "open_tab" | "navigate");
-    let on_tab = did.tab.is_some() && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+    let tabless = matches!(
+        did.tool.as_str(),
+        "thought" | "ask" | "list_tabs" | "your_tabs"
+    );
+    let on_tab = did.tab.is_some() && !tabless;
     (went || on_tab).then(|| OnPage {
         tab: did.tab,
         site: did.site.clone().into(),

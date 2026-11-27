@@ -88,7 +88,7 @@ pub fn handed(tabs: &[Tab]) -> Option<String> {
 }
 
 /// `text` as it's handed over: one line, at most `LONGEST` characters.
-fn cut(text: &str) -> String {
+pub(crate) fn cut(text: &str) -> String {
     let line = text.chars().map(|c| if c.is_control() { ' ' } else { c });
     line.take(LONGEST).collect::<String>().trim().to_owned()
 }

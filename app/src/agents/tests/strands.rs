@@ -89,7 +89,7 @@ fn a_strands_tools_leave_out_the_threads_own() {
     for own in tools::THE_THREADS_OWN {
         assert!(thread.contains(&own.to_string()), "{own}");
         assert!(!strand.contains(&own.to_string()), "{own}");
-        assert!(!tools::has("task-3-1", own), "{own}");
+        assert!(!tools::has("task-3-1", own, true), "{own}");
     }
     let shared: Vec<&String> = (thread.iter())
         .filter(|tool| !tools::THE_THREADS_OWN.contains(&tool.as_str()))
