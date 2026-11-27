@@ -2162,6 +2162,38 @@ static __weak NSWindow* g_under_first_run;
 // doesn't draw it nor Chromium its pages; and too little to see over any desktop.
 constexpr CGFloat kUnseen = 0.01;
 
+// The opacity the UI last gave the window under first run's, and what hears Chromium change it.
+static CGFloat g_under_alpha = kUnseen;
+static id g_under_watch;
+
+// Makes |window|, or none, the one under first run's, unseen. Chromium keeps a window it shows
+// clear until its compositor's first frame, then gives it back the opacity it had as the core
+// showed it, whole, which put it over the card for as long as the grow ran without a reveal
+// (NativeWidgetNSWindowBridge in Chromium 157). On that same call it posts the occlusion change,
+// heard here at once, so the window takes the UI's opacity again before that frame is on screen.
+static void SetUnderFirstRun(NSWindow* window) {
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (g_under_watch) {
+    [center removeObserver:g_under_watch];
+    g_under_watch = nil;
+  }
+  g_under_first_run = window;
+  g_under_alpha = kUnseen;
+  if (!window) {
+    return;
+  }
+  g_under_watch = [center addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                                      object:window
+                                       queue:nil
+                                  usingBlock:^(NSNotification* notification) {
+                                    NSWindow* under = notification.object;
+                                    if (under == g_under_first_run &&
+                                        under.alphaValue != g_under_alpha) {
+                                      under.alphaValue = g_under_alpha;
+                                    }
+                                  }];
+}
+
 // Shows the window of |ui_view| in front with the keyboard, or right behind |above|, neither key
 // nor activating the app, and there all but transparent where |unseen|.
 static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
@@ -2173,7 +2205,7 @@ static void ShowWindow(void* ui_view, NSWindow* above, bool unseen) {
   NSWindow* window = view.window;
   // Shown already under first run's, drawn there through the grow: whole, and in front.
   if (window && window == g_under_first_run && !above) {
-    g_under_first_run = nil;
+    SetUnderFirstRun(nil);
     window.alphaValue = 1;
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
@@ -6400,7 +6432,7 @@ bool host_grow_first_run(void) {
     // at the exit's end, as before, it took frames from the card's motion or left the grown card
     // blank until it came.
     ShowWindow((__bridge void*)held_view, first_run, true);
-    g_under_first_run = held;
+    SetUnderFirstRun(held);
   });
   return true;
 }
@@ -6409,7 +6441,8 @@ void host_set_first_run_reveal(double window, double glass) {
   if (!g_first_run || !g_under_first_run) {
     return;
   }
-  g_under_first_run.alphaValue = MAX(window, kUnseen);
+  g_under_alpha = MAX(window, kUnseen);
+  g_under_first_run.alphaValue = g_under_alpha;
   for (NSView* view in g_first_run.contentView.subviews) {
     if ([view isKindOfClass:NSVisualEffectView.class]) {
       view.alphaValue = glass;
@@ -6449,7 +6482,7 @@ void host_close_first_run(void) {
   }
   // A window still under it, as on a quit mid-exit, isn't left unseen.
   g_under_first_run.alphaValue = 1;
-  g_under_first_run = nil;
+  SetUnderFirstRun(nil);
   [g_first_run orderOut:nil];
   g_first_run = nil;
   g_first_run_view = nil;

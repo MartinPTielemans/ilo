@@ -792,9 +792,9 @@ void host_set_first_run_frame(double width, double height, double radius);
 bool host_grow_first_run(void);
 
 // Mac only: the opacity, 0 to 1, of the browser window under a grown first run's window, and of
-// the glass behind first run's card. The UI says both on each frame of a grown exit, the window's
-// again though unchanged, as Chromium may put a new window's opacity back at its first frame.
-// Nothing where no window is under first run's.
+// the glass behind first run's card, said on each frame of a grown exit. The window keeps it when
+// Chromium puts a new window's opacity back at its first frame. Nothing where no window is under
+// first run's.
 void host_set_first_run_reveal(double window, double glass);
 
 // Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the

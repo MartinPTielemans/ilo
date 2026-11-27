@@ -1544,8 +1544,8 @@ impl Shell {
         if before != Some(shape) {
             self.browser.shape_first_run(w, h, radius);
         }
-        // Said on each grown frame, not only as it changes: until the window's first frame of its
-        // own, Chromium may put it back whole (host_set_first_run_reveal).
+        // Said on each grown frame; the host keeps it on the window through Chromium's first frame
+        // of it (host_set_first_run_reveal).
         if let Some(exit) = exit.as_ref().filter(|_| growing && onboarding.grown(still)) {
             self.browser.reveal_first_run(exit.window, exit.glass);
         }
