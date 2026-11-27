@@ -1616,6 +1616,48 @@ light-page-line = 0x0000000d
 # The column's text, glyphs, field and buttons are the palette's neutrals and the sidebar's icon
 # ink. The page shown is on [selected.plate], the keyboard's.
 
+[settings.kit]
+# The control kit (#4092's Controls table): one form for each kind of choice, sizes only. Every
+# colour is the rows' look (settings_rows::Look) or the menu's and dialog's own.
+# A checkbox drop-down's ∨, after its summary.
+drop-chevron = 8.0
+# "+ Label" closing a list's card: the plus, 8 before the label.
+add-glyph = 12.0
+add-gap = 8.0
+# A ↗ link row's arrow at its end.
+link-glyph = 12.0
+# ⓘ after a heading or a label, 4 after it; its words on a plate at most 260 wide, 8 in, 6 under
+# the glyph.
+help-glyph = 13.0
+help-gap = 4.0
+help-width = 260.0
+help-padding = 8.0
+help-top = 6.0
+# The one-field popover under its "+" row: 280 wide, 10 in, its field and Add 8 apart.
+popover-width = 280.0
+popover-padding = 10.0
+# The dialog form's card takes the dialog's width, radius, insets and dim ([dialog]); its fields
+# 10 apart, 14 under the title.
+form-gap = 10.0
+form-top = 14.0
+# A primary that can't be chosen yet, at this of its colour.
+dimmed = 0.4
+# The hero card: 16 in, its drawing 120 wide at the right, 16 from the text, at least 96 tall.
+hero-padding = 16.0
+hero-drawing = 120.0
+hero-gap = 16.0
+hero-height = 96.0
+hero-title = 15.0
+hero-title-line = 20.0
+# Drawn tiles: 76 by 52, 8 apart, radius 8, the pick ringed 2 wide 2 out, the label 6 under.
+tile-width = 76.0
+tile-height = 52.0
+tile-gap = 8.0
+tile-radius = 8.0
+tile-ring = 2.0
+tile-ring-gap = 2.0
+tile-label-top = 6.0
+
 [settings.overview]
 # Overview (spec-settings.md › S1, values-settings.md › S1): the default browser's notice, a row of
 # its own 60 tall; Loose ends' rows 52 tall, 14 in at the left and 10 at the right, their empty
