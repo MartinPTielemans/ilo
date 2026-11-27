@@ -599,6 +599,7 @@ use crate::tokens::shell::WINDOW_BUTTON_Y;
 use crate::tokens::shell::WINDOW_BUTTON_ZOOM;
 use crate::tokens::shell::WINDOWS_BUTTON_GLYPH;
 use crate::tokens::shell::WINDOWS_BUTTON_PLATE;
+use crate::tokens::shell::WINDOWS_CLOSE_GLYPH;
 use crate::tokens::shell::WINDOWS_CLOSE_HOVERED;
 use crate::tokens::text;
 
@@ -5858,24 +5859,15 @@ impl Shell {
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
                     .border(px(HAIRLINE))
-                    .border_color(gpui::black().opacity(REVEAL_BORDER))
+                    .border_color(rgba(REVEAL_BORDER))
                     .shadow(vec![BoxShadow {
-                        color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
+                        color: rgba(crate::tokens::shell::REVEAL_RIM).into(),
                         offset: point(px(0.), px(0.)),
                         blur_radius: px(0.),
                         spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
                         inset: true,
                     }])
-                    .bg(self.palette.underlay)
-                    .children(self.paged_weights().into_iter().map(|(space, weight)| {
-                        self.foot_glow(
-                            space,
-                            self.width(),
-                            f32::from(window.viewport_size().height) - 2. * REVEAL_INSET,
-                            REVEAL_RADIUS,
-                        )
-                        .opacity(weight)
-                    }))
+                    .bg(self.window_fill())
                     .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
@@ -6024,7 +6016,9 @@ impl Shell {
                             .size(px(WINDOWS_BUTTON_GLYPH))
                             .text_color(ink)
                             .when(close, |svg| {
-                                svg.group_hover(glyph, |style| style.text_color(gpui::white()))
+                                svg.group_hover(glyph, |style| {
+                                    style.text_color(rgb(WINDOWS_CLOSE_GLYPH))
+                                })
                             }),
                     )
             }))

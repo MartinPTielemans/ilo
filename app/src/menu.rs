@@ -88,14 +88,19 @@ impl Highlight {
         }
     }
 
-    /// The row under the pointer or the keys in a `light` or dark menu: a neutral plate in the
-    /// label's ink, never the Space's accent (#4090), under the label in its whole ink.
+    /// The row under the pointer or the keys in a `light` or dark menu: the flat plate in the
+    /// label's ink (#4402), never the Space's accent (#4090), under the label in its whole ink.
     pub fn plate(light: bool) -> Self {
         let ink = rgba(if light { LIGHT_LABEL } else { DARK_LABEL });
+        let plate = if light {
+            crate::tokens::selected::plate::LIGHT
+        } else {
+            crate::tokens::selected::plate::DARK
+        };
         Highlight {
-            fill: Rgba { a: PLATE, ..ink },
+            fill: Rgba { a: plate, ..ink },
             pressed: Rgba {
-                a: PLATE_PRESSED,
+                a: plate + PRESSED_STEP,
                 ..ink
             },
             label: Rgba { a: 1., ..ink },
