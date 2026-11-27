@@ -12,18 +12,17 @@ use gpui::{
     point, px,
 };
 
-use super::{END_FADE, FirstRun, Onboarding, STEPS, Step, Switch, Tidy, stop_words};
+use super::{END_FADE, FirstRun, Onboarding, STEPS, Step, Switch};
 use crate::account::{self, State, Status};
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::{Offer, Shown};
 use crate::import::ImportEvent;
 use crate::settings_rows::spoken::{press, stops};
-use crate::shell::{Broom, Folders, Shell, commands::Command, recorder::Recorder};
+use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::tokens::shell::onboarding::card as t;
 use crate::tokens::theme_panel::PALETTE_NAMES;
 use crate::transparency;
 
-const DAY: f64 = 24. * 3600.;
 const SERVER: &str = "https://sync.example.org";
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, and first
@@ -259,7 +258,6 @@ fn the_steps_are_those_with_something_to_ask(cx: &mut TestAppContext) {
 
     host.sync_server.set(true);
     host.threads.set(Some(false));
-    host.archive_after.set(Some(DAY / 2.));
     synced(cx, Status::SignedOut);
     started(&shell, cx);
     assert_eq!(
@@ -269,7 +267,6 @@ fn the_steps_are_those_with_something_to_ask(cx: &mut TestAppContext) {
             Step::Assistant,
             Step::Import,
             Step::Space,
-            Step::Tidy,
             Step::Done
         ]
     );
@@ -299,7 +296,7 @@ fn the_steps_are_those_with_something_to_ask(cx: &mut TestAppContext) {
 #[test]
 fn each_step_is_named_by_its_number() {
     let numbers: Vec<&str> = STEPS.iter().map(|step| step.number()).collect();
-    assert_eq!(numbers, ["1", "2", "3", "3b", "4", "5", "6", "7"]);
+    assert_eq!(numbers, ["1", "2", "3", "3b", "4", "5", "6"]);
 }
 
 /// The entry plays as the card first shows, the step's content still to come; a key ends it
@@ -419,10 +416,9 @@ fn the_progress_counts_only_the_steps_shown(cx: &mut TestAppContext) {
 #[gpui::test]
 fn escape_never_passes_or_backs_a_step(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.archive_after.set(Some(DAY / 2.));
     host.daily_count.set(Some(false));
     started(&shell, cx);
-    for at in [Step::Space, Step::Tidy, Step::Done] {
+    for at in [Step::Space, Step::Done] {
         on_to(&shell, cx, at);
         host.take();
         cx.simulate_keystrokes("escape");
@@ -698,7 +694,6 @@ fn the_welcome_signs_in_or_goes_on_without(cx: &mut TestAppContext) {
 fn a_returning_account_leaves_out_the_new_profiles_steps(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.sync_server.set(true);
-    host.archive_after.set(Some(DAY / 2.));
     synced(cx, Status::SignedOut);
     started(&shell, cx);
     cx.simulate_keystrokes("enter");
@@ -711,7 +706,7 @@ fn a_returning_account_leaves_out_the_new_profiles_steps(cx: &mut TestAppContext
     assert_eq!(
         step(&shell, cx),
         Some(Step::Done),
-        "past the import, the Space and tidy"
+        "past the import and the Space"
     );
 }
 
@@ -779,38 +774,6 @@ fn just_the_browser_turns_threads_off_alone(cx: &mut TestAppContext) {
     assert!(host.take().is_empty(), "Next sets nothing");
 }
 
-/// Tidy tabs' bar starts at the profile's time and sets a new one only as ↩ goes on; Back leaves it.
-#[gpui::test]
-fn the_tidy_bar_sets_its_time_as_next_goes_on(cx: &mut TestAppContext) {
-    let at = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        card(shell, cx, |o| {
-            o.tidy.as_ref().map(|tidy| tidy.stops[tidy.at].1)
-        })
-    };
-    for (keys, leave, set) in [
-        ("right", "enter", Some("archive after 1 86400")),
-        ("right right left", "enter", Some("archive after 1 86400")),
-        ("", "enter", None),
-        ("left", "enter", None),
-        ("right", "secondary-[", None),
-    ] {
-        let (shell, cx, host) = first_window(cx);
-        host.archive_after.set(Some(DAY / 2.));
-        started(&shell, cx);
-        on_to(&shell, cx, Step::Tidy);
-        assert_eq!(at(&shell, cx), Some("12 hours"), "the profile's time");
-        host.take();
-        if !keys.is_empty() {
-            cx.simulate_keystrokes(keys);
-        }
-        assert!(host.take().is_empty(), "{keys} set something before Next");
-        cx.simulate_keystrokes(leave);
-        assert_ne!(step(&shell, cx), Some(Step::Tidy), "{leave} left the step");
-        let said: Vec<String> = set.into_iter().map(str::to_string).collect();
-        assert_eq!(host.take(), said, "{keys} then {leave}");
-    }
-}
-
 /// No blank plane is ever shown: a split step whose picture isn't in draws no plane, its column
 /// centred in the card as Bring your stuff's is, in either look.
 #[gpui::test]
@@ -818,13 +781,12 @@ fn a_step_without_its_picture_draws_no_plane(cx: &mut TestAppContext) {
     for light in [false, true] {
         let (shell, cx, host) = first_window(cx);
         host.threads.set(Some(true));
-        host.archive_after.set(Some(DAY / 2.));
         started(&shell, cx);
         shell.update(cx, |shell, cx| {
             shell.onboarding.as_mut().unwrap().light = Some(light);
             cx.notify();
         });
-        for to in [Step::Assistant, Step::Space, Step::Tidy] {
+        for to in [Step::Assistant, Step::Space] {
             on_to(&shell, cx, to);
             assert!(!to.split(), "{to:?}'s picture isn't in");
             assert_eq!(placed("plane", cx), None, "{to:?}, light {light}: no plane");
@@ -927,82 +889,37 @@ fn the_accounts_dot_is_the_cards_ink(_: &mut TestAppContext) {
     }
 }
 
-/// A click on the bar puts it at the stop nearest.
+/// The time tabs wait before they're put away is Settings' alone: going through first run, every
+/// step's choice moved and taken, never sets it, so the profile keeps its 12 hours.
 #[gpui::test]
-fn a_click_on_the_tidy_bar_picks_the_stop_nearest(cx: &mut TestAppContext) {
+fn first_run_leaves_the_put_away_time_to_settings(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.archive_after.set(Some(DAY / 2.));
+    host.threads.set(Some(true));
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
     started(&shell, cx);
-    on_to(&shell, cx, Step::Tidy);
-    let bar = placed("tidy", cx).expect("the bar is drawn");
-    let at = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        card(shell, cx, |o| o.tidy.as_ref().map(|tidy| tidy.at))
-    };
-    cx.simulate_click(
-        point(bar.right() - px(1.), bar.center().y),
-        Modifiers::none(),
-    );
-    assert_eq!(at(&shell, cx), Some(4), "its end is Never");
-    cx.simulate_click(
-        point(bar.left() + px(1.), bar.center().y),
-        Modifiers::none(),
-    );
-    assert_eq!(at(&shell, cx), Some(0), "its start is the first time");
-}
-
-/// The tidy step tells of the broom only with threads on, and only where the broom can be.
-#[gpui::test]
-fn the_tidy_step_tells_of_the_broom_only_where_it_can_be(cx: &mut TestAppContext) {
-    for (threads, broom, shown) in [
-        (true, Some(Broom::Idle), true),
-        (true, None, false),
-        (false, Some(Broom::Idle), false),
-    ] {
-        let (shell, cx, host) = first_window(cx);
-        host.archive_after.set(Some(DAY / 2.));
-        host.threads.set(Some(threads));
-        host.broom.set(broom);
-        started(&shell, cx);
-        on_to(&shell, cx, Step::Tidy);
-        // On the way, Just the Browser turned threads off; as they were, for the step's own case.
-        host.threads.set(Some(threads));
+    let mut calls = Vec::new();
+    for _ in 0..16 {
+        let Some(at) = step(&shell, cx) else { break };
+        if card(&shell, cx, |o| o.ending.is_some()) {
+            break;
+        }
+        match at {
+            Step::Account => click("not-now", cx),
+            Step::Assistant => click("just-the-browser", cx),
+            Step::Import if placed("skip", cx).is_some() => click("skip", cx),
+            _ => cx.simulate_keystrokes("right enter"),
+        }
         settle(&shell, cx);
-        assert_eq!(
-            placed("broom", cx).is_some(),
-            shown,
-            "threads {threads}, broom {broom:?}"
-        );
-        host.take();
-        cx.simulate_keystrokes("enter");
-        assert!(
-            !host.take().iter().any(|call| call == "start broom"),
-            "it starts nothing"
-        );
+        calls.extend(host.take());
     }
-}
-
-/// Settings' times are named in the card's words, a time between them shown at the stop nearest,
-/// Never past every one.
-#[test]
-fn the_tidy_stops_are_settings_times_in_the_cards_words() {
-    let offered = [DAY / 2., DAY, 7. * DAY, 30. * DAY, -1.];
-    let tidy = Tidy::of(DAY / 2., &offered).expect("a bar");
-    let words: Vec<&str> = tidy.stops.iter().map(|&(_, words)| words).collect();
-    assert_eq!(
-        words,
-        ["12 hours", "24 hours", "7 days", "30 days", "Never"]
+    cx.run_until_parked();
+    calls.extend(host.take());
+    assert_eq!(step(&shell, cx), None, "the card ended");
+    assert!(
+        !calls.iter().any(|call| call.starts_with("archive after ")),
+        "first run set the put-away time: {calls:?}"
     );
-    assert_eq!(tidy.at, 0);
-    let at = |was| Tidy::of(was, &offered).map(|tidy| tidy.at);
-    assert_eq!(at(-1.), Some(4));
-    assert_eq!(at(2. * DAY), Some(1));
-    assert_eq!(at(365. * DAY), Some(3));
-    assert_eq!(
-        Tidy::of(DAY, &[3600.]),
-        None,
-        "a time with no word has no stop"
-    );
-    assert_eq!(stop_words(3600.), None);
 }
 
 /// Help improve is one switch for the daily count and crash reports, off until turned, set only as
@@ -1117,7 +1034,6 @@ fn welcome_plays_it_again(cx: &mut TestAppContext) {
 fn a_replay_keeps_no_step_to_resume(cx: &mut TestAppContext) {
     let dir = kept_dir(cx);
     let (shell, cx, host) = first_window(cx);
-    host.archive_after.set(Some(DAY / 2.));
     shell.update(cx, |shell, cx| shell.run(Command::Welcome, "menu", cx));
     shell.update(cx, |shell, cx| {
         shell.onboarding.as_mut().unwrap().end_entry();
@@ -1125,7 +1041,7 @@ fn a_replay_keeps_no_step_to_resume(cx: &mut TestAppContext) {
     });
     settle(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Import));
-    on_to(&shell, cx, Step::Tidy);
+    on_to(&shell, cx, Step::Done);
     cx.simulate_keystrokes("secondary-[");
     assert_eq!(step(&shell, cx), Some(Step::Space));
     assert_eq!(kept(&dir), None, "the replay kept no step");
@@ -1160,7 +1076,6 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
     host.sync_server.set(true);
     synced(cx, Status::SignedOut);
     host.threads.set(Some(true));
-    host.archive_after.set(Some(DAY / 2.));
     host.daily_count.set(Some(false));
     host.crash_reports.set(Some(false));
     started(&shell, cx);
@@ -1193,7 +1108,6 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
             Step::Assistant,
             Step::Import,
             Step::Space,
-            Step::Tidy,
             Step::Done
         ]
     );
@@ -1203,14 +1117,12 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
     assert_eq!(settings_set(host.take()), Vec::<String>::new());
 }
 
-/// ⌘Q at a step sets nothing turned there: the tidy bar, Help improve. They're set only as their
-/// step is left. The Space's look is kept as it's picked, as the theme panel keeps it, so a quit
+/// ⌘Q at a step sets nothing turned there: Help improve is set only as its step is left. The Space's look is kept as it's picked, as the theme panel keeps it, so a quit
 /// there resumes with it.
 #[gpui::test]
 fn a_quit_sets_nothing_turned_at_its_step(cx: &mut TestAppContext) {
-    for at in [Step::Space, Step::Tidy, Step::Done] {
+    for at in [Step::Space, Step::Done] {
         let (shell, cx, host) = first_window(cx);
-        host.archive_after.set(Some(DAY / 2.));
         host.daily_count.set(Some(false));
         host.crash_reports.set(Some(false));
         started(&shell, cx);
@@ -1218,7 +1130,6 @@ fn a_quit_sets_nothing_turned_at_its_step(cx: &mut TestAppContext) {
         host.take();
         match at {
             Step::Space => cx.simulate_keystrokes("right"),
-            Step::Tidy => cx.simulate_keystrokes("right"),
             _ => shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Help, cx)),
         }
         let picked = settings_set(host.take());
@@ -1291,7 +1202,6 @@ fn return_ending_a_composition_passes_no_step(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_preview_opens_the_card_at_a_step_by_number(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.archive_after.set(Some(DAY / 2.));
     let at = |number: &str, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| {
             shell.onboarding = None;
@@ -1300,8 +1210,7 @@ fn the_preview_opens_the_card_at_a_step_by_number(cx: &mut TestAppContext) {
         })
     };
     assert_eq!(at("4", cx), Some(Step::Space));
-    assert_eq!(at("5", cx), Some(Step::Tidy));
-    assert_eq!(at("7", cx), Some(Step::Done));
+    assert_eq!(at("6", cx), Some(Step::Done));
 }
 
 /// The keyboard comes with each step: on its choice where the choice is the step, on its main
@@ -1312,7 +1221,6 @@ fn each_step_rests_where_the_design_says(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.sync_server.set(true);
     host.threads.set(Some(true));
-    host.archive_after.set(Some(DAY / 2.));
     synced(cx, Status::SignedOut);
     cx.simulate_a11y_activation();
     started(&shell, cx);
@@ -1335,10 +1243,7 @@ fn each_step_rests_where_the_design_says(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
-    assert_eq!(step(&shell, cx), Some(Step::Tidy), "↩ on Next went on");
-    assert_eq!(keyed(cx).map(|(role, _)| role), Some(Role::Slider));
-    cx.simulate_keystrokes("enter");
-    settle(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Done), "↩ on Next went on");
     assert_eq!(keyed(cx), button("Start Browsing"));
 }
 
@@ -1496,21 +1401,19 @@ fn kept(dir: &std::path::Path) -> Option<String> {
     std::fs::read_to_string(dir.join("first-run-step")).ok()
 }
 
-/// ⌘Q keeps the step's place, a number from 1 to 7 and nothing else, whatever was picked, and the
+/// ⌘Q keeps the step's place, a number from 1 to 6 and nothing else, whatever was picked, and the
 /// card's end takes it away.
 #[gpui::test]
 fn the_step_is_kept_as_its_number_alone_until_the_end(cx: &mut TestAppContext) {
     let dir = kept_dir(cx);
     let (shell, cx, host) = first_window(cx);
-    host.archive_after.set(Some(DAY / 2.));
     started(&shell, cx);
     assert_eq!(kept(&dir).as_deref(), Some("3"), "the import's");
     on_to(&shell, cx, Step::Space);
     cx.simulate_keystrokes("right right");
     assert_eq!(kept(&dir).as_deref(), Some("4"), "the pick isn't kept");
     cx.simulate_keystrokes("enter");
-    cx.simulate_keystrokes("right");
-    assert_eq!(kept(&dir).as_deref(), Some("5"), "nor the bar's");
+    assert_eq!(kept(&dir).as_deref(), Some("6"), "the next step shown");
     cx.simulate_keystrokes("secondary-[");
     assert_eq!(
         kept(&dir).as_deref(),
@@ -1518,7 +1421,7 @@ fn the_step_is_kept_as_its_number_alone_until_the_end(cx: &mut TestAppContext) {
         "Back keeps the step it comes to"
     );
     on_to(&shell, cx, Step::Done);
-    assert_eq!(kept(&dir).as_deref(), Some("7"));
+    assert_eq!(kept(&dir).as_deref(), Some("6"));
     cx.simulate_keystrokes("enter");
     assert_eq!(kept(&dir), None, "ended, there's nothing to resume");
     later(&shell, cx, END_FADE);
@@ -1533,9 +1436,9 @@ fn the_step_is_kept_as_its_number_alone_until_the_end(cx: &mut TestAppContext) {
 fn a_launch_resumes_at_the_step_kept(cx: &mut TestAppContext) {
     let dir = kept_dir(cx);
     let (shell, cx, host) = first_window(cx);
-    host.archive_after.set(Some(DAY));
     for (written, at) in [
-        ("5", Step::Tidy),
+        // Other apps, left out with no agent program found: the next that shows.
+        ("5", Step::Done),
         ("4", Step::Space),
         ("9", Step::Done),
         ("0", Step::Import),
@@ -1550,26 +1453,12 @@ fn a_launch_resumes_at_the_step_kept(cx: &mut TestAppContext) {
         relaunch(&shell, cx, &dir);
         assert_eq!(step(&shell, cx), Some(at), "{written:?}");
     }
-    // At the tidy step the bar shows the time Settings has, as the profile kept it.
-    std::fs::write(dir.join("first-run-step"), "5").unwrap();
-    relaunch(&shell, cx, &dir);
-    let shown = card(&shell, cx, |o| {
-        o.tidy.as_ref().map(|tidy| tidy.stops[tidy.at].1)
-    });
-    assert_eq!(shown, Some("24 hours"));
-
     // Kept at the Welcome, signed in since: the next step.
     host.sync_server.set(true);
     synced(cx, Status::On);
     std::fs::write(dir.join("first-run-step"), "1").unwrap();
     relaunch(&shell, cx, &dir);
     assert_eq!(step(&shell, cx), Some(Step::Import));
-    // Kept at the tidy step, which this launch leaves out: the next that shows.
-    host.archive_after.set(None);
-    std::fs::write(dir.join("first-run-step"), "5").unwrap();
-    relaunch(&shell, cx, &dir);
-    assert_eq!(step(&shell, cx), Some(Step::Done));
-
     // Help › Welcome in the same launch plays the card from its start, whatever is kept.
     std::fs::write(dir.join("first-run-step"), "5").unwrap();
     shell.update(cx, |shell, _| shell.onboarding = None);
@@ -1582,16 +1471,12 @@ fn a_launch_resumes_at_the_step_kept(cx: &mut TestAppContext) {
 #[gpui::test]
 fn no_line_names_a_pick(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.archive_after.set(Some(DAY / 2.));
     host.daily_count.set(Some(false));
     host.crash_reports.set(Some(false));
     crate::heard::listen();
     started(&shell, cx);
     on_to(&shell, cx, Step::Space);
     cx.simulate_keystrokes("right right right");
-    cx.simulate_keystrokes("enter");
-    settle(&shell, cx);
-    cx.simulate_keystrokes("right right");
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);
     shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Help, cx));
@@ -1606,9 +1491,7 @@ fn no_line_names_a_pick(cx: &mut TestAppContext) {
         ours.iter().any(|line| *line == "browser: onboarding done"),
         "{ours:?}"
     );
-    let words = [
-        "hours", "days", "Never", "on", "off", "true", "false", "Standard",
-    ];
+    let words = ["on", "off", "true", "false", "Standard"];
     assert!(
         !(lines.iter()).any(|line| line.starts_with("browser: theme picker")),
         "the Space's editor says nothing of its picks"
@@ -1996,12 +1879,11 @@ fn the_space_steps_look_shows_on_the_window_at_once(cx: &mut TestAppContext) {
 
 /// A screen reader reads each step as a dialog called by its title, its line said after, and each
 /// control on it by its role and name: the buttons, the colours as one choice that says which is
-/// picked, the bar, the switch (#3151). Only the step shown is in the tree.
+/// picked, the switch (#3151). Only the step shown is in the tree.
 #[gpui::test]
 fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.sync_server.set(true);
-    host.archive_after.set(Some(DAY / 2.));
     // Help improve is offered where the build has its settings, as the card starts.
     host.daily_count.set(Some(false));
     host.crash_reports.set(Some(false));
@@ -2061,17 +1943,6 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("right");
     let next = PALETTE_NAMES[t::SPACE_START[0] as usize + 1].to_string();
     assert_eq!(chosen(&palettes(&read(cx))), [next], "→ picks the next");
-
-    cx.simulate_keystrokes("enter");
-    settle(&shell, cx);
-    let (title, line) = Step::Tidy.message(os);
-    let said = read(cx);
-    assert_eq!(dialogs(&said), [title.to_string()]);
-    assert_eq!(dialog_line(cx), Some(Some(line.to_string())));
-    assert!(
-        (said.iter()).any(|(role, name, _)| *role == Role::Slider && name == "Put away after"),
-        "{said:?}"
-    );
 
     cx.simulate_keystrokes("enter");
     settle(&shell, cx);

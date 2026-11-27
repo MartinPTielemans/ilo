@@ -94,10 +94,10 @@ launch_count() {
       fail "$1: a new profile's first launch with no page didn't play the onboarding"
   fi
 }
-# Goes through the onboarding's steps, taking nothing they offer, to the last, step 7,
+# Goes through the onboarding's steps, taking nothing they offer, to the last, step 6,
 # where Help improve's switch is.
 to_done() {
-  walk_steps 7 "$1: "
+  walk_steps 6 "$1: "
   expect '^browser: onboarding help-improve at ' \
     "$1: the last step didn't draw Help improve's switch, though the build names an endpoint"
 }
@@ -110,7 +110,7 @@ turn_count() {
 # Leaves the last step with Return, Start Browsing, which ends the onboarding.
 leave_onboarding() {
   send key return
-  expect '^browser: onboarding left 7$' "Return didn't leave the last step"
+  expect '^browser: onboarding left 6$' "Return didn't leave the last step"
   expect '^browser: onboarding done$' "Return at the last step didn't end the onboarding"
   # The flow ends in the command bar, whose window holds the keyboard, so on the Mac Settings would
   # open behind the browser's window with a click meant for it landing in the sidebar.

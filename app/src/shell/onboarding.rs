@@ -59,9 +59,6 @@ pub(super) enum Step {
     Favorites,
     /// Your first Space: its name and its look, on the theme panel's own parts.
     Space,
-    /// Tidy tabs: how long tabs wait before they're put away; left out until the core has the
-    /// profile's time.
-    Tidy,
     /// Other apps: two ways in, the command with its skill and MCP, each with Settings › Other
     /// apps' own switch, only when Claude Code or Codex is found here.
     OtherApps,
@@ -69,13 +66,12 @@ pub(super) enum Step {
     Done,
 }
 
-const STEPS: [Step; 8] = [
+const STEPS: [Step; 7] = [
     Step::Account,
     Step::Assistant,
     Step::Import,
     Step::Favorites,
     Step::Space,
-    Step::Tidy,
     Step::OtherApps,
     Step::Done,
 ];
@@ -89,22 +85,20 @@ impl Step {
             Step::Import => "3",
             Step::Favorites => "3b",
             Step::Space => "4",
-            Step::Tidy => "5",
-            Step::OtherApps => "6",
-            Step::Done => "7",
+            Step::OtherApps => "5",
+            Step::Done => "6",
         }
     }
 
-    /// The step's place in the design, 1 to 7, the favorites in the import's: what ⌘Q keeps.
+    /// The step's place in the design, 1 to 6, the favorites in the import's: what ⌘Q keeps.
     fn place(self) -> u8 {
         match self {
             Step::Account => 1,
             Step::Assistant => 2,
             Step::Import | Step::Favorites => 3,
             Step::Space => 4,
-            Step::Tidy => 5,
-            Step::OtherApps => 6,
-            Step::Done => 7,
+            Step::OtherApps => 5,
+            Step::Done => 6,
         }
     }
 
@@ -125,10 +119,6 @@ impl Step {
             ),
             Step::Favorites => ("Your favorites".into(), "Click one to leave it out.".into()),
             Step::Space => ("Your first Space".into(), "".into()),
-            Step::Tidy => (
-                "Tidy tabs".into(),
-                "Tabs you leave go to the Library. Pinned tabs stay.".into(),
-            ),
             Step::OtherApps => (
                 "Other apps".into(),
                 "Agents you run elsewhere can browse here, in tabs of their own.".into(),
@@ -140,8 +130,8 @@ impl Step {
     }
 
     /// The split steps: controls in a column at the left, the picture's plane at the right. Only a
-    /// step whose picture is in, so no blank plane is ever shown: v9 splits Assistant, Space and
-    /// Tidy, and until each one's picture lands its own column is centred as Bring your stuff's is.
+    /// step whose picture is in, so no blank plane is ever shown: v9 splits Assistant and Space,
+    /// and until each one's picture lands its own column is centred as Bring your stuff's is.
     fn split(self) -> bool {
         Self::PICTURED.contains(&self)
     }
@@ -311,11 +301,10 @@ pub(super) struct Onboarding {
     /// The step's dialog, which holds the keyboard where a step has nothing for it to rest on.
     focus: gpui::FocusHandle,
     /// ⇥'s stops: the main button, the trailing bare button (Skip, Not Now, Just the Browser),
-    /// Back, the step's own choice, and a row's button.
+    /// Back, and a row's button.
     continue_stop: gpui::FocusHandle,
     skip_stop: gpui::FocusHandle,
     back_stop: gpui::FocusHandle,
-    first_stop: gpui::FocusHandle,
     row_stop: gpui::FocusHandle,
     /// The Welcome's Use Recovery Words, beside its other buttons.
     words_stop: gpui::FocusHandle,
@@ -383,56 +372,10 @@ pub(super) struct Onboarding {
     help: Option<bool>,
     /// When the command's line to paste was last copied, which Copy Line says for a moment.
     copied: Option<Instant>,
-    /// The tidy step's times, while the core has the profile's.
-    pub(super) tidy: Option<Tidy>,
     /// The default browser's row: shown when the browser wasn't the default as the card began.
     default_row: bool,
     /// Bring your stuff's motion: the flight, the strands as each kind is written, All here.
     bring: bring::BringMotion,
-}
-
-/// Tidy tabs' bar: the build's times, each with the card's word for it, the profile's own as the
-/// card began, and the one the bar is at, set only as Next goes on, as a shorter time puts tabs
-/// away at once.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct Tidy {
-    pub(super) stops: Vec<(f64, &'static str)>,
-    was: f64,
-    pub(super) at: usize,
-}
-
-impl Tidy {
-    /// Settings' `offered` times that have a word, at the one nearest `was`; None with none.
-    fn of(was: f64, offered: &[f64]) -> Option<Tidy> {
-        let stops: Vec<(f64, &'static str)> = (offered.iter())
-            .filter_map(|&seconds| Some((seconds, stop_words(seconds)?)))
-            .collect();
-        // Never is past every time.
-        let far = |seconds: f64| if seconds < 0. { f64::MAX } else { seconds };
-        let at = (0..stops.len()).min_by(|&a, &b| {
-            let off = |at: usize| (far(stops[at].0) - far(was)).abs();
-            off(a).total_cmp(&off(b))
-        })?;
-        Some(Tidy { stops, was, at })
-    }
-
-    /// The time the bar is at, in seconds.
-    fn seconds(&self) -> f64 {
-        self.stops[self.at].0
-    }
-}
-
-/// The card's word for a time of Settings' (v9 §7).
-fn stop_words(seconds: f64) -> Option<&'static str> {
-    let day = 24. * 3600.;
-    Some(match seconds {
-        _ if seconds < 0. => "Never",
-        _ if seconds == day / 2. => "12 hours",
-        _ if seconds == day => "24 hours",
-        _ if seconds == 7. * day => "7 days",
-        _ if seconds == 30. * day => "30 days",
-        _ => return None,
-    })
 }
 
 impl Onboarding {
@@ -546,8 +489,6 @@ impl Shell {
             let view = importing.view.read(cx);
             !view.is_empty() || view.running().is_some()
         });
-        let tidy = (self.browser.archive_after(self.space))
-            .and_then(|(was, offered)| Tidy::of(was, &offered));
         let account = self.signing(cx);
         // Claude Code or Codex found here by the folder or file each makes in the user's home, a
         // stat once as the card starts, which runs nothing (floor 1). Only with the command
@@ -568,7 +509,6 @@ impl Shell {
                 // An import begun brings it in (import_event).
                 Step::Favorites => false,
                 Step::Space => true,
-                Step::Tidy => tidy.is_some(),
                 Step::OtherApps => found_apps,
                 Step::Done => true,
             })
@@ -602,7 +542,6 @@ impl Shell {
             continue_stop: cx.focus_handle().tab_stop(true),
             skip_stop: cx.focus_handle().tab_stop(true),
             back_stop: cx.focus_handle().tab_stop(true),
-            first_stop: cx.focus_handle().tab_stop(true),
             row_stop: cx.focus_handle().tab_stop(true),
             words_stop: cx.focus_handle().tab_stop(true),
             focused_step: None,
@@ -646,7 +585,6 @@ impl Shell {
             shown_assistants: None,
             help: None,
             copied: None,
-            tidy,
             default_row: !self.browser.is_default_browser(),
             bring: Default::default(),
         };
@@ -844,10 +782,7 @@ impl Shell {
         // about them is left out (v9 §0).
         if onboarding.returning {
             onboarding.steps.retain(|&each| {
-                !matches!(
-                    each,
-                    Step::Import | Step::Favorites | Step::Space | Step::Tidy
-                ) || each == step
+                !matches!(each, Step::Import | Step::Favorites | Step::Space) || each == step
             });
         }
         let at = onboarding.steps.iter().position(|&each| each == step);
@@ -1033,14 +968,6 @@ impl Shell {
                 }
             }
             Step::Space => self.space_keep(cx),
-            // Set only if it moved, as Settings sets it, which puts away at once the tabs that have
-            // waited that long.
-            Step::Tidy => {
-                if let Some(tidy) = onboarding.tidy.as_ref().filter(|t| t.seconds() != t.was) {
-                    let seconds = tidy.seconds();
-                    self.browser.set_archive_after(self.space, seconds, cx);
-                }
-            }
             _ => {}
         }
         self.onboarding_next(cx);
@@ -1218,26 +1145,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Puts Tidy tabs' bar at stop `at`, stopping at either end. Nothing is set until Next.
-    pub(super) fn onboarding_tidy(&mut self, at: usize, cx: &mut Context<Self>) {
-        let Some(tidy) = self.onboarding.as_mut().and_then(|o| o.tidy.as_mut()) else {
-            return;
-        };
-        let at = at.min(tidy.stops.len() - 1);
-        if tidy.at != at {
-            tidy.at = at;
-            cx.notify();
-        }
-    }
-
-    /// Moves Tidy tabs' bar `by` stops along.
-    fn onboarding_tidy_by(&mut self, by: isize, cx: &mut Context<Self>) {
-        let at = (self.onboarding.as_ref()).and_then(|o| Some(o.tidy.as_ref()?.at));
-        if let Some(at) = at {
-            self.onboarding_tidy(at.saturating_add_signed(by), cx);
-        }
-    }
-
     /// A key in first run's window. Any key during the entry ends it. ↩ is the main button, but
     /// never from a field, whose ↩ is its own (and an input method's, which confirms the text
     /// first); ⌘[ goes back; Esc cancels a wait and nothing else; ⌘W does nothing.
@@ -1280,8 +1187,6 @@ impl Shell {
             // Along the palettes, from none chosen → starting at the first and ← at the last.
             (Step::Space, "right") => self.space_palette_by(1, cx),
             (Step::Space, "left") => self.space_palette_by(-1, cx),
-            (Step::Tidy, "left" | "down") => self.onboarding_tidy_by(-1, cx),
-            (Step::Tidy, "right" | "up") => self.onboarding_tidy_by(1, cx),
             (_, "tab") => match modifiers.shift {
                 true => window.focus_prev(cx),
                 false => window.focus_next(cx),
@@ -1369,7 +1274,6 @@ impl Shell {
     fn onboarding_rest(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
-            Step::Tidy => onboarding.first_stop.clone(),
             step if self.onboarding_has_button(step, cx) => onboarding.continue_stop.clone(),
             _ => onboarding.focus.clone(),
         })
@@ -1505,7 +1409,6 @@ impl Shell {
                 &onboarding.continue_stop,
                 &onboarding.skip_stop,
                 &onboarding.back_stop,
-                &onboarding.first_stop,
                 &onboarding.row_stop,
             ]
             .contains(&&focus)
@@ -1820,12 +1723,6 @@ impl Shell {
             Step::Import => self.bring_controls(bring, inks, cx),
             Step::Favorites => self.bring_tiles(bring, inks, cx),
             Step::Space => self.space_controls(inks).into_any_element(),
-            Step::Tidy => div()
-                .flex()
-                .flex_col()
-                .children(self.tidy_card(inks, cx))
-                .children(self.broom_row(inks, cx))
-                .into_any_element(),
             Step::OtherApps => self.other_apps_ways(inks, cx),
             _ => div().into_any_element(),
         };
@@ -2637,11 +2534,6 @@ impl Shell {
             .text_size(px(crate::tokens::text::BODY))
             .text_color(look.ink)
             .children(rows)
-    }
-
-    /// The stop of the choice of `step`, while it's the step shown.
-    fn first_stop(&self, step: Step) -> Option<gpui::FocusHandle> {
-        self.step_stop(step, |onboarding| &onboarding.first_stop)
     }
 
     /// Keeps where the step shown draws `name`, as much of it as shows, for a test to click it.

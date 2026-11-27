@@ -2956,7 +2956,7 @@ fn main() {
                     // in a Space with no tabs and no favorites, as a new user's after the onboarding.
                     // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
                     // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first, and
-                    // PREVIEW_ONBOARDING_STEP=<a step's number, 1 to 7 or 3b> opens it at that
+                    // PREVIEW_ONBOARDING_STEP=<a step's number, 1 to 6 or 3b> opens it at that
                     // step.
                     let onboarding_step = states::var("PREVIEW_ONBOARDING_STEP").ok();
                     let onboarding = states::var("PREVIEW_ONBOARDING")
