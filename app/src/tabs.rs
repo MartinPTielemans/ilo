@@ -400,20 +400,6 @@ pub(crate) unsafe extern "C" fn tab_title_changed(
         .to_string_lossy()
         .into_owned();
     browser::title_log::title(tab, &title);
-    // A tab repointed as its Space is restored reports from inside the app's call that restores
-    // it, an update that holds the App: its borrow here would panic, as one nested in an update
-    // does (#2705), so the shell change waits for the update to end. The log doesn't.
-    if let Some(cx) = CX.with_borrow(Clone::clone) {
-        if gpui::AsyncApp::is_updating(&cx) {
-            let tab = tab;
-            update_app_later(move |cx| {
-                update_shells_in(cx, |shell, cx| {
-                    shell.set_title(tab, title.clone().into(), cx)
-                });
-            });
-            return;
-        }
-    }
     update_shells(|shell, cx| shell.set_title(tab, title.clone().into(), cx));
 }
 

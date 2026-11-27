@@ -213,11 +213,17 @@ pub(crate) unsafe extern "C" fn tab_page_pressed(_: *mut c_void, tab: bc::bc_id)
 }
 
 /// Changes every window's shell, from a core callback about what they all show, such as the
-/// Spaces and their tabs.
-pub(crate) fn update_shells(change: impl Fn(&mut Shell, &mut Context<Shell>)) {
+/// Spaces and their tabs. A callback can come from inside the call that asked for it, an update
+/// that holds the App: its borrow here would panic, as one nested in an update does (#2705), so
+/// then the change waits for the update to end.
+pub(crate) fn update_shells(change: impl Fn(&mut Shell, &mut Context<Shell>) + 'static) {
     let Some(cx) = CX.with_borrow(Clone::clone) else {
         return;
     };
+    if gpui::AsyncApp::is_updating(&cx) {
+        update_app_later(move |cx| update_shells_in(cx, change));
+        return;
+    }
     cx.update(|cx| update_shells_in(cx, change));
 }
 
