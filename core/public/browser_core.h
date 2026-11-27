@@ -2073,12 +2073,12 @@ BC_EXPORT size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capac
 
 // What the page in |tab| reported since it loaded, for the agent with the id |agent| that owns the
 // tab (#4377), as UTF-8 JSON copied into |log| as bc_space_name does: {"developer_mode",
-// "requests", and "console", "dropped"}. Each failed request, one that ended in a network error (its name in
-// "error", a blocked one included) or with a status of 400 or more, gives its method, its address
-// without the query or fragment, and its status. Only while the page is in Developer Mode
-// (bc_tab_set_developer_mode, the user's), "console" holds every console message, and each request
-// gives its whole address and, as far as it was heard, its request and response headers without
-// Cookie, Authorization, Proxy-Authorization or Set-Cookie and its response's body; then
+// "requests", and "console", "dropped"}. Each failed request, one that ended in a network error
+// (its name in "error", a blocked one included) or with a status of 400 or more, gives its method,
+// its address without the query or fragment, and its status. Only while the page is in Developer
+// Mode (bc_tab_set_developer_mode, the user's), "console" holds every console message, and each
+// request gives its whole address and, as far as it was heard, its request and response headers
+// without Cookie, Authorization, Proxy-Authorization or Set-Cookie and its response's body; then
 // |developer_mode| is true. The core keeps a log only for a tab in an agent's Space, from the time
 // it comes there, and drops it as it leaves; it keeps at most 200 requests and 500 messages, the
 // oldest dropped first and counted in "dropped", a message cut at 8 KB and a body at 64 KB, and
