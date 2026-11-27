@@ -94,8 +94,10 @@ const std::map<bc_id, Mark>& All();
 // |tab| left the agent's Space, or closed: it's handed no longer.
 void Left(bc_id tab);
 
-// bc_tab_return_from_agent.
-bool Return(bc_id tab);
+// bc_tab_return_from_agent. A window showing it goes with it, unless not |follows|, as for a tab
+// that closes on its return (bc_agent_archive_tab): that window shows what it would once the tab
+// closed.
+bool Return(bc_id tab, bool follows = true);
 
 // |tab| is out of an agent's Space and the user's again, as a tab moved out of one is
 // (bc_tab_move_to_space), and handled now: one an agent had for longer than its Space keeps a tab

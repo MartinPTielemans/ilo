@@ -2044,8 +2044,8 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 #define BC_AGENT_CLOSE_REFUSED 1
 // The user pinned the tab, which only the user closes.
 #define BC_AGENT_CLOSE_PINNED 2
-// Its page asked to stay, as one with unsaved changes does: only ever agent_close_answered's
-// answer, as the page's own.
+// Its page asked to stay, as one with unsaved changes does: agent_close_answered's answer, as the
+// page's own, or bc_agent_archive_tab's return, for a page that may hold some.
 #define BC_AGENT_CLOSE_ASKS 3
 // The core is asking the page, which answers later through agent_close_answered: only ever
 // bc_agent_close_tab's return, never an answer.
@@ -2063,6 +2063,19 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 // close goes though the user takes its tab over or pins it before it's gone, as Chromium is closing
 // it by then.
 BC_EXPORT int bc_agent_close_tab(const char* agent, bc_id tab, bool discard);
+// Archives |tab|, which the user handed the agent with the id |agent| (bc_tab_give_to_agent), for
+// the agent, never with a dialog and never moving what a window shows but for the tab: it goes
+// back to the place it left, as bc_tab_return_from_agent puts it, with no window going with it,
+// and closes there as bc_tab_close closes a Today tab, into the archive, but without its handlers.
+// Its page is never asked: one with a beforeunload handler may hold unsaved changes, and then it
+// stays handed, untouched, and the call returns BC_AGENT_CLOSE_ASKS, unless |discard| loses what
+// it holds. A tab that goes back pinned or onto a favorite's tile stays handed too, with
+// BC_AGENT_CLOSE_PINNED. Returns BC_AGENT_CLOSED once it's gone, else BC_AGENT_CLOSE_REFUSED: for
+// a tab not handed to |agent| or one the user holds, it stays as it is; one that can't go back, as
+// when the Space it left is gone, stays handed; one that went back but stays, as between windows,
+// is the user's. Never PENDING. Agent code calls it from Work on pages up, and only from Full
+// access with |discard|, as losing what the user wrote is the agent's discard.
+BC_EXPORT int bc_agent_archive_tab(const char* agent, bc_id tab, bool discard);
 
 // Copies up to |capacity| of the tabs of the Space of the agent with the id |agent| into |tabs|, its
 // pinned tabs top to bottom without their folders, then its Today tabs, and returns how many it

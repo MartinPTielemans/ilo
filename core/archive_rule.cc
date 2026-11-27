@@ -16,4 +16,11 @@ std::optional<base::Time> DueAt(base::Time last_seen, std::optional<base::TimeDe
   return last_seen + *after;
 }
 
+std::optional<base::TimeDelta> InSpace(bool agent, std::optional<base::TimeDelta> after) {
+  if (agent) {
+    return std::nullopt;
+  }
+  return after;
+}
+
 }  // namespace browser_core::archive_rule
