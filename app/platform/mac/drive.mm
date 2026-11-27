@@ -429,6 +429,10 @@ const std::map<std::string, std::string> kCharacters = {
 constexpr short kDoneSubtype = 0x5350;
 // Posted after pip's release, so the press holds the Mini Player till AppKit has the release.
 constexpr short kPipLetGoSubtype = 0x5351;
+// Whether the command running posts the mouse's button, which can start the system's drag.
+bool g_mouse_step = false;
+// The last command whose done line was given.
+long g_reported = 0;
 
 // The window the backdrop command puts behind the browser window.
 NSWindow* g_backdrop;
@@ -1918,6 +1922,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (action == "release") {
       pressed = nil;
     }
+    g_mouse_step = true;
     done();
     return true;
   }
@@ -2629,6 +2634,23 @@ bool Run(const std::string& line, void (^done)(void)) {
   return false;
 }
 
+// The line saying command |number| is done, with where the keyboard is.
+void ReportDone(long number) {
+  g_reported = std::max(g_reported, number);
+  NSWindow* key = NSApp.keyWindow;
+  NSResponder* focus = (key ?: MainWindow()).firstResponder;
+  NSString* marked = @"none";
+  if ([focus conformsToProtocol:@protocol(NSTextInputClient)]) {
+    NSRange range = [(id<NSTextInputClient>)focus markedRange];
+    if (range.location != NSNotFound) {
+      marked = [NSString stringWithFormat:@"%lu,%lu", range.location, range.length];
+    }
+  }
+  fprintf(stderr, "browser: drive %ld done, key %s, focus %s, active %d, marked %s\n", number,
+          key ? NSStringFromClass(key.class).UTF8String : "none",
+          NSStringFromClass(focus.class).UTF8String, NSApp.active, marked.UTF8String);
+}
+
 void PostDone(long number) {
   [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
                                       location:NSZeroPoint
@@ -2640,6 +2662,25 @@ void PostDone(long number) {
                                          data1:number
                                          data2:0]
            atStart:NO];
+  if (!g_mouse_step) {
+    return;
+  }
+  g_mouse_step = false;
+  // On macOS 14 the system's drag a mouse step starts runs CoreDrag's loop until the button is let
+  // go, and it takes only the mouse's events, so the done event waits behind it and the command
+  // never finished (#4459). So a mouse command's line is given here once its done event has waited
+  // half a second, which a run loop that takes every event doesn't leave it, and none when AppKit
+  // takes the event.
+  NSTimer* tracking = [NSTimer timerWithTimeInterval:0.5
+                                             repeats:NO
+                                               block:^(NSTimer*) {
+                                                 if (number > g_reported) {
+                                                   fprintf(stderr, "browser: drive %ld done event held, run loop in %s\n", number,
+                                                           NSRunLoop.currentRunLoop.currentMode.UTF8String);
+                                                   ReportDone(number);
+                                                 }
+                                               }];
+  [NSRunLoop.mainRunLoop addTimer:tracking forMode:NSRunLoopCommonModes];
 }
 
 }  // namespace
@@ -2649,18 +2690,9 @@ void drive_start(void) {
     if (event.subtype != kDoneSubtype) {
       return event;
     }
-    NSWindow* key = NSApp.keyWindow;
-    NSResponder* focus = (key ?: MainWindow()).firstResponder;
-    NSString* marked = @"none";
-    if ([focus conformsToProtocol:@protocol(NSTextInputClient)]) {
-      NSRange range = [(id<NSTextInputClient>)focus markedRange];
-      if (range.location != NSNotFound) {
-        marked = [NSString stringWithFormat:@"%lu,%lu", range.location, range.length];
-      }
+    if (event.data1 > g_reported) {
+      ReportDone(event.data1);
     }
-    fprintf(stderr, "browser: drive %ld done, key %s, focus %s, active %d, marked %s\n",
-            (long)event.data1, key ? NSStringFromClass(key.class).UTF8String : "none",
-            NSStringFromClass(focus.class).UTF8String, NSApp.active, marked.UTF8String);
     return nil;
   };
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined handler:report_done];
