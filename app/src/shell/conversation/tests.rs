@@ -116,6 +116,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         folder: None,
         model: None,
         effort: None,
+        queued: Vec::new(),
     }
 }
 
@@ -1635,10 +1636,10 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
     assert_eq!(colours[0], colours[2]);
 }
 
-/// The reply field says what typing there does (Z-who): `Steer it, or ask` while the thread is at
-/// work, `Reply` while it waits on the user and once it can't be stopped, as when it's done.
+/// The reply field says `Reply` at work and at rest alike (Q2): what typing does at work is the
+/// queued row's to show.
 #[gpui::test]
-fn the_reply_field_says_steer_while_at_work_and_reply_otherwise(cx: &mut TestAppContext) {
+fn the_reply_field_says_reply_at_work_and_at_rest(cx: &mut TestAppContext) {
     use crate::agents::task::Live;
     let (shell, _, cx) = shown(cx);
     let mut talk = conversation(1);
@@ -1660,8 +1661,8 @@ fn the_reply_field_says_steer_while_at_work_and_reply_otherwise(cx: &mut TestApp
             talk.view.read(cx).reply.read(cx).placeholder().to_string()
         }));
     }
-    let (steer, reply) = (super::words::STEER, super::words::REPLY);
-    assert_eq!(said, [steer, reply, reply, steer]);
+    let reply = super::words::REPLY;
+    assert_eq!(said, [reply, reply, reply, reply]);
 }
 
 /// The line in the reply field's place says where to reply on an outside app's session, and that
@@ -3259,6 +3260,24 @@ fn shift_enter_in_the_threads_composer_starts_a_line(cx: &mut TestAppContext) {
     );
 }
 
+/// ⌘↩ in a thread's composer sends what's typed the other way from Q3's setting, with the
+/// keyboard in the field: the composer's, not Back to Pinned URL's.
+#[gpui::test]
+fn cmd_enter_sends_the_reply_the_other_way(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    cx.update(|window, cx| window.focus(&reply.focus_handle(cx), cx));
+    host.take();
+    cx.simulate_input("Ryanair");
+    cx.simulate_keystrokes("cmd-enter");
+    cx.run_until_parked();
+    assert_eq!(
+        host.take(),
+        [r#"task task-1 ReplyOtherWay("Ryanair")"#.to_string()]
+    );
+}
+
 /// ⌘. stops the thread at work from its composer, with words typed in the field too, where ↩
 /// would send them and ⇧↩ start a line.
 #[gpui::test]
@@ -3277,6 +3296,57 @@ fn cmd_period_stops_the_thread_from_its_composer(cx: &mut TestAppContext) {
     assert!(host.take().contains(&"task task-1 Stop".to_string()));
     let typed = reply.read_with(cx, |reply, _| reply.text().to_string());
     assert_eq!(typed, "Ryanair\nonly", "⌘. leaves what's typed");
+}
+
+/// A message waiting for the thread's turn to end is a row above the field (Q1): Send Now and
+/// Remove are the user's presses on that one; Edit puts its words back in the field, before
+/// what's typed, and takes it out of the queue.
+#[gpui::test]
+fn a_queued_message_has_its_row_above_the_field(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let place = |what: &'static str, at: usize, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.queued_drawn.borrow().get(&(what, at)).copied()
+        })
+    };
+    assert_eq!(place("send", 0, cx), None, "no queue, no row");
+    shell.update(cx, |shell, cx| {
+        let talk = Conversation {
+            queued: vec!["Also Porto".into(), "And Faro".into()],
+            ..conversation(1)
+        };
+        shell.set_conversation(Some(talk), cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let (first, second) = (place("send", 0, cx).unwrap(), place("send", 1, cx).unwrap());
+    let field = view
+        .read_with(cx, |view, _| view.reply_drawn.get())
+        .unwrap();
+    assert!(
+        first.bottom() <= second.top() && second.bottom() <= field.top(),
+        "oldest first, over the field"
+    );
+    host.take();
+    for (what, at, pressed) in [
+        ("send", 1, "task task-1 SendQueued(1)"),
+        ("remove", 0, "task task-1 RemoveQueued(0)"),
+    ] {
+        let at = place(what, at, cx).unwrap().center();
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(host.take(), vec![pressed.to_string()], "{what}");
+    }
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    cx.update(|window, cx| window.focus(&reply.focus_handle(cx), cx));
+    cx.simulate_input("too");
+    let edit = place("edit", 0, cx).unwrap().center();
+    cx.simulate_click(edit, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(host.take(), vec!["task task-1 RemoveQueued(0)".to_string()]);
+    let typed = reply.read_with(cx, |reply, _| reply.text().to_string());
+    assert_eq!(typed, "Also Porto\ntoo");
 }
 
 /// A task that takes a reply keeps its level under the field, ended and picked up again too.

@@ -184,6 +184,9 @@ pub struct Conversation {
     /// which the composer's effort trigger reads and its menu changes. None for a program that
     /// takes none, and for an outside agent's session.
     pub effort: Option<(&'static [&'static str], Option<&'static str>)>,
+    /// The messages that wait for its turn to end, oldest first, as the row above its composer
+    /// shows them.
+    pub queued: Vec<SharedString>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -530,6 +533,12 @@ pub struct Task {
     /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
     /// `told`, which that one start carries (`attached`).
     pub(in crate::agents) copying: bool,
+    /// The user's messages written while it worked, which wait for its turn to end (Q3's
+    /// `Waits its turn`), oldest first: the row above the composer shows them, and a Stop leaves
+    /// them there.
+    pub queued: Vec<String>,
+    /// The ends of turns that a steer interrupted, still to come, which aren't the task's own.
+    pub(super) steered: u32,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -581,6 +590,21 @@ pub struct Session {
 }
 
 impl Task {
+    /// Whether a turn of a run of ilo's is under way, which a message of the user's would go
+    /// into or wait for: not while its copies or a restart hold every message for its start.
+    pub(super) fn mid_turn(&self) -> bool {
+        self.state == State::Working
+            && self.session.is_none()
+            && self.process.is_some()
+            && !self.copying
+            && self.restart.is_none()
+    }
+
+    /// Whether its run holds an effort other than the one picked since it started.
+    fn effort_outgrown(&self) -> bool {
+        (self.process.as_ref()).is_some_and(|process| process.effort() != self.effort.as_deref())
+    }
+
     /// It ended `at`. Its record keeps the log's entries from before then, and none noted after,
     /// such as its agent's disconnect, which the Mac's clock, in microseconds, can give the very
     /// time it ended (#3967).
@@ -609,6 +633,8 @@ impl Task {
     /// Ends its run: the process goes, and a message to the task starts another.
     pub(super) fn end_run(&mut self) {
         self.process = None;
+        // The ends a steer counted were that run's, and won't come.
+        self.steered = 0;
     }
 
     /// Where the turn under way starts among its messages: after the user's last.
@@ -837,6 +863,9 @@ pub enum TaskAction {
     /// ⇧⌘T or ⌘Z: the task named, or with none named, the last dismissed.
     Restore,
     Reply(SharedString),
+    /// ⌘↩ in its composer: mid-turn the message goes the other way from Q3's setting, into the
+    /// turn under way where it would wait, or waiting where it would go in; else as a reply.
+    ReplyOtherWay(SharedString),
     Retry,
     Stop,
     /// Done's Open <site> or Open 3 pages: every tab it left the user.
@@ -863,6 +892,11 @@ pub enum TaskAction {
     /// The effort level the user picked in a thread's effort menu, None for its program's own:
     /// it holds from the next message, as the composer's does for a thread's start.
     PickEffort(Option<String>),
+    /// The queued row's Send Now on the message at this place in its queue: it goes into the
+    /// turn under way, or, with none, it's the next turn.
+    SendQueued(usize),
+    /// The queued row's Remove, or its Edit, which puts it back in the composer first.
+    RemoveQueued(usize),
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
     /// The stopped line's Hand Back, on an outside agent's task: its pages are its client's
@@ -1251,7 +1285,7 @@ impl Agents {
         // Whether `action` asks more of the agent: a reply to its ask only lets it finish.
         let answers = self.task(agent).is_some_and(|task| task.asking.is_some());
         let asks = match action {
-            TaskAction::Reply(_) => !answers,
+            TaskAction::Reply(_) | TaskAction::ReplyOtherWay(_) => !answers,
             TaskAction::Retry => true,
             _ => false,
         };
@@ -1271,6 +1305,7 @@ impl Agents {
                 return (None, self.restore_task(named, cx));
             }
             TaskAction::Reply(text) => self.reply(agent, &text, cx),
+            TaskAction::ReplyOtherWay(text) => self.reply_way(agent, &text, true, cx),
             TaskAction::Retry => self.retry_task(agent, cx),
             TaskAction::Stop => self.stop_task(agent, cx),
             TaskAction::Open => return (self.open_result(agent, None, cx), None),
@@ -1304,6 +1339,8 @@ impl Agents {
             TaskAction::RevokeFolder => self.revoke_folder(agent, cx),
             TaskAction::PickModel(id) => self.pick_model(agent, &id, cx),
             TaskAction::PickEffort(level) => self.pick_effort(agent, level.as_deref(), cx),
+            TaskAction::SendQueued(at) => self.send_queued(agent, at, cx),
+            TaskAction::RemoveQueued(at) => self.remove_queued(agent, at, cx),
         }
         (None, None)
     }
@@ -1481,6 +1518,9 @@ impl Agents {
                         .and_then(|level| levels.iter().copied().find(|each| *each == level));
                     (levels, picked)
                 }),
+            queued: (task.queued.iter())
+                .map(|text| text.clone().into())
+                .collect(),
         })
     }
 
@@ -2158,6 +2198,8 @@ impl Agents {
             ran_walled: Vec::new(),
             restart: None,
             copying: false,
+            queued: Vec::new(),
+            steered: 0,
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -2673,6 +2715,12 @@ impl Agents {
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
+            // The end of a turn a steer interrupted, which goes on as the steered message's.
+            Out::Ended(_)
+                if let Some(task) = self.task_mut(&agent).filter(|task| task.steered > 0) =>
+            {
+                task.steered -= 1;
+            }
             Out::Ended(_)
                 if let Some(after) = self
                     .task_mut(&agent)
@@ -2706,6 +2754,7 @@ impl Agents {
                 }
                 // However it ended, and by the name it has now (#4105).
                 self.keep_ended(&agent, cx);
+                self.send_next_queued(&agent, cx);
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
             Out::Ended(Some(_))
@@ -2833,6 +2882,11 @@ impl Agents {
 
     /// The user's reply, which the agent reads once its turn under way ends.
     pub fn reply(&mut self, agent: &str, text: &str, cx: &mut Context<Self>) {
+        self.reply_way(agent, text, false, cx)
+    }
+
+    /// As `reply`, the other way from Q3's setting mid-turn, if `other_way` (⌘↩).
+    fn reply_way(&mut self, agent: &str, text: &str, other_way: bool, cx: &mut Context<Self>) {
         let text = text.trim();
         if text.is_empty() {
             return;
@@ -2845,17 +2899,21 @@ impl Agents {
         if !self.goes_on(agent) {
             return cx.notify();
         }
+        // Mid-turn, a message of the user's waits for the turn to end, or goes into it (Q3).
+        if self.task(agent).is_some_and(Task::mid_turn) {
+            return match self.goes_in_now != other_way {
+                true => self.steer(agent, text, cx),
+                false => self.queue(agent, text, cx),
+            };
+        }
         // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
         self.pick_up(agent, cx);
         let resumes = self.resumes(agent);
         // A run holds the effort it started at: one picked since ends it between turns, so this
-        // message starts the next at the new level, going on as a run that went would. Mid-turn
-        // the message steers the run under way, and the one after it starts the next.
-        let other_effort = self.task(agent).is_some_and(|task| {
-            task.state != State::Working
-                && (task.process.as_ref())
-                    .is_some_and(|process| process.effort() != task.effort.as_deref())
-        });
+        // message starts the next at the new level, going on as a run that went would. A message
+        // that waited for the turn to end goes so too, and one steered in ends the run under way.
+        let other_effort = (self.task(agent))
+            .is_some_and(|task| task.state != State::Working && task.effort_outgrown());
         if other_effort {
             self.wall_outgrown(agent, cx);
         }
@@ -2896,6 +2954,91 @@ impl Agents {
         cx.notify();
     }
 
+    /// A message the user wrote while `agent` worked, which waits for its turn to end.
+    fn queue(&mut self, agent: &str, text: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
+        task.queued.push(text.to_string());
+        // A count, never the words.
+        log!("browser: task {agent} queued {}", task.queued.len());
+        cx.notify();
+    }
+
+    /// The user's message goes into `agent`'s turn under way (runner `steer`), as theirs. After
+    /// another effort is picked it ends the run under way instead, which holds the old one, and
+    /// starts the next at the new level, as a reply between turns does.
+    fn steer(&mut self, agent: &str, text: &str, cx: &mut Context<Self>) {
+        if self.task(agent).is_some_and(Task::effort_outgrown) {
+            self.wall_outgrown(agent, cx);
+        }
+        let resumes = self.resumes(agent);
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
+        task.messages
+            .push(Message::new(Who::User, text.to_string()));
+        task.writing = None;
+        task.helpers.turned(task.trace.len());
+        let text = match task.told.take() {
+            Some(told) => format!("{told}\n\n{text}"),
+            None => text.to_string(),
+        };
+        let steered = task.process.as_mut().map(|process| process.steer(&text));
+        match steered {
+            Some(Ok(ends)) => {
+                task.steered += u32::from(ends);
+                log!("browser: task {agent} steered");
+            }
+            // Gone, or ended for its effort: a new run, which goes on with the conversation its
+            // assistant kept, or is given the conversation with this in it, as a reply's is.
+            _ => {
+                let first = match resumes {
+                    true => text,
+                    false => conversation(task),
+                };
+                self.launch(agent, &first, cx);
+            }
+        }
+        self.wait_for_answer(agent, cx);
+        cx.notify();
+    }
+
+    /// The queued row's Send Now: the message goes into the turn under way, or is the next turn
+    /// once there's none, as after a Stop.
+    fn send_queued(&mut self, agent: &str, at: usize, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent).filter(|task| at < task.queued.len()) else {
+            return;
+        };
+        let text = task.queued.remove(at);
+        match task.mid_turn() {
+            true => self.steer(agent, &text, cx),
+            false => self.reply(agent, &text, cx),
+        }
+    }
+
+    fn remove_queued(&mut self, agent: &str, at: usize, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent).filter(|task| at < task.queued.len()) else {
+            return;
+        };
+        task.queued.remove(at);
+        log!("browser: task {agent} queued {}", task.queued.len());
+        cx.notify();
+    }
+
+    /// The turn of `agent`'s that ended was its own, and the first message waiting goes, as the
+    /// user's reply would have then. A Stop or a failure leaves them waiting.
+    fn send_next_queued(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
+        if task.queued.is_empty() || !matches!(task.state, State::Done { .. }) {
+            return;
+        }
+        let text = task.queued.remove(0);
+        self.reply(agent, &text, cx);
+    }
+
     /// The user's reply to the task's ask, which answers it.
     fn answer_ask(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else {
@@ -2927,6 +3070,7 @@ impl Agents {
         task.waiting = None;
         // A start waiting on a sweep never happens.
         task.restart = None;
+        task.steered = 0;
         // A session's agent is its client's, whose calls under way the user stops, on each of its
         // connections, as the agent path always has. Its Stop is logged before each of its
         // sessions ends, this one too, so each one's record has it (session_stopped).
@@ -3889,6 +4033,8 @@ impl Agents {
             ran_walled: Vec::new(),
             restart: None,
             copying: false,
+            queued: Vec::new(),
+            steered: 0,
         });
         cx.notify();
         Some(key)

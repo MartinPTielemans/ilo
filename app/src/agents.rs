@@ -919,6 +919,9 @@ pub struct Agents {
     notes_off: bool,
     /// When a task's notification is posted, from Settings › Agents › Notifications.
     notify: crate::needs_you::Notify,
+    /// Settings › Threads' `While a thread works, a message` (Q3): it goes into the turn under way
+    /// (`Goes in now`), or, as it does unless the user says so, waits for that turn to end.
+    goes_in_now: bool,
     /// The log's last entry, by its id.
     logged: u64,
     /// The uploads waiting on the core's description of their file field, by request.
@@ -1163,6 +1166,7 @@ impl Agents {
             noted: notes::Given::default(),
             notes_off: false,
             notify: Default::default(),
+            goes_in_now: false,
             logged: 0,
             downloading: HashMap::new(),
             grants: HashMap::new(),
@@ -1296,6 +1300,7 @@ impl Agents {
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
+        self.goes_in_now = tasks.get("mid_turn").and_then(Value::as_str) == Some("goes_in");
         // Settings saved before the two switches had one for every agent, and under it one for
         // the command bar's tasks. Once, the inside switch is on only where both were, and other
         // apps' agents only where agents were and they weren't turned off, so nothing comes on
@@ -1392,6 +1397,18 @@ impl Agents {
     /// When a task's notification is posted.
     pub fn notify(&self) -> crate::needs_you::Notify {
         self.notify
+    }
+
+    /// Whether a message written while a thread works goes into its turn under way (Q3).
+    pub fn goes_in_now(&self) -> bool {
+        self.goes_in_now
+    }
+
+    /// Settings › Threads' `While a thread works, a message`: `Goes in now` or `Waits its turn`.
+    pub fn set_goes_in_now(&mut self, now: bool, cx: &mut Context<Self>) {
+        self.goes_in_now = now;
+        self.save();
+        cx.notify();
     }
 
     /// Settings › Agents' Notify.
@@ -6045,6 +6062,7 @@ impl Agents {
             "last": last,
             "others_level": self.tasks.others_start.id(),
             "notify": self.notify.id(),
+            "mid_turn": if self.goes_in_now { "goes_in" } else { "waits" },
             "installed": (self.tasks.sign_ins.installed.iter())
                 .map(|cli| cli.id())
                 .collect::<Vec<_>>(),

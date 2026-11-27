@@ -503,9 +503,14 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         folder: None,
         model: Some(model(Cli::Claude, Some("Opus"))),
         effort: Some((Cli::Claude.efforts(), None)),
+        queued: Vec::new(),
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
+    // PREVIEW_TASK_QUEUED=1 shows a message waiting for its turn to end, in its row (Q1).
+    if states::var("PREVIEW_TASK_QUEUED").is_ok() {
+        talk.queued = vec!["And check whether the circle has two together".into()];
+    }
     // PREVIEW_TASK_PAGES=<n> keeps its first n pages: 0 shows it with no rail (#4396).
     if let Some(count) = states::var("PREVIEW_TASK_PAGES")
         .ok()

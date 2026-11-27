@@ -390,17 +390,15 @@ pub fn in_reply_place(replies: bool, threads_off: bool, name: &str) -> Option<St
     }
 }
 
-/// The reply field's placeholder while its thread is at work (Z-who): typing there steers it.
-pub const STEER: &str = "Steer it, or ask";
-
-/// The reply field's placeholder otherwise (Z-who), and the name of the button that sends what's
-/// typed, whoever is at work: the user reads ilo as the one at work, never the assistant.
+/// The reply field's placeholder, at work or not (Q2): what typing does then is the queued row's
+/// to show. The name of the button that sends what's typed, too, whoever is at work: the user
+/// reads ilo as the one at work, never the assistant.
 pub const REPLY: &str = "Reply";
 
-/// The reply field's placeholder, as its thread is `at_work` or not.
-pub fn reply_field(at_work: bool) -> &'static str {
-    match at_work {
-        true => STEER,
-        false => REPLY,
-    }
-}
+/// The queued row's act, which puts its message into the thread's work at once (Q1).
+pub const SEND_NOW: &str = "Send Now";
+/// The queued row's glyphs, as an assistive app says them (Q1).
+pub const EDIT: &str = "Edit";
+pub const REMOVE: &str = "Remove";
+/// A queued message's clock, its tooltip and its spoken name (WR1).
+pub const SENDS_WHEN: &str = "Sends when this step ends";

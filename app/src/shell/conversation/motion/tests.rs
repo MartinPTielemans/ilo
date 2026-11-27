@@ -64,6 +64,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         folder: None,
         model: None,
         effort: None,
+        queued: Vec::new(),
     }
 }
 

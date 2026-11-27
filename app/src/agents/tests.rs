@@ -7256,8 +7256,9 @@ mod tasks {
 
     /// The effort picked in a thread's own menu reaches its run: Claude Code's `--effort` is for
     /// the session, so the run under way keeps its level and the next message starts a run at the
-    /// one picked. A pick mid-turn lets the message steer the run under way, and the one after
-    /// starts the next. A level the program doesn't list changes nothing.
+    /// one picked. After a pick mid-turn, the message that waited for the turn to end starts it,
+    /// and one steered in ends the run under way to start it. A level the program doesn't list
+    /// changes nothing.
     #[cfg(unix)]
     #[gpui::test]
     fn an_effort_picked_in_the_thread_reaches_its_next_run(cx: &mut TestAppContext) {
@@ -7301,16 +7302,12 @@ mod tasks {
             args[1]
         );
 
-        // Mid-turn: the message steers the run under way, which keeps its level.
+        // Mid-turn: the run under way keeps its level, and the message waiting for its end
+        // starts the next at the one picked.
         pick(Some("low"), cx);
         agents.update(cx, |agents, cx| agents.reply(&agent, "Sooner", cx));
-        assert_eq!(
-            run(cx),
-            second,
-            "a message mid-turn steers the run under way"
-        );
+        assert_eq!(run(cx), second, "a message mid-turn ends no run");
         said(&agents, &agent, Out::Ended(None), cx);
-        agents.update(cx, |agents, cx| agents.reply(&agent, "Thanks", cx));
         assert_ne!(run(cx), second);
         let args = runs_args(&program, 3);
         assert!(
@@ -7319,10 +7316,24 @@ mod tasks {
             args[2]
         );
 
+        // Steered in after another pick, the message ends the run under way, which holds the
+        // old level, and starts the next at the one picked.
+        agents.update(cx, |agents, cx| agents.set_goes_in_now(true, cx));
+        pick(Some("medium"), cx);
+        let third = run(cx);
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Now", cx));
+        assert_ne!(run(cx), third, "a steer after a pick starts a run");
+        let args = runs_args(&program, 4);
+        assert!(
+            args[3].contains("--effort medium"),
+            "the fourth run: {}",
+            args[3]
+        );
+
         pick(Some("turbo"), cx);
         assert_eq!(
             effort(cx),
-            Some((levels, Some("low"))),
+            Some((levels, Some("medium"))),
             "a level Claude doesn't list"
         );
         pick(None, cx);
@@ -7331,6 +7342,150 @@ mod tasks {
             Some((levels, None)),
             "Default leaves it to the program"
         );
+        agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
+    }
+
+    /// The lines the fake CLI read, once there are `lines` of them, each as JSON.
+    #[cfg(unix)]
+    fn read_lines(program: &std::path::Path, lines: usize) -> Vec<Value> {
+        let input = program.with_extension("in");
+        let mut read = Vec::new();
+        for _ in 0..200 {
+            read = (std::fs::read_to_string(&input).unwrap_or_default().lines())
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect();
+            if read.len() >= lines {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        read
+    }
+
+    fn queued(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
+        agents.read_with(cx, |agents, cx| {
+            let conversation = agents.conversation(agent, cx).unwrap();
+            conversation
+                .queued
+                .iter()
+                .map(|text| text.to_string())
+                .collect()
+        })
+    }
+
+    /// A message written while the thread works waits its turn (Q3's default): the row above
+    /// the composer shows it, its program doesn't have it, and it goes as the turn ends.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_message_while_it_works_waits_for_its_turn_then_goes(cx: &mut TestAppContext) {
+        let program = fake_cli("queue");
+        let (agents, _) = ready(Some(program.clone()), cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        assert_eq!(read_lines(&program, 1).len(), 1);
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Also Porto", cx));
+        agents.update(cx, |agents, cx| agents.reply(&agent, "And Faro", cx));
+        assert_eq!(queued(&agents, &agent, cx), ["Also Porto", "And Faro"]);
+        let messages =
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().messages.len());
+        assert_eq!(
+            messages, 1,
+            "neither is the thread's yet, nor its program's"
+        );
+
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(queued(&agents, &agent, cx), ["And Faro"]);
+        let lines = read_lines(&program, 2);
+        assert_eq!(lines[1]["message"]["content"], json!("Also Porto"));
+        let working = agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone());
+        assert_eq!(working, State::Working, "the next turn is under way");
+
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert!(queued(&agents, &agent, cx).is_empty());
+        let lines = read_lines(&program, 3);
+        assert_eq!(lines[2]["message"]["content"], json!("And Faro"));
+        agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
+    }
+
+    /// A Stop leaves the queued messages where they are; Send Now sends one, and Remove takes
+    /// one out.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_stop_leaves_the_queue_for_send_now_or_remove(cx: &mut TestAppContext) {
+        let program = fake_cli("stop-queue");
+        let (agents, _) = ready(Some(program.clone()), cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        for text in ["Also Porto", "And Faro"] {
+            agents.update(cx, |agents, cx| agents.reply(&agent, text, cx));
+        }
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        assert_eq!(queued(&agents, &agent, cx), ["Also Porto", "And Faro"]);
+        let action = |action, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| agents.task_action(&agent, action, cx))
+        };
+        action(TaskAction::RemoveQueued(0), cx);
+        assert_eq!(queued(&agents, &agent, cx), ["And Faro"]);
+        action(TaskAction::SendQueued(0), cx);
+        assert!(queued(&agents, &agent, cx).is_empty());
+        let lines = read_lines(&program, 3);
+        let sent = lines
+            .iter()
+            .any(|line| line["message"]["content"] == json!("And Faro"));
+        assert!(sent, "{lines:?}");
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line["message"]["content"] == json!("Also Porto"))
+        );
+        agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
+    }
+
+    /// Send Now steers the turn under way: Claude Code has no call to add to a turn, so its turn
+    /// is interrupted and the message goes next. That turn's end isn't the thread's: it works on.
+    /// `Goes in now` steers each message so, with no row, and ⌘↩ goes the other way from it.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn send_now_and_goes_in_now_steer_the_turn_under_way(cx: &mut TestAppContext) {
+        let program = fake_cli("steer");
+        let (agents, _) = ready(Some(program.clone()), cx);
+        let agent = start(&agents, "Find a flight to Lisbon", cx);
+        let state = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone())
+        };
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Also Porto", cx));
+        let send_now = TaskAction::SendQueued(0);
+        agents.update(cx, |agents, cx| agents.task_action(&agent, send_now, cx));
+        assert!(queued(&agents, &agent, cx).is_empty());
+        let lines = read_lines(&program, 3);
+        assert_eq!(lines[1]["request"]["subtype"], json!("interrupt"));
+        assert_eq!(lines[2]["message"]["content"], json!("Also Porto"));
+        // The interrupted turn ends; the steered one goes on.
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert_eq!(state(cx), State::Working);
+        said(&agents, &agent, Out::Ended(None), cx);
+        assert!(matches!(state(cx), State::Done { .. }));
+
+        agents.update(cx, |agents, cx| agents.set_goes_in_now(true, cx));
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Now Faro", cx));
+        agents.update(cx, |agents, cx| agents.reply(&agent, "And Braga", cx));
+        assert!(queued(&agents, &agent, cx).is_empty(), "no row");
+        let lines = read_lines(&program, 6);
+        assert_eq!(lines[3]["message"]["content"], json!("Now Faro"));
+        assert_eq!(lines[4]["request"]["subtype"], json!("interrupt"));
+        assert_eq!(lines[5]["message"]["content"], json!("And Braga"));
+
+        // ⌘↩: with `Goes in now` the message waits, and with `Waits its turn` it goes in.
+        let other_way = |text: &str| TaskAction::ReplyOtherWay(text.into());
+        let act = |action, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, cx| agents.task_action(&agent, action, cx))
+        };
+        act(other_way("Then Lagos"), cx);
+        assert_eq!(queued(&agents, &agent, cx), ["Then Lagos"]);
+        agents.update(cx, |agents, cx| agents.set_goes_in_now(false, cx));
+        act(other_way("Now Sintra"), cx);
+        let lines = read_lines(&program, 8);
+        assert_eq!(lines[6]["request"]["subtype"], json!("interrupt"));
+        assert_eq!(lines[7]["message"]["content"], json!("Now Sintra"));
+        assert_eq!(queued(&agents, &agent, cx), ["Then Lagos"]);
         agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
     }
 
@@ -11562,6 +11717,15 @@ mod tasks {
         assert_eq!(
             menu(&codex, cx).as_deref(),
             Some("Codex's default [GPT A] (checked), GPT A, GPT B")
+        );
+        // The one difference kept from ⌘T's composer (#4457): Claude is signed in too, and the
+        // thread's menu offers no other assistant, nor Sign In or Settings.
+        let menu_items = agents.read_with(cx, |agents, _| agents.thread_model_menu(&codex));
+        let (ids, _) = menu_items.unwrap();
+        assert!(
+            ids.iter()
+                .all(|(id, _)| id.is_empty() || id.starts_with("gpt-")),
+            "{ids:?}"
         );
 
         let pick = |agent: &str, id: &str, cx: &mut TestAppContext| {

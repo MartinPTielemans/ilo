@@ -1025,6 +1025,8 @@ impl Task {
             ran_walled: Vec::new(),
             restart: None,
             copying: false,
+            queued: Vec::new(),
+            steered: 0,
             names: crate::agents::files::Names::default(),
         }
     }

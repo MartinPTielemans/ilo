@@ -17,6 +17,8 @@ const INITIALIZE: u64 = 1;
 const THREAD: u64 = 2;
 /// Turns' requests count up from here.
 const TURNS: u64 = 100;
+/// A message steered into the turn under way.
+const STEER: u64 = TURNS - 2;
 
 /// What starts the name of the permission profile of ilo's own that a thread's commands run under,
 /// never shown. Each start's name ends in its own random part, as Codex merges a table of the
@@ -49,8 +51,13 @@ struct Inner {
     thinking: Option<Instant>,
     /// The model the user picked for its next turns, by id, which each turn names from then on.
     model: Option<String>,
+    /// The model the turn under way started on, which a steer into it would run on.
+    turn_model: Option<String>,
     /// The name of the profile its thread was asked to start under, once it was asked.
     profile: Option<String>,
+    /// A message steered into the turn under way that Codex hasn't taken yet, which becomes a
+    /// turn of its own if the turn ended first.
+    steering: Option<String>,
 }
 
 impl State {
@@ -105,7 +112,10 @@ pub fn say(stdin: &Mutex<Option<ChildStdin>>, state: &State, text: &str) -> std:
 
 /// Interrupts the turn under way.
 pub fn interrupt(stdin: &Mutex<Option<ChildStdin>>, state: &State) -> std::io::Result<()> {
-    let inner = state.inner.lock().unwrap();
+    interrupt_turn(stdin, &state.inner.lock().unwrap())
+}
+
+fn interrupt_turn(stdin: &Mutex<Option<ChildStdin>>, inner: &Inner) -> std::io::Result<()> {
     let (Some(thread), Some(turn)) = (&inner.thread, &inner.turn) else {
         return Ok(());
     };
@@ -117,6 +127,37 @@ pub fn interrupt(stdin: &Mutex<Option<ChildStdin>>, state: &State) -> std::io::R
             "params": { "threadId": thread, "turnId": turn },
         }),
     )
+}
+
+/// Puts the user's message into the turn under way, as Codex's `turn/steer` does ("add user
+/// input to an already in-flight turn", app-server README), or makes it the next turn with none.
+/// A turn under way on a model the user has since left is interrupted instead, and the message
+/// is the next turn, on the one picked. Says whether a turn ends for it.
+pub fn steer(
+    stdin: &Mutex<Option<ChildStdin>>,
+    state: &State,
+    text: &str,
+) -> std::io::Result<bool> {
+    let mut inner = state.inner.lock().unwrap();
+    let (Some(thread), Some(turn)) = (inner.thread.clone(), inner.turn.clone()) else {
+        inner.waiting.push_front(text.to_string());
+        return next_turn(stdin, &mut inner).map(|_| false);
+    };
+    if inner.model != inner.turn_model {
+        inner.waiting.push_front(text.to_string());
+        return interrupt_turn(stdin, &inner).map(|_| true);
+    }
+    inner.steering = Some(text.to_string());
+    let input = json!([{ "type": "text", "text": text }]);
+    write_line(
+        stdin,
+        &json!({
+            "id": STEER,
+            "method": "turn/steer",
+            "params": { "threadId": thread, "input": input, "expectedTurnId": turn },
+        }),
+    )
+    .map(|_| false)
 }
 
 /// Starts a turn with the next message waiting, if the thread is free.
@@ -132,6 +173,7 @@ fn next_turn(stdin: &Mutex<Option<ChildStdin>>, inner: &mut Inner) -> std::io::R
     };
     inner.starting = true;
     inner.next += 1;
+    inner.turn_model = inner.model.clone();
     let params = turn_params(&thread, &text, inner.model.as_deref());
     write_line(
         stdin,
@@ -165,6 +207,15 @@ pub fn read(
         return Vec::new();
     }
     if let Some(id) = id.and_then(Value::as_u64) {
+        // A steer the turn ended before: the message is the next turn, never lost.
+        if id == STEER {
+            let refused = message.get("error").is_some();
+            if let Some(text) = inner.steering.take().filter(|_| refused) {
+                inner.waiting.push_front(text);
+                _ = next_turn(stdin, &mut inner);
+            }
+            return Vec::new();
+        }
         if let Some(error) = message.get("error") {
             let text = error
                 .get("message")
@@ -524,6 +575,74 @@ pub fn servers_in(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use serde_json::Value;
+
+    /// The lines `say` would send through a pipe, written by `send` and read back.
+    fn sent(send: impl FnOnce(&Mutex<Option<std::process::ChildStdin>>)) -> Vec<Value> {
+        let mut child = crate::child::command(std::path::Path::new("cat"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = Mutex::new(child.stdin.take());
+        send(&stdin);
+        stdin.lock().unwrap().take();
+        let out = child.wait_with_output().unwrap();
+        (String::from_utf8(out.stdout).unwrap().lines())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// Send Now on Codex puts the message into the turn under way, by its id, with no new turn;
+    /// with none under way it's the next turn.
+    #[test]
+    fn a_steer_goes_into_the_turn_under_way() {
+        let state = super::State::default();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.thread = Some("t1".into());
+            inner.turn = Some("turn-7".into());
+        }
+        let lines = sent(|stdin| assert!(!super::steer(stdin, &state, "Also Porto").unwrap()));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["method"], "turn/steer");
+        assert_eq!(lines[0]["params"]["expectedTurnId"], "turn-7");
+        assert_eq!(lines[0]["params"]["input"][0]["text"], "Also Porto");
+
+        state.inner.lock().unwrap().turn = None;
+        let lines = sent(|stdin| assert!(!super::steer(stdin, &state, "And Faro").unwrap()));
+        assert_eq!(lines[0]["method"], "turn/start");
+        assert_eq!(lines[0]["params"]["input"][0]["text"], "And Faro");
+    }
+
+    /// A steer after another model is picked doesn't go into the turn on the old one: that turn
+    /// is interrupted, and the message is the next turn, on the model picked.
+    #[test]
+    fn a_steer_after_another_model_is_the_next_turn_on_it() {
+        let state = super::State::default();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.thread = Some("t1".into());
+            inner.turn = Some("turn-7".into());
+        }
+        super::set_model(&state, "gpt-b");
+        let lines = sent(|stdin| assert!(super::steer(stdin, &state, "Also Porto").unwrap()));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["method"], "turn/interrupt");
+        // The interrupted turn ends, as `read` takes its end, and the message starts the next on
+        // the model picked.
+        let lines = sent(|stdin| {
+            let mut inner = state.inner.lock().unwrap();
+            inner.turn = None;
+            super::next_turn(stdin, &mut inner).unwrap();
+        });
+        assert_eq!(lines[0]["method"], "turn/start");
+        assert_eq!(lines[0]["params"]["model"], "gpt-b");
+        assert_eq!(lines[0]["params"]["input"][0]["text"], "Also Porto");
+    }
+
     /// A turn names the model only once the user picked one, and then its id.
     #[test]
     fn a_turn_names_the_model_the_user_picked() {

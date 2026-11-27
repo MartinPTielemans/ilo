@@ -92,7 +92,7 @@ use crate::tokens::shell::{HAIRLINE, ICON_INK};
 use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_GAP};
 
-actions!(conversation, [SendReply, StopTask]);
+actions!(conversation, [SendReply, SendReplyOtherWay, StopTask]);
 
 mod ilo_keys;
 mod markdown;
@@ -202,12 +202,12 @@ const KEY_CONTEXT: &str = "Conversation";
 
 pub fn bind_keys(cx: &mut gpui::App) {
     ilo_keys::bind(cx);
-    let keys = [super::keys::view_binding(
-        "enter",
-        Box::new(SendReply),
-        KEY_CONTEXT,
-        cx,
-    )];
+    // ⌘↩ is the composer's here, the other of waiting and going in (Q3); Back to Pinned URL is
+    // the page's.
+    let keys = [
+        super::keys::view_binding("enter", Box::new(SendReply), KEY_CONTEXT, cx),
+        super::keys::view_binding("cmd-enter", Box::new(SendReplyOtherWay), KEY_CONTEXT, cx),
+    ];
     cx.bind_keys(keys);
 }
 
@@ -303,6 +303,9 @@ pub struct TalkView {
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     model_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     effort_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where each queued row's Send Now, Edit and Remove were drawn, by its name and place in the
+    /// queue, logged as they move for check.sh to click.
+    queued_drawn: Rc<RefCell<HashMap<(&'static str, usize), Bounds<Pixels>>>>,
     /// The composer's trigger whose menu is open, which wears its plate while it is.
     menu_open: Option<&'static str>,
     /// Where the folder's chip under the reply field was drawn.
@@ -537,6 +540,7 @@ impl Shell {
                     level_drawn: Rc::default(),
                     model_drawn: Rc::default(),
                     effort_drawn: Rc::default(),
+                    queued_drawn: Rc::default(),
                     menu_open: None,
                     folder_drawn: Rc::default(),
                     plus: crate::plus::Plus::default(),
@@ -909,12 +913,6 @@ impl TalkView {
                     self.tell(ilo_spoken(line, &conversation.name).into());
                 }
             }
-            // The field says what typing there does: steers the thread at work, else replies.
-            let at_work = conversation.stoppable && conversation.live == Live::Working;
-            let placeholder = words::reply_field(at_work);
-            self.reply.update(cx, |reply, cx| {
-                reply.set_placeholder(placeholder.into(), cx)
-            });
             self.shown = Some(conversation);
             cx.notify();
         }
@@ -1023,6 +1021,11 @@ impl TalkView {
     }
 
     fn send_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_reply_as(false, window, cx)
+    }
+
+    /// The reply typed, the other way from Q3's setting mid-turn if `other_way` (⌘↩).
+    fn send_reply_as(&mut self, other_way: bool, window: &mut Window, cx: &mut Context<Self>) {
         let input = self.reply.read(cx);
         if input.composing() {
             return;
@@ -1082,7 +1085,14 @@ impl TalkView {
             }
             _ => self.scroll.scroll_to_bottom(),
         }
-        self.act(TaskAction::Reply(text.into()), cx);
+        let text = text.into();
+        self.act(
+            match other_way {
+                true => TaskAction::ReplyOtherWay(text),
+                false => TaskAction::Reply(text),
+            },
+            cx,
+        );
     }
 
     /// A question's answer, picked: it goes on from its chip as the user's reply, and the others
@@ -3146,8 +3156,196 @@ impl TalkView {
             .bg(palette.plate(REPLY_FILL))
             .border_1()
             .border_color(palette.plate(COMPOSER_RIM))
+            .children(self.queued(&form, look, cx))
             .child(field)
             .child(self.choices(&form, look, cx))
+    }
+
+    /// The messages that wait for the thread's turn to end (Q1), each a row above the field:
+    /// its clock, which says when it goes (WR1), its words on one line, `Send Now`, which puts it
+    /// into the work at once, and Edit and Remove. A Stop leaves them as they are.
+    fn queued(
+        &self,
+        form: &Composer,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let Some(shown) = self.shown.as_ref() else {
+            return Vec::new();
+        };
+        let palette = look.palette;
+        let dim = palette.gray(SECONDARY);
+        let glyph = |path: &'static str| {
+            svg()
+                .flex_none()
+                .path(path)
+                .size(px(PAGE_CHIP_FAVICON))
+                .text_color(dim)
+        };
+        (shown.queued.iter().enumerate())
+            .map(|(at, text)| {
+                let agent = self.agent.clone();
+                let send = held_button(
+                    palette,
+                    ("conversation-queued-send", at),
+                    words::SEND_NOW,
+                    false,
+                )
+                .when(look.a11y, |button| {
+                    button.role(Role::Button).aria_label(words::SEND_NOW)
+                })
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    let agent = agent.clone();
+                    (view.shell)
+                        .update(cx, |shell, cx| {
+                            shell.browser.task(agent, TaskAction::SendQueued(at), cx)
+                        })
+                        .ok();
+                }))
+                .relative()
+                .child(self.queued_place("send", at));
+                let agent = self.agent.clone();
+                let words_queued = text.clone();
+                let edit = div()
+                    .id(("conversation-queued-edit", at))
+                    .flex_none()
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(HELD_BUTTON_HOVER))
+                    .when(look.a11y, |edit| {
+                        edit.role(Role::Button).aria_label(words::EDIT)
+                    })
+                    .relative()
+                    .child(glyph("icons/pencil.svg"))
+                    .child(self.queued_place("edit", at))
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.edit_queued(at, words_queued.clone(), window, cx);
+                        let agent = agent.clone();
+                        (view.shell)
+                            .update(cx, |shell, cx| {
+                                shell.browser.task(agent, TaskAction::RemoveQueued(at), cx)
+                            })
+                            .ok();
+                    }));
+                let agent = self.agent.clone();
+                let remove = div()
+                    .id(("conversation-queued-remove", at))
+                    .flex_none()
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(HELD_BUTTON_HOVER))
+                    .when(look.a11y, |remove| {
+                        remove.role(Role::Button).aria_label(words::REMOVE)
+                    })
+                    .relative()
+                    .child(glyph("icons/x.svg"))
+                    .child(self.queued_place("remove", at))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        let agent = agent.clone();
+                        (view.shell)
+                            .update(cx, |shell, cx| {
+                                shell.browser.task(agent, TaskAction::RemoveQueued(at), cx)
+                            })
+                            .ok();
+                    }));
+                let tipped = self.shell.clone();
+                let clock_at = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+                let drawn = clock_at.clone();
+                let clock = div()
+                    .id(("conversation-queued-clock", at))
+                    .flex_none()
+                    .relative()
+                    .when(look.a11y, |clock| {
+                        clock.role(Role::Label).aria_label(words::SENDS_WHEN)
+                    })
+                    .child(glyph("icons/clock.svg"))
+                    .child(
+                        canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                            .absolute()
+                            .size_full(),
+                    )
+                    .on_hover(move |hovered, _, cx| {
+                        let Some(shell) = tipped.upgrade() else {
+                            return;
+                        };
+                        let at = clock_at.get();
+                        shell.update(cx, |shell, cx| {
+                            let tip = at.filter(|_| *hovered).map(|at| {
+                                let tip = crate::tooltip::Tip::named(words::SENDS_WHEN.into());
+                                (tip, crate::tooltip::Anchor::under(at, shell.viewport))
+                            });
+                            shell.hover_tip(tip, cx);
+                        });
+                    });
+                div()
+                    .id(("conversation-queued", at))
+                    .flex_none()
+                    .min_h(px(form.field))
+                    .px(px(form.field_x))
+                    .flex()
+                    .items_center()
+                    .gap(px(CHIP_GAP))
+                    .text_size(px(form.text))
+                    .line_height(px(form.line))
+                    .text_color(dim)
+                    .child(clock)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(text.replace('\n', " ")),
+                    )
+                    .child(send)
+                    .child(edit)
+                    .child(remove)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// What keeps where a queued row's `what` was drawn, and logs it as it moves.
+    fn queued_place(&self, what: &'static str, at: usize) -> gpui::Canvas<()> {
+        let drawn = self.queued_drawn.clone();
+        canvas(
+            move |bounds, _, _| {
+                if drawn.borrow_mut().insert((what, at), bounds) != Some(bounds) {
+                    // check.sh reads this line, to click it.
+                    log!(
+                        "browser: queued {what} {at} at {:.0} {:.0} {:.0} {:.0}",
+                        f32::from(bounds.origin.x),
+                        f32::from(bounds.origin.y),
+                        f32::from(bounds.size.width),
+                        f32::from(bounds.size.height)
+                    );
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
+    /// A queued message's Edit: its words go back in the field, before what's typed there, for
+    /// the user to send again.
+    fn edit_queued(
+        &mut self,
+        _: usize,
+        text: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let typed = self.reply.read(cx).text().to_string();
+        let text: SharedString = match typed.trim().is_empty() {
+            true => text,
+            false => format!("{text}\n{typed}").into(),
+        };
+        let caret = text.len();
+        self.reply
+            .update(cx, |reply, cx| reply.set_text(text, caret, window, cx));
+        window.focus(&self.reply.focus_handle(cx), cx);
     }
 
     /// The composer's row under its field, the bar's own (choices.rs): the plus, disabled where a
@@ -4958,6 +5156,9 @@ impl Render for TalkView {
             .id("conversation")
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &SendReply, window, cx| view.send_reply(window, cx)))
+            .on_action(cx.listener(|view, _: &SendReplyOtherWay, window, cx| {
+                view.send_reply_as(true, window, cx)
+            }))
             .on_action(cx.listener(Self::ilo_press))
             .on_action(cx.listener(Self::ilo_next))
             .on_action(cx.listener(Self::ilo_back))

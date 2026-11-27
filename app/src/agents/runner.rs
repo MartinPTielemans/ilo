@@ -390,6 +390,20 @@ impl Process {
         }
     }
 
+    /// Puts the user's message into the turn under way (Q3's `Goes in now`, or `Send Now` on a
+    /// queued one): Codex takes it into that turn, unless its model was changed since; Claude Code
+    /// has no such call, so its turn is interrupted and the message goes next, which ends that turn
+    /// first. Says whether a turn ends for it, which its task doesn't count as its own end.
+    pub fn steer(&mut self, text: &str) -> std::io::Result<bool> {
+        match (self.cli, &self.codex) {
+            (Cli::Codex, Some(state)) => super::codex::steer(&self.stdin, state, text),
+            _ => {
+                self.interrupt();
+                self.say(text).map(|_| true)
+            }
+        }
+    }
+
     /// Which run it is, as each of its lines says.
     pub fn run(&self) -> u32 {
         self.id
