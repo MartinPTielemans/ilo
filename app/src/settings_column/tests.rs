@@ -828,7 +828,10 @@ fn the_search_finds_moved_rows_where_they_moved() {
         row(Part::General, "Default browser"),
         row(Part::LittleWindow, "Little Window"),
         row(Part::Features, "Peek"),
-        row(Part::Threads, "Let your assistant use woven"),
+        row(
+            Part::Threads,
+            &format!("Let your assistant use {}", crate::product::PRODUCT),
+        ),
         row(Part::Kept, "Remove All"),
         row(Part::Access, "Work on pages"),
         row(Part::SiteNotes, "Site notes"),
