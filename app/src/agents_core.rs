@@ -32,7 +32,9 @@ fn call<T>(core: impl FnOnce() -> T) -> T {
 
 struct Core;
 
-/// bc_profile_search_url's shape, as browser_core.h declares it.
+/// bc_profile_search_url's shape, as browser_core.h declares it on core/profile-search-url
+/// (306b2ada4), in build 14: `size_t (bc_id profile, const char* text, char* url, size_t
+/// capacity)`. The caller's buffer takes the URL, so nothing is freed; 0 is no engine.
 type ProfileSearchUrl =
     unsafe extern "C" fn(bc::bc_id, *const std::ffi::c_char, *mut std::ffi::c_char, usize) -> usize;
 
@@ -43,7 +45,7 @@ fn profile_search_url() -> Option<ProfileSearchUrl> {
     *FOUND.get_or_init(|| {
         #[cfg(unix)]
         // SAFETY: dlsym reads the name, which ends in a zero byte, and answers null when nothing
-        // loaded has it. The core exports it only in browser_core.h's shape.
+        // loaded has it. The core exports it only in ProfileSearchUrl's shape (306b2ada4).
         let found = unsafe {
             let found = libc::dlsym(libc::RTLD_DEFAULT, c"bc_profile_search_url".as_ptr());
             (!found.is_null())

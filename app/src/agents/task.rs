@@ -2354,8 +2354,11 @@ impl Agents {
         let Some(program) = found.program.clone() else {
             return Err(format!("{} isn't installed.", cli.name()));
         };
-        // A strand of a thread with files is held to them as the thread is, or doesn't start.
-        let wall = self.wall_or_without(thread).map_err(|()| couldnt.clone())?;
+        // A strand of a thread with files is held to them as the thread is, in a wall of its own
+        // that reads its own folder and config, or doesn't start.
+        let wall = self
+            .wall_or_without(thread, strand)
+            .map_err(|()| couldnt.clone())?;
         let Some(task) = self.task(thread) else {
             return Err(couldnt);
         };
