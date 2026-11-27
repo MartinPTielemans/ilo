@@ -217,7 +217,7 @@ impl Shell {
                 .gap(px(RECENT_GAP))
                 .text_size(px(text::BODY))
                 .map(|row| match keyed == Some(index) {
-                    true => row.bg(palette.plate(RECENT_CHOSEN)),
+                    true => row.bg(palette.flat_plate()),
                     false => row.hover(|style| style.bg(palette.plate(RECENT_HOVERED))),
                 })
                 .on_click(cx.listener(move |shell, _, _, cx| shell.open_recent_row(index, cx)))

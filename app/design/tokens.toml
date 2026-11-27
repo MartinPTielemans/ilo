@@ -2198,7 +2198,7 @@ menu-drop = 4.0
 # The recents: one plate the bar's width, 12 under it, ink 0.04 at radius 14 in a rim of white
 # 0.09, of up to five rows 36 tall with a hairline between. A row is 14 in at each end: its
 # favicon or the knot, 10 to the title, the site 8 after it and the time at its end, both in the
-# bar's dim. The row the keys are on is flat on ink 0.08; one under the pointer on 0.05.
+# bar's dim. The row the keys are on is on the flat plate (#4401); one under the pointer on 0.05.
 recents = 5
 recents-gap = 12.0
 recents-radius = 14.0
@@ -2208,7 +2208,6 @@ recent-height = 36.0
 recent-inset = 14.0
 recent-gap = 10.0
 recent-site-gap = 8.0
-recent-chosen = 0.08
 recent-hovered = 0.05
 # Of a profile's tasks a run before left, how many the browser makes cards of (pick_up.rs).
 cards = 3
