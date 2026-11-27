@@ -111,6 +111,9 @@ pub(crate) const HELPER_PAGES: [(&str, &str); 4] = [
 /// What the bench's task says before it starts its four helpers.
 const FOUR_SHOPS: &str = "Four shops sell Saturday's stalls. I'll look at all four at once.";
 
+/// What each of the bench's helpers says it's doing, in its own words.
+const FINDING: &str = "Finding two seats together in the stalls";
+
 /// What the bench's task named each of its helpers, as an assistant does: its own words.
 const HELPER_NAMES: [&str; 4] = [
     "Stalls at Tickets",
@@ -151,7 +154,9 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
     // Each started 21 s before the bench opens, as on screen 4c, and one that's done ended then.
     let now = std::time::Instant::now();
     let began = now.checked_sub(std::time::Duration::from_secs(21));
-    let helper = |at: usize, tool: &str, did: &str, under_way| TraceItem::Helper {
+    // A helper's step leads with the assistant's own words and has the account at the right,
+    // as on sheet 45; the one handed over has only the account.
+    let helper = |at: usize, tool: &str, did: &str, words: &str, under_way| TraceItem::Helper {
         step: TraceStep {
             kind: Default::default(),
             key: 10 + at,
@@ -163,7 +168,7 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
             opens: Opens::Nothing,
             under: "".into(),
             page: None,
-            says: "".into(),
+            says: words.into(),
         },
         name: HELPER_NAMES[at].into(),
         tab: Some(sites[at].0),
@@ -172,9 +177,9 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
     };
     (0..count)
         .map(|at| match (at == HELPER_WAITING && waits, running) {
-            (true, _) => helper(at, "hand_off", "Handed you", false),
-            (false, true) => helper(at, "read_page", "Reading", true),
-            (false, false) => helper(at, "read_page", "Read", false),
+            (true, _) => helper(at, "hand_off", "Handed you", "", false),
+            (false, true) => helper(at, "read_page", "Reading", FINDING, true),
+            (false, false) => helper(at, "read_page", "Read", FINDING, false),
         })
         .collect()
 }
