@@ -872,6 +872,11 @@ pub struct Did {
 /// no tool of the browser's.
 pub const SEARCHED: &str = "web_search";
 
+/// The browser ended a hand-off itself, its page past the user's step (#4361): the activity log's
+/// entry (HB1) and the trace's step after the hand-off's (HB2). Neither says the user finished:
+/// all the browser sees is that the page moved on.
+pub const MOVED_ON: &str = "moved on";
+
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
 
@@ -1167,6 +1172,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 _ => "Searched the web".into(),
             };
         }
+        MOVED_ON => return format!("Went on when {} moved past your step", site(NO_SITE)),
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
         PAGES_BACK if !did.target.is_empty() => {
             return format!("{} · {}", describe(PAGES_BACK), did.target);
@@ -1344,6 +1350,7 @@ pub fn describe(action: &str) -> &'static str {
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",
+        MOVED_ON => "Took the tab back when the page moved on",
         "run_steps" => "Ran steps",
         "wait" => "Waited for the page",
         "check" => "Looked for text on the page",

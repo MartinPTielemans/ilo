@@ -4,6 +4,7 @@
 
 use super::kept::Run;
 use super::rewall::sent;
+use super::searches::titles;
 use super::*;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{Line, TaskAction};
@@ -187,6 +188,17 @@ fn a_page_that_moved_on_tells_the_thread_as_hand_back_does(cx: &mut TestAppConte
     let tab = PAGES[0].0;
     let reason = json!({ "tab": tab, "reason": "Sign in, please." });
     returned_at_once(call(&run.agents, &agent, "hand_off", reason, cx), tab);
+    // As the server says once the answer went out, which ends the hand-off's step.
+    let answered = Event::Answered {
+        agent: agent.clone(),
+        id: 0,
+        at: std::time::Instant::now(),
+        error: None,
+        kind: None,
+        image: None,
+        notes: None,
+    };
+    (run.agents).update(cx, |agents, cx| agents.handle(answered, cx));
     let page = crate::agents::HeldPage {
         document: 2,
         ..Default::default()
@@ -195,6 +207,24 @@ fn a_page_that_moved_on_tells_the_thread_as_hand_back_does(cx: &mut TestAppConte
     cx.run_until_parked();
     assert_eq!(sent(&run, 1, 2)[1], handed_back(tab));
     assert!(!run.browser.held.borrow().contains(&tab));
+    // Its trace says the step went on, after the hand-off's (HB2), and its log the tab came back
+    // (HB1); neither that the user finished.
+    let steps = titles(&run, &agent, cx);
+    assert_eq!(
+        steps[steps.len() - 2..],
+        [
+            "Handed you tickets.example",
+            "Went on when tickets.example moved past your step"
+        ]
+    );
+    let logged = (run.agents).read_with(cx, |agents, _| {
+        (agents.activity(&agent)).any(|entry| entry.action == crate::agents::tools::MOVED_ON)
+    });
+    assert!(logged, "the log doesn't say the tab came back");
+    assert_eq!(
+        crate::agents::tools::describe(crate::agents::tools::MOVED_ON),
+        "Took the tab back when the page moved on"
+    );
 }
 
 /// Not Now leaves the tab the user's and tells the thread they won't do the step now; its line

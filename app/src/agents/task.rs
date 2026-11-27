@@ -3096,6 +3096,29 @@ impl Agents {
         }
     }
 
+    /// The browser ended the hand-off `call` of `agent`'s, as `tab`'s page moved past the user's
+    /// step (#4361): a step of its trace, after the hand-off's.
+    pub(super) fn trace_moved_on(
+        &mut self,
+        agent: &str,
+        (connection, call): (u64, u64),
+        tab: u64,
+        cx: &App,
+    ) {
+        let Some(key) = self.tracer(agent, call) else {
+            return;
+        };
+        let did = self.did(
+            agent,
+            connection,
+            tools::MOVED_ON,
+            &Value::Null,
+            Some(tab),
+            cx,
+        );
+        self.trace(&key, call, did, Instant::now(), cx);
+    }
+
     /// A step of the run `call` on `tab`, starting now, which ends the step before it.
     pub(super) fn trace_step(
         &mut self,
@@ -3171,8 +3194,9 @@ impl Agents {
             session.tabs.push(tab);
             task.tier = task.tier.min(left.unwrap_or(task.tier));
         }
-        // An ask is done once asked: the wait for the answer is the user's.
-        let ended = (did.tool == "ask").then_some(at);
+        // An ask is done once asked: the wait for the answer is the user's. A page that moved on
+        // did so as it was seen.
+        let ended = matches!(did.tool.as_str(), "ask" | tools::MOVED_ON).then_some(at);
         let after = task.messages.len();
         task.trace.push(Traced {
             call,

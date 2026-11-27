@@ -3400,7 +3400,8 @@ impl Agents {
     /// The core read the held `tab`'s page as it or a frame of it loaded (bc_held_page), which it
     /// does for a page committed after the hold. A hand-off ends by itself once the page has none
     /// of the user's steps on it, so the next step of a sign-in keeps it the user's. The agent
-    /// hears what a Hand Back tells it and nothing of the page; the log says the page moved on.
+    /// hears what a Hand Back tells it and nothing of the page; the log (HB1) and its trace (HB2)
+    /// say the page moved on.
     pub fn held_page(&mut self, tab: u64, page: HeldPage, cx: &mut Context<Self>) {
         if !page.users_step() {
             self.let_go(tab, held::Event::MovedOn, cx);
@@ -3526,9 +3527,10 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         use held::Actions as A;
-        let (agent, connection) = (self.held.get(&tab)).map_or((String::new(), 0), |held| {
-            (held.agent.clone(), held.connection)
-        });
+        let (agent, connection, call) = (self.held.get(&tab))
+            .map_or((String::new(), 0, 0), |held| {
+                (held.agent.clone(), held.connection, held.call)
+            });
         // Its task's conversation says so, while the hold's entry still names whose it is.
         self.held_lines(tab, event, life);
         // What a thread of the browser's own is told, once the core lets go of the tab.
@@ -3573,6 +3575,10 @@ impl Agents {
         }
         if actions.has(A::HAND_BACK) {
             self.browser.hand_back(tab);
+        }
+        // Its trace says the step went on before the thread hears of it.
+        if event == held::Event::MovedOn && actions.has(A::ANSWER) {
+            self.trace_moved_on(&agent, (connection, call), tab, cx);
         }
         if let Some(text) = told {
             self.tell_back(&agent, text, cx);

@@ -67,8 +67,7 @@ impl Event {
     pub(super) fn way(self) -> &'static str {
         match self {
             Event::HandBack => "handed back",
-            // A placeholder until the words table has the row (#4361).
-            Event::MovedOn => "page moved on",
+            Event::MovedOn => super::tools::MOVED_ON,
             Event::Keep => "kept",
             Event::NotNow => "not now",
             Event::Timer => "not handed back",

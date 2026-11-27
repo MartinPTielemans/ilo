@@ -161,7 +161,10 @@ fn a_handoff_ends_once_its_page_moves_past_the_sign_in(cx: &mut TestAppContext) 
     );
     assert!(browser.held.borrow().is_empty(), "the core still holds it");
     assert!(held_tabs(&agents, cx).is_empty(), "the bar still lists it");
-    assert_eq!(log(&agents, "claude-code", cx)[0].0, "page moved on");
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0].0,
+        crate::agents::tools::MOVED_ON
+    );
 }
 
 /// A page with a CAPTCHA on it is still the user's to do.
