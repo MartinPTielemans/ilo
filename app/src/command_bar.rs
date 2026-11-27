@@ -2608,7 +2608,6 @@ impl CommandBar {
         };
         let (held, learned) = futures::channel::oneshot::channel();
         ask.held = Some(held);
-        // check.sh reads this line.
         log!("browser: command bar holds ↩ until the agents are learned");
         cx.spawn_in(window, async move |bar, cx| {
             if learned.await.is_ok() {
