@@ -298,7 +298,7 @@ impl Agents {
                 .any(|profile| Some(&profile.folder) == folder.as_ref())
             {
                 let mut act = act;
-                let risk = self.opening(&mut act, &host);
+                let risk = self.opening(&mut act, &host, cx);
                 return self.check(act, host, risk, cx);
             }
             let (profile, why) =
@@ -366,7 +366,7 @@ impl Agents {
     ) {
         let key = (act.agent.clone(), act.call);
         self.profiles.chosen.insert(key, Chosen { profile, why });
-        let risk = self.opening(&mut act, &host);
+        let risk = self.opening(&mut act, &host, cx);
         self.check(act, host, risk, cx);
     }
 

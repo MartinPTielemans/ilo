@@ -86,7 +86,14 @@ pub(crate) fn task_pages(at: usize) -> Vec<(u64, &'static str, &'static str)> {
 /// =open is the working task's, with four pages, the other two closed.
 pub(crate) fn group_state() -> Option<String> {
     let state = states::var("PREVIEW_TASKS").ok()?;
-    let one = ["done", "needs-you", "stopped", "interrupted", "two"];
+    let one = [
+        "done",
+        "needs-you",
+        "stopped",
+        "interrupted",
+        "not-installed",
+        "two",
+    ];
     one.contains(&state.as_str()).then_some(state)
 }
 
@@ -377,6 +384,19 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             cards[0].fix = Some((
                 browser::agents::runner::Cli::Claude,
                 browser::agents::sign_in::Offer::SignIn,
+            ));
+            cards.truncate(1);
+        }
+        // Its assistant's program missing, the card's fix is its row's Install and Sign In (#4100).
+        Some("not-installed") => {
+            cards[0].status = "Claude isn't installed.".into();
+            cards[0].fuller = false;
+            cards[0].lead = 0;
+            cards[0].dot = Dot::Ended;
+            cards[0].word = Word::Interrupted;
+            cards[0].fix = Some((
+                browser::agents::runner::Cli::Claude,
+                browser::agents::sign_in::Offer::Install,
             ));
             cards.truncate(1);
         }

@@ -61,6 +61,10 @@ fn profile_search_url() -> Option<ProfileSearchUrl> {
 }
 
 impl Browser for Core {
+    fn is_default_browser(&self) -> bool {
+        unsafe { crate::platform::host_is_default_browser() }
+    }
+
     fn agent_spaces(&self, agent: &str) -> Vec<u64> {
         (ids(bc::bc_spaces).into_iter())
             .filter(|&space| name(bc::bc_space_agent, space) == agent)

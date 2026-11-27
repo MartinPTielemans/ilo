@@ -33,7 +33,7 @@ pub const INSTRUCTIONS: &str = concat!(
      takes one out, and list_split says which are together.\n\nUnless this task has Full \
      access, ",
     env!("PRODUCT_NAME"),
-    " stops payments, orders, sending messages as the user, bank sites and every request you \
+    " stops payments, orders, sending messages as the user, sensitive sites and every request you \
      send with the request tool that may change something. The user can also set Look only (reading pages) \
      or keep tasks off some sites; ",
     env!("PRODUCT_NAME"),

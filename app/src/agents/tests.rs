@@ -108,6 +108,8 @@ struct Made {
     /// Mode; and each time the agents asked for one, with the agent and the tab.
     page_logs: RefCell<HashMap<u64, (String, bool)>>,
     page_log_asked: RefCell<Vec<(String, u64)>>,
+    /// Whether the system opens links with the browser: another browser does, unless a test says.
+    default_browser: std::cell::Cell<bool>,
 }
 
 impl Made {
@@ -130,6 +132,10 @@ impl Made {
 }
 
 impl Browser for Made {
+    fn is_default_browser(&self) -> bool {
+        self.default_browser.get()
+    }
+
     fn agent_spaces(&self, agent: &str) -> Vec<u64> {
         let first = self.agent_spaces.borrow().get(agent).copied();
         let more = self.more_spaces.borrow();
@@ -672,6 +678,11 @@ struct Configs {
     sign_out_answers: Mutex<Option<Result<(), Option<String>>>>,
     /// Whether the next sign-in can't start.
     sign_in_fails: Mutex<bool>,
+    /// Each install started, as a stand-in the test ends; the CLIs whose install was cancelled;
+    /// and whether the next can't start. No installer runs.
+    installs: Mutex<Vec<(crate::agents::runner::Cli, InstallEnded)>>,
+    installs_cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+    install_fails: Mutex<bool>,
 }
 
 impl Configs {
@@ -697,6 +708,22 @@ impl crate::agents::sign_in::Session for StandInSignIn {
         use crate::agents::sign_in::{Ended, Heard};
         self.cancelled.lock().unwrap().push(self.cli);
         _ = self.heard.unbounded_send(Heard::Ended(Ended::Cancelled));
+    }
+}
+
+type InstallEnded = futures::channel::mpsc::UnboundedSender<crate::agents::sign_in::Ended>;
+
+/// An install in the tests: a cancel is recorded, and ends it as the installer's does.
+struct StandInInstall {
+    cli: crate::agents::runner::Cli,
+    ended: InstallEnded,
+    cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+}
+
+impl crate::agents::sign_in::Session for StandInInstall {
+    fn cancel(&mut self) {
+        self.cancelled.lock().unwrap().push(self.cli);
+        _ = (self.ended).unbounded_send(crate::agents::sign_in::Ended::Cancelled);
     }
 }
 
@@ -819,6 +846,24 @@ impl Clients for Configs {
         }))
     }
 
+    /// The tests never run a maker's installer: the test says how each install ends.
+    fn start_install(
+        &self,
+        cli: crate::agents::runner::Cli,
+        ended: InstallEnded,
+    ) -> std::io::Result<Box<dyn crate::agents::sign_in::Session>> {
+        if std::mem::take(&mut *self.install_fails.lock().unwrap()) {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        self.installs.lock().unwrap().push((cli, ended.clone()));
+        let cancelled = self.installs_cancelled.clone();
+        Ok(Box::new(StandInInstall {
+            cli,
+            ended,
+            cancelled,
+        }))
+    }
+
     fn sign_out(
         &self,
         cli: crate::agents::runner::Cli,
@@ -873,6 +918,23 @@ pub(crate) fn stand_in(
     cx: &mut App,
 ) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
     stand_in_with(looked, Vec::new(), cx)
+}
+
+/// As `stand_in`, and the installs started: no installer runs, and none ends.
+pub(crate) fn stand_in_installs(
+    looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
+    cx: &mut App,
+) -> (
+    Entity<Agents>,
+    impl Fn() -> Vec<crate::agents::runner::Cli> + use<>,
+) {
+    let configs = Arc::new(Configs::default());
+    let (agents, _) = stand_in_configs(looked, Vec::new(), Some(configs.clone()), cx);
+    let installs = move || {
+        let installs = configs.installs.lock().unwrap();
+        installs.iter().map(|(cli, _)| *cli).collect()
+    };
+    (agents, installs)
 }
 
 /// As `stand_in`, with `found` the clients whose files the stat finds on the made-up computer.
@@ -1007,6 +1069,14 @@ fn give(agents: &Entity<Agents>, tier: Tier, cx: &mut TestAppContext) {
 fn stops(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<Stop> {
     let key = session_key(agents, "claude-code", cx);
     agents.read_with(cx, |agents, _| agents.stops(&key))
+}
+
+/// The user's bank, chase.com, marked sensitive in "Default", so an agent's use there is refused
+/// below Full access.
+fn sensitive_bank(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive("Default", "chase.com", true, cx)
+    });
 }
 
 /// Checks `answer` is a refusal, at once, of the act `what` for `why`, which nothing asked about
@@ -1158,11 +1228,11 @@ fn the_clients_line_agrees_with_the_assistants_rows(cx: &mut TestAppContext) {
         });
         cx.run_until_parked();
         let (row, listed) = agents.read_with(cx, |agents, _| {
-            (agents.assistant_row(Cli::Claude).line, agents.listed())
+            (agents.assistant_row(Cli::Claude), agents.listed())
         });
         assert_eq!(
             !listed.contains(&Client::ClaudeCode),
-            row == "Not installed",
+            matches!(row.offer, Offer::Get | Offer::Install),
             "{ready:?}: Claude Code's row says {row:?} and Apps that connect lists {listed:?}"
         );
     }
@@ -1253,7 +1323,7 @@ fn models_lists_an_assistant_not_on_this_computer(cx: &mut TestAppContext) {
     let listed = providers_found(crate::agents::ready::Ready::NotFound, cx);
     assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
     assert!(
-        listed.contains(&(Cli::Claude, Offer::Get, false)),
+        listed.contains(&(Cli::Claude, Offer::Install, false)),
         "{listed:?}"
     );
 }
@@ -4487,11 +4557,15 @@ fn a_download_at_look_only_is_refused_and_leaves_no_file(cx: &mut TestAppContext
     assert_eq!(*browser.downloads.borrow(), [(900, false), (901, false)]);
     assert_eq!(shown(&agents, cx), None);
 }
-/// A bank's site is refused below Full access, at Look only too, each time and logged, and opens
-/// once the user gives Full access.
+/// A site marked sensitive is refused below Full access, at Look only too, each time and logged,
+/// and opens once the user gives Full access.
 #[gpui::test]
-fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
+fn a_sensitive_site_opens_only_at_full_access(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
+    let profile = browser.space_profile(0);
+    agents.update(cx, |agents, cx| {
+        agents.mark_sensitive(&profile, "chase.com", true, cx)
+    });
     let open = |cx: &mut TestAppContext| {
         call(
             &agents,
@@ -4506,7 +4580,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -4515,7 +4589,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         (
             "open_tab".into(),
             "chase.com".into(),
-            "Using a bank site isn't part of Work on pages.".into()
+            "Using a sensitive site isn't part of Work on pages.".into()
         )
     );
     give(&agents, Tier::Look, cx);
@@ -4524,7 +4598,7 @@ fn a_banks_site_opens_only_at_full_access(cx: &mut TestAppContext) {
         &browser,
         open(cx),
         "open chase.com",
-        Why::Bank,
+        Why::Sensitive,
         "chase.com",
         cx,
     );
@@ -7764,8 +7838,8 @@ mod tasks {
         set_found(&agents, Ready::NotFound, cx);
         let card = card_of(&agents, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
-        // Its row's own Get.
-        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
+        // Its row's own Install and Sign In.
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Install)));
         assert_eq!(card.dot, Dot::Ended);
     }
 
@@ -7829,7 +7903,7 @@ mod tasks {
 
         let card = fails(Failure::NotInstalled, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
-        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Install)));
     }
 
     /// The inside switch off: ⌘T's ask lists no agent, no thread starts, and one at its limit
@@ -8707,6 +8781,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         let opening = call(
             &agents,
             &agent,
@@ -9511,6 +9586,7 @@ mod tasks {
             Some(shop_tree()),
             cx,
         );
+        sensitive_bank(&agents, cx);
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(traced(&agents, &browser, &agent, "open_tab", bank, None, cx).error);
         traced(
@@ -11425,6 +11501,7 @@ mod tasks {
         agents.update(cx, |agents, _| {
             agents.task_mut(&agent).unwrap().state = State::Working
         });
+        sensitive_bank(&agents, cx);
         // A refusal left unsettled, which the stop settles.
         let bank = json!({ "url": "https://www.chase.com/" });
         assert!(
@@ -12853,6 +12930,7 @@ mod sessions {
         answered(&agents, 2, cx);
         let first = cards(&agents, cx)[0].agent.to_string();
         hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        sensitive_bank(&agents, cx);
         let opening = call_on(
             &agents,
             2,
@@ -15542,6 +15620,7 @@ pub(crate) mod handed;
 mod holds;
 mod in_profiles;
 mod in_use;
+mod installs;
 pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;
@@ -15556,6 +15635,7 @@ mod permission_stopped;
 mod rewall;
 #[cfg(unix)]
 mod searches;
+mod sensitive;
 mod sign_ins;
 #[cfg(unix)]
 mod strands;
