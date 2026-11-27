@@ -181,9 +181,17 @@ PY
       return
     fi
     asked=$(grep '^pressed .* with Name:Allow' "$notes" | sed 's/^pressed \(“[^”]*”\) Notifications.*/\1/')
+    # macOS 14 names the alert helper by its file, which build.sh names after the app's
+    # CFBundleName and " Alerts" when it says so in the Info.plist (#4475); later ones read the
+    # helper's Info.plist name, the app's.
+    alerts=$app_name
+    if [ "$(plutil -extract BrowserCoreAlertHelperNamed raw -o - "$app/Contents/Info.plist" 2> /dev/null)" = true ]; then
+      alerts="$(plutil -extract CFBundleName raw -o - "$app/Contents/Info.plist") Alerts"
+    fi
     while read -r each; do
       # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
-      [ "$each" = "“${app_name}”" ] || fail "macOS asked whether $each may notify, not $app_name"
+      [ "$each" = "“${app_name}”" ] || [ "$each" = "“${alerts}”" ] ||
+        fail "macOS asked whether $each may notify, not $app_name or $alerts"
     # A here-document: sh doesn't parse bash's <<<, and a pipe's loop would fail only its subshell.
     done <<EOF
 $asked
