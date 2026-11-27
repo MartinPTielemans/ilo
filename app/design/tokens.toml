@@ -324,11 +324,8 @@ row-glyph = 0.7
 arrow = 0.65
 # The selected row's detail, in the accent's label.
 selected-dim = 0.75
-# The bar's chosen row (P3): a plate of the text's ink, `shown`, where it was the accent, 20% in
-# Dark and 16% in Light, and its kind in text-2, 60% and 65%; its title, glyphs and chips are any
-# row's, so Light's ink stays.
-chosen = 0.2
-light-chosen = 0.16
+# The bar's chosen row (P3) is on [selected.plate], and its kind in text-2, 60% and 65%; its
+# title, glyphs and chips are any row's, so Light's ink stays.
 chosen-kind = 0.6
 light-chosen-kind = 0.65
 # The bar's caret is the text's ink, and its selection the ink at this (Proposed), where both were
@@ -340,28 +337,6 @@ chip = 0.08
 arrow-tile = 0.04
 # A command's keys, as chips.
 chip-radius = 6.0
-
-[command-bar.site-colors]
-# In the site searches a new profile has, the chip and the selected row are in the site's own
-# colour, as Arc's are (#1397), and the palette moves each along its lightness until it reads on
-# the bar and Ink or Paper reads on it (ours: Arc's colours and glow aren't ilo's look). GitHub's,
-# X's and Wikipedia's marks are black and white, so they keep the chip and the Space's accent, as
-# a site search the user adds does.
-google-drive = 0xfbbc04
-gmail = 0xea4335
-google-maps = 0x34a853
-google-calendar = 0x4285f4
-google-docs = 0x4285f4
-dropbox = 0x0061ff
-amazon = 0xff9900
-figma = 0xa259ff
-youtube = 0xff0033
-reddit = 0xff4500
-soundcloud = 0xff5500
-asana = 0xf06a6a
-linkedin = 0x0a66c2
-apple-music = 0xfa243c
-spotify = 0x1ed760
 
 [dialog]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Renaming and deleting). The card is centred
@@ -446,7 +421,10 @@ check-glyph = 12.0
 text = 0xffffff
 
 [elevation]
-# Three levels, each one recipe (#317): a white rim inside the surface's edge, which reads on dark
+# Four levels, each with its own shadow, which comes from the level, never from the surface
+# (#4401): flat, no shadow, for the sidebar, pages and groups; lifted, `resting`, for the open
+# tab's pane; floating, `popover`, for menus, the command bar, the switcher and popovers; window,
+# `modal`, for Settings and dialogs. Each is one recipe (#317): a white rim inside the surface's edge, which reads on dark
 # pages; the outline, a black line a point of blur wide round the outside, which reads on light
 # ones; and one drop shadow. Resting sits on the window: favorite tiles, library cards, pictures
 # of pages. A popover opens from something and closes on a click outside: menus, the Site
@@ -474,13 +452,36 @@ modal-shadow-blur = 64.0
 # popover's `Level::reach` below it; a test holds every such window to it.
 window-margin = 40.0
 
+# "Selected" is one of two things, each with one form (#4401). What the keyboard is on, a row in
+# the command bar, the tab switcher, a menu or Settings' list, is this flat plate of the ink: no
+# rim, no shadow, no colour, a step weaker on a light window, where dark ink over light glass
+# weighs more (#4276). Where you are, the open tab or the thread shown, is [selected.pane].
+[selected.plate]
+dark = 0.2
+light = 0.16
+
+# A group, Settings' or the sidebar's thread cards, is a plate, the address field's, never an
+# outline (#4401); the only line is a hairline between its rows.
+[group]
+fill = 0.085
+line = 0.1
+
+# Three buttons (#4401), all 26 tall at radius 8. Main is filled with the ink, at most one in a
+# place, for the step that moves things on, its label in the other look's ink. Secondary is a
+# plate. Icon is bare, with a plate under the pointer. Destructive keeps the red ([dialog]).
+[button]
+height = 26.0
+radius = 8.0
+secondary = 0.1
+icon-hovered = 0.08
+
 [find-bar]
 width = 300.0
 height = 32.0
 radius = 6.0
 # Ours, where Arc's is navy: the overlay's dark fill (#319), with the caret and selection in ilo
 # green, so its white text holds on any theme.
-fill = 0x1f1d17
+fill = 0x1d1d1d
 # Arc's buttons are 28 pt, 2 pt inside the bar, previous and next 26 apart, and a 4 pt divider
 # before close. The field starts 1 pt after the search glyph's square.
 inset = 2.0
@@ -897,6 +898,9 @@ check = 12.0
 chevron = 12.0
 min-width = 200.0
 max-width = 320.0
+# A run of rows that scroll, as the Space button's menu's Spaces, shows this many at a time, the
+# rows after it staying in place under it (ours, #4400).
+scroll-rows = 8
 # How far a submenu lies over its parent, so their rows line up.
 overlap = 4.0
 # A menu's search field, its first row, as the model menu's (Z9): a row's text at a row's inset,
@@ -1011,7 +1015,7 @@ sheet = 20.0
 # The chrome's text and glyphs, Ink on a light window and Paper on a dark one (#320). Ink is the
 # dark look's ground, the one near-black of the light look (#4276): no place spells it but here.
 ink = 0x161618
-paper = 0xf3f0e8
+paper = 0xf2f2f3
 # The window is the HUD window's material, behind the window, under black at `tint` on a dark
 # window and white at `light-tint` on a light one, then the Space's glow (#4087). How see-through
 # it is is the user's, in three levels: Less, Standard (`tint`) and More. 0.44 is the dark scale's
@@ -1073,6 +1077,11 @@ stand-in = 0x303030
 # at Less. The window background material's, from the VM's run 6, stands in until the VM reads the
 # HUD window's under those settings.
 material-solid = 0x333332
+# A Space's colour is to be a faint tint of the sidebar's glass, a few percent of it, flat: no
+# gradient, drawing nothing of its own, and never on a mark (#4401, #4400). The glow below goes
+# when the sidebar takes it (#4402).
+space-tint = 0.04
+light-space-tint = 0.03
 # The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
 # ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
 # main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
@@ -1091,8 +1100,8 @@ far-glow = 0.1
 far-glow-fade = 0.7
 # What floats over the window: the command bar, a menu and the theme picker's panel, and a
 # dialog.
-overlay-dark = 0x1f1d17
-dialog-dark = 0x2a2720
+overlay-dark = 0x1d1d1d
+dialog-dark = 0x272727
 # The light window: the same material under white, at each level (#4087), and its stand-in, as
 # the dark one's. The glow is a little fainter on it (#4089).
 light-tint-less = 0.83
@@ -1126,9 +1135,16 @@ light-dialog-fill-more = 0.55
 light-gradient-alpha = 0.32
 light-neutral-gradient-alpha = 0.11
 # What floats over a light window: Paper, the light menu's fill, and a dialog a step lighter, as
-# the dark dialog is a step lighter than the dark overlay (ours).
-overlay-light = 0xf3f0e8
-dialog-light = 0xfbf9f4
+# the dark dialog is a step lighter than the dark overlay (ours). Every grey of the chrome is
+# neutral, the warm blacks and creams gone (#4401): each grey at its warm one's luminance, so
+# what read on it still does, and Paper the cool white of the glass's neutrals (the
+# orchestrator, 11:09Z).
+overlay-light = 0xf2f2f3
+dialog-light = 0xf9f9f9
+# The one colour of the chrome's own, amber, says a thread or an agent waits on you (#4401): the
+# knot and its words, nowhere else. Colour otherwise stays in favicons and pages, red for what
+# destroys, and the makers' logos.
+needs-you = 0xf5a524
 # ilo green, which a Board's page alone still takes, as its accent (copy-board.sh, [board]). A
 # Space without a theme no longer wears it: its accent is the text's ink with the other look's ink
 # on it, as the switch is (spec-bar-composer.md, The greens still worn).
@@ -1169,14 +1185,10 @@ no-theme-selection = 0.24
 # sidebar's rows', measured from Arc (`[shell]`: pressed, hovered, selected and selected-hovered),
 # as plates of the ink in Paper's terms, laid over a control's own resting plate. Arc's measured
 # states elsewhere, such as the command bar's row, stay theirs.
+# The selected step is [selected.plate]'s.
 state-pressed = 0.065
 state-hovered = 0.12
-state-selected = 0.2
 state-selected-hovered = 0.36
-# On a light window the selected plate is the ink too, a step weaker (#4276): dark ink over a light
-# glass weighs more than light ink over a dark one. No white plate lies on a light window, and
-# nothing lifts this one but its own strength, which it keeps under the pointer.
-light-state-selected = 0.16
 # The tab shown keeps the Space's colour on its row, the only colour in the chrome (#4089): its
 # main colour at `shown` on a dark window and `light-shown` on a light one, and a step firmer under
 # the pointer (ours: the mock has no hovered shown row). Where the ink wouldn't read on it at 4.5:1
@@ -1227,19 +1239,11 @@ section-glyph = 15.0
 section-glyph-gap = 9.0
 foot-bottom = 8.0
 foot-glyph = 13.0
-# A section's name and glyph, the selected one's neutral plate (white with its shadow in light),
-# its glyph nearly the name's ink, and the foot's quieter name and glyph. Labels and the foot's
-# name are at the headings' alpha. The plate's shadow falls 1 and blurs 2, as the sidebar's
-# light-selected one does. Under the pointer, a plate a little quieter than the selected one's.
+# A section's name and glyph, the selected one's glyph nearly the name's ink, and the foot's
+# quieter name and glyph. Labels and the foot's name are at the headings' alpha.
 section-text = 0.76
 section-glyph-alpha = 0.56
-section-selected = 0.13
 section-selected-glyph = 0.9
-section-selected-light = 0xffffffd9
-section-shadow = 0x00000033
-section-shadow-y = 1.0
-section-shadow-blur = 2.0
-section-hovered = 0.08
 foot-glyph-alpha = 0.4
 # Ours (#1636): the search field at the column's top is the Library's (shell.library search-*),
 # 8 in, with the first group's label right under it (its own 14 above), and "Search" in the rows'
@@ -1260,15 +1264,8 @@ search-dimmed = 0.35
 found-flash = 0.12
 found-flash-time = 0.6
 # The card the section shows on: 10 in from the window's top, right and bottom at the card's
-# radius, its rim in dark and its ring and shadow in light, and a fade into its fill over the last
-# 28 where rows go on under it.
-card-rim = 0xffffff12
+# radius, its ring in light, and a fade into its fill over the last 28 where rows go on under it.
 card-ring = 0x00000012
-# Its shadow is its own, fainter than [elevation]'s resting one and with no outline: 1 down,
-# blurred 3.
-card-shadow = 0x0000000f
-card-shadow-y = 1.0
-card-shadow-blur = 3.0
 fade = 28.0
 # A section's page: one column 620 wide, centred on the card and at least 24 from its sides, 30
 # down, its text 16 in, so headings, names and lines share a column and the groups' plates hang
@@ -1501,7 +1498,7 @@ side-other = 0.12
 # How wide that hairline is, just inside each drawing's edge.
 side-edge = 1.0
 side-window = 0x232327
-side-window-light = 0xe7e5df
+side-window-light = 0xe5e5e5
 side-page = 0x3b3b42
 side-page-light = 0xffffff
 side-plate = 0.16
@@ -1546,6 +1543,11 @@ share-plate = 0.06
 share-profiles-gap = 6.0
 # The Spaces' colours: ilo's green, then two of Edit's marks' (capture.markup).
 share-spaces = [0x289054, 0x0a84ff, 0xff9500]
+# The favorites' marks stand for favicons, which keep their own colours (#4401): a list of dots,
+# one of squares and one of rings, four to a list.
+share-dots = [0xea4335, 0xa259ff, 0x1ed760, 0x0061ff]
+share-squares = [0xfbbc04, 0xff9900, 0x0a66c2, 0xfa243c]
+share-rings = [0x34a853, 0xff4500, 0x4285f4, 0xf06a6a]
 
 # The owner's drawing of Settings (spec-settings.md, values-settings.md): a sidebar of pages 216
 # wide down the window's glass, and the page shown on its own plane, 8 in from the window's top,
@@ -1612,10 +1614,7 @@ page-line-width = 1.0
 page-line = 0xffffff0f
 light-page-line = 0x0000000d
 # The column's text, glyphs, field and buttons are the palette's neutrals and the sidebar's icon
-# ink. The page shown is Settings' own: the paper's plate in dark, and in light the palette's ink at
-# this alpha, where the sidebar's selected row is white.
-shown = 0xf3f0e833
-light-shown = 0.16
+# ink. The page shown is on [selected.plate], the keyboard's.
 
 [settings.overview]
 # Overview (spec-settings.md › S1, values-settings.md › S1): the default browser's notice, a row of
@@ -1854,11 +1853,10 @@ return-out = 3.0
 # move as a load starts or ends.
 loading-size = 12.0
 # The status dot (ours, #321): the row's text at 0.6 while its page loads. Breathing, from 0.35
-# of its strength to all of it, says it's loading. Signal green is an agent at work, as a task's
-# card shows it.
+# of its strength to all of it, says it's loading. An agent at work has no colour of its own: the
+# knot's motion says so (#4401).
 status-dot = 6.0
 status-loading = 0.6
-status-agent = 0x0e9f55
 breath-low = 0.35
 title-gap = 8.0
 # The speaker at a line's end, while its tab plays sound or is muted, and its pressable square: a
@@ -1902,55 +1900,39 @@ clear-height = 20.0
 # The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
 # line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
 broom-size = 14.0
-# The footer: the Space switcher between the Library button and the +. Its row is 34 tall, 6 over
-# the sidebar's foot and as far under the list, and the + is a 16 pt glyph that ends 10 inside the
-# sidebar's 8, so its plate is 10 in. The switcher starts where the Library button ends and keeps
-# as far from the other side, so its dots stay centred.
+# The footer: the Library button at its left and the Space button at its right (#4400). Its row is
+# 34 tall, 6 over the sidebar's foot and as far under the list, and the Space button's plate ends 10
+# inside the sidebar's 8.
 footer-height = 46.0
 foot-row = 34.0
-switcher-inset = 44.0
 plus-inset = 10.0
 foot-glyph = 16.0
 # The Library button, at the foot's left.
 library-button = 36.0
 # The foot's two buttons while what they open is up, as the redesign draws them: a plate 28 across
 # with corners of 8. The Library button's is the shown plate's ink while the Library is open, 0.20
-# on a dark window and 0.16 on a light one, under its glyph in the text's. The +'s is the button
-# plate's, 0.10, while its menu is up, and that box is where the + takes the pointer. Under the
-# pointer the + has the same plate (ours: the drawing has no pointer): the first row's 0.077 tells
-# from the window at 1.15:1 there, under the palette's 1.2, and this one at 1.21.
+# on a dark window and 0.16 on a light one, under its glyph in the text's. The Space button's is the
+# button plate's, 0.10, while its menu is up, and that box is where it takes the pointer. Under the
+# pointer it has the same plate (ours: the drawing has no pointer): the first row's 0.077 tells from
+# the window at 1.15:1 there, under the palette's 1.2, and this one at 1.21.
 foot-plate = 28.0
 foot-plate-radius = 8.0
 library-open-plate = 0.2
 light-library-open-plate = 0.16
 library-open-glyph = 1.0
 plus-plate = 0.1
-# A Space's dot is 7 across and the dots are 10 apart. A Space with an icon keeps the pitch it
-# had: the redesign draws dots alone.
-space-pitch = 17.0
-space-icon-pitch = 34.0
-space-height = 34.0
-# A Space without an icon shows as a dot, the same size shown or not, a step bigger under the
-# pointer (ours). The Space shown's is its first colour this far toward the ink, a light tone of it
-# on a dark window, as the redesign's foot has it, where that reads at 3:1 on the footer; otherwise
-# only as much nearer the ink as 3:1 needs, and never weaker than the other dots (the lead, 25 Nov).
-space-swatch-shown = 7.0
-space-swatch = 7.0
-space-swatch-hovered = 9.0
-space-dot-tone = 0.55
-# More Spaces than fit at the pitch share the switcher's span in half points; once a share would be
-# under a dot's pitch, the Space shown keeps that and the others share the rest: 13 and 9.5 with
-# 16 and 22 Spaces in a sidebar 300 wide (the rule is Arc 1.171's). A squeezed item's ink keeps 4
-# clear of its neighbours, and never goes under 4 (ours).
-space-shown-least = 17.0
-space-clear = 4.0
-space-least = 4.0
-# A Space's dot dragged along the switcher, or its card by its handle along the Library's: its place
-# dims to half while its copy follows the pointer, and the gap it would go into shows the rows' drop
-# line stood up, among the dots 16 tall on their middle without the ring, which would be a dot's
-# size, and among the cards with it, as the rows' (ours: Arc's isn't recorded).
+# The Space button at the foot's right (#4400), where the + was: the Space's mark at the glyph's
+# size and a chevron after it, on the plate above under the pointer and while its menu is up. Its
+# menu hangs from it, right edges together. A Space with no glyph shows its first letter,
+# uppercased, at this share of the glyph's box, here and in the menu's rows (Proposed).
+space-button-pad = 6.0
+space-button-gap = 3.0
+space-button-chevron = 10.0
+space-letter = 0.75
+# A Space's card dragged by its handle along the Library's: its place dims to half while its copy
+# follows the pointer, and the gap it would go into shows the rows' drop line stood up, with its
+# ring (ours: Arc's isn't recorded).
 space-dragged = 0.5
-space-drop-line = 16.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0
@@ -2057,11 +2039,8 @@ nav = 0.6
 nav-inactive = 0.26
 nav-hovered = 0.077
 # The Space's name is the text colour, collapsed or not: the chevron says its pinned tabs are
-# collapsed. The switcher's other Spaces are the palette's quietest text, and its quiet text under
-# the pointer; an emoji dims by these ratios of the Space shown's.
+# collapsed.
 space-name = 1.0
-space-other = 0.42
-space-hovered = 0.6
 # The form (Arc): a title in the ink, plates of 0.075, a placeholder of 0.55, and Create Space in
 # the palette's accent and its label, all of it at 0.4 until there's a name.
 form-text = 1.0
@@ -2127,10 +2106,10 @@ little-spaces-edge = 8.0
 # named it by in a chip on the ring's top left.
 # `primary` is the text colour, never green; the chips' words and the pointer's outline, which
 # reads it on any page, are `on-primary`, the other look's ink.
-primary = 0xf3f0e8
+primary = 0xf2f2f3
 light-primary = 0x161618
 on-primary = 0x161618
-light-on-primary = 0xf3f0e8
+light-on-primary = 0xf2f2f3
 pointer = 20.0
 label-size = 11.0
 label-height = 18.0
@@ -2170,6 +2149,25 @@ icon-grid = 24.0
 bar-length = 11.4
 bar-width = 2.0
 bars-box = 14.0
+
+[shell.edge-knot]
+# The lead's (Paper 1b, 26 Nov, Proposed): the tab at the hidden sidebar's edge of the window while a
+# thread waits on the user, flush with that edge, its top this far below the window's, this wide and
+# tall, its corners away from the edge rounded by this. It wears [floating]'s dark fill and rim in
+# either look, as the board draws it in a light window, and this shadow, drawn in the room round it
+# that lets clicks through to the page. The knot in it is this size, its small drawing, this much
+# past the middle away from the edge.
+top = 64.0
+width = 28.0
+height = 36.0
+radius = 10.0
+mark = 16.0
+mark-nudge = 1.0
+shadow = 0x0000_0059
+shadow-y = 4.0
+shadow-blur = 14.0
+# The shadow's room on each side but the edge: its blur and its drop.
+margin = 18.0
 
 [shell.empty]
 # The sidebar's New Tab row's size, body.
@@ -2564,12 +2562,12 @@ shadow = [30.0, 80.0, 0.451]
 light-shadow = [24.0, 64.0, 0.149]
 # The text, its second and third inks as alphas of it, and the main button's label, near-black on
 # off-white in Dark and the other way round in Light.
-text = 0xf3f0e8
+text = 0xf2f2f3
 light-text = 0x161618
 text-2 = 0.6
 text-3 = 0.42
 on-main = 0x161618
-light-on-main = 0xf3f0e8
+light-on-main = 0xf2f2f3
 # Fills at the text's ink: a group of rows, a field, a quiet button; and the hairline between rows.
 group = 0.067
 light-group = 0.051
@@ -3069,6 +3067,16 @@ come = 0.04
 shrunk = 0.6
 small = 0.8
 
+[shell.space-button.motion]
+# Seconds (Proposed, #4400). After a switch in this window, once the rows have slid, the Space
+# button's mark slides over `slide` on an ease-out, the one before leaving toward the side it was
+# on as the new one comes in from its own, by the mark's box; under Reduce Motion they cross-fade
+# over it. The Space's name shows in a pill above the button for `pill`, fading in and out over
+# `pill-fade` (ours: Arc has no such button).
+slide = 0.22
+pill = 1.2
+pill-fade = 0.15
+
 [shell.media.motion]
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
 # out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
@@ -3167,19 +3175,20 @@ chip-end = 6.0
 # A page the strip's Open sends to Today flies there from the chip as a plate going from a chip's
 # corners and fill to a row's hover plate.
 ghost-radius = 6.0
-# The thread's stage (spec-thread-stage.md): its pages run down a rail at the page area's right,
-# `rail-edge` from its top, foot and right, beside the conversation's column, tiles `rail-gap`
-# apart. Where the area is narrower than `rail-breakpoint`, the column at its width and the rail
-# with the column's inset each side no longer both fit, and the rail goes; the pages fall to one
+# The thread's stage (spec-thread-stage.md): its pages run down a rail `rail-width` wide at the page
+# area's right, `rail-edge` from its top, foot and right, beside the conversation's column, tiles
+# `rail-gap` apart (#4396: the rail as wide as the reference's, measured). Where the area is
+# narrower than `rail-breakpoint`, the column at its least ([shell.conversation] `column-least`)
+# with its inset each side and the rail at its edge no longer all fit, and the rail goes; the pages fall to one
 # row of tiles under the head, scrolling sideways, so each stays a click away. A tile is a head
 # (the page's icon, its title, and its state at the right) over its live picture, cut at
 # `tile-picture`; on a plate with an inner line. The page the assistant is on has the stronger
 # line and the ring before its word, in the text's ink. Light's plate and line are the ink at the drawing's strength (light-values.md),
 # Proposed.
-rail-width = 280.0
+rail-width = 300.0
 rail-gap = 8.0
 rail-edge = 8.0
-rail-breakpoint = 848.0
+rail-breakpoint = 876.0
 rail-head = 32.0
 rail-head-x = 10.0
 rail-head-gap = 7.0
@@ -3195,7 +3204,7 @@ tile-fill = 0x1616184d
 light-tile-fill = 0x16161811
 tile-line = 0xffffff14
 light-tile-line = 0x00000014
-tile-line-on = 0xf3f0e880
+tile-line-on = 0xf2f2f380
 light-tile-line-on = 0x16161880
 tile-ring = 12.0
 tile-ring-stroke = 1.8
@@ -3213,6 +3222,11 @@ content = 0.15
 # A group grows to its content, its pages' rows as it opens, or folds to nothing as it goes, and
 # fades as it comes and goes.
 height = 0.28
+# The thread's first page brings the rail in from the right over `rail` and its last page closing
+# takes it out, on the sidebar's ease-out cubic, as the column slides to the middle of the room
+# left of it. Proposed: the sidebar's show time until the lead has a recording of the reference's
+# (#4396). A resize, full screen or coming back from a page moves nothing.
+rail = 0.1
 fade = 0.2
 # A new status rolls in from under the old, which goes up; a new title crossfades.
 roll = 0.2
@@ -3303,7 +3317,7 @@ button-x = 10.0
 button-radius = 8.0
 button-line = 16.0
 on-primary = 0x161618
-on-primary-light = 0xF3F0E8
+on-primary-light = 0xf2f2f3
 # A line: a card folded, done and seen, or one of several at work, `line` tall, `line-x` at each
 # side, `line-around` above and below it in the list.
 line = 34.0
@@ -3352,7 +3366,12 @@ turn = 1.4
 # which scrolls sideways rather than wrap. The user's messages are plates at a row's corners, the
 # page they asked on a chip inside the first. Its chips are the toast's, the page's scale. The reply
 # field at its foot is as tall as the URL field's row, and the lines meet a clean edge above it.
-column = 520.0
+# The column, its header, lines and reply field, is `column` at most, the reference's as measured
+# (#4396), and keeps it beside the pages' rail wherever it fits, in the middle of the room left of
+# the rail; narrower, it keeps `inset` each side, and beside the rail it's never under
+# `column-least`, where the rail goes ([shell.task] `rail-breakpoint`).
+column = 832.0
+column-least = 520.0
 inset = 24.0
 top = 30.0
 # The key on a page chip, Stop's and the strip's under a page watched, after its word, fainter:
@@ -3403,7 +3422,7 @@ answer-foot-gap = 8.0
 copy-glyph = 14.0
 answer-time = 12.0
 answer-time-line = 16.0
-text-3 = 0xf3f0e86b
+text-3 = 0xf2f2f36b
 light-text-3 = 0x16161880
 # The user's message: its plate's padding, its share of the column at most.
 bubble-top = 10.0
@@ -3543,11 +3562,11 @@ held-button-radius = 8.0
 held-button-text = 12.0
 held-button-text-line = 16.0
 held-button-hover = 0.88
-held-primary = 0xf3f0e8ff
+held-primary = 0xf2f2f3ff
 light-held-primary = 0x161618ff
 held-on-primary = 0x161618ff
-light-held-on-primary = 0xf3f0e8ff
-held-button-fill = 0xf3f0e81a
+light-held-on-primary = 0xf2f2f3ff
+held-button-fill = 0xf2f2f31a
 light-held-button-fill = 0x1616181a
 held-note = 12.0
 held-note-line = 16.0
@@ -3584,7 +3603,7 @@ page = 28.0
 page-radius = 8.0
 page-icon = 14.0
 speaker = 16.0
-page-plate = 0xf3f0e838
+page-plate = 0xf2f2f338
 light-page-plate = 0x16161838
 unvisited = 0.55
 body-x = 16.0
@@ -3706,7 +3725,7 @@ button-inset = 14.0
 line = 18.0
 
 [site-controls]
-# The body's inside edge to its tiles: with the tiles' 6, the body's 16.
+# The body's inside edge to its tiles: with the plates' 6, the body's 16.
 padding = 10.0
 radius = 16.0
 gap = 8.0
@@ -3725,78 +3744,83 @@ window-margin = 8.0
 # Its rim is the popover level's, in the ink.
 text = 0.8
 secondary = 0.45
-# "Manage" and "More", which the headings show under the pointer.
-link = 0.48
+# Ours (#4404): the header is the site, as Arc's is: its icon on a small plate, its name, the
+# connection in quiet words under it, the profile's chip while there's more than one, and "…".
+header = 36.0
+header-inset = 2.0
+header-to-tiles = 10.0
+favicon-plate = 20.0
+favicon-radius = 6.0
+favicon = 16.0
+favicon-glyph = 13.0
+favicon-gap = 9.0
+name-size = 13.0
+name-line = 16.0
+connection-size = 11.0
+connection-line = 14.0
+connection-glyph = 11.0
+connection-glyph-gap = 4.0
+# The connection's words take the pointer's plate around them this far out, a click opening the
+# certificate.
+connection-pad = 4.0
+# "…" and the profile's chip: no plate at rest, the ladder's under the pointer.
+more = 28.0
+more-fill = 0.0
+more-glyph = 17.5
+# Ours (#2339): the profile's chip, before "…" while there's more than one profile: the Profiles
+# glyph, the name, and this chevron this far after it, in the secondary ink. The site's name keeps
+# its room, so the chip's name cuts first, and with less room than this it goes, the glyph and
+# chevron left, as a letter and an ellipsis say nothing.
+chip-inset = 6.0
+chip-glyph = 15.0
+profile-chevron = 12.0
+profile-chevron-gap = 4.0
+profile-name-min = 24.0
 tile-width = 48.0
 tile-height = 32.0
+# Every plate's, by the concentric rule: the body's 16 less its 10 inside (#4404).
 tile-radius = 6.0
-# An action tile is a plate, stronger at its top, with a line of the ink along its top inside.
+# Kept for the accent's search in palette.rs, which still asks it to read on a tile tinted with
+# it; the panel draws neither since #4404.
 tile-top = 0.1
 tile-bottom = 0.04
-tile-highlight = 0.2
-# The + tile's, an extension's and the lock button's plate.
+tint = 0.16
+# A tile's, an extension's and the site's plate, flat.
 plate = 0.05
 # Ours: an extension's icon, as the toolbar's is.
 extension-icon = 16.0
 plus-glyph = 16.5
-heading-size = 13.0
-link-size = 11.0
-name-size = 13.0
-# Ours (#2334): the action row's last tile is the shield, and under the row go only the switches
-# special to the site. One alone is a strip as tall as a tile, its state in words; two or more are
-# tiles this tall, two to a line, a glyph over its name.
-switch-height = 52.0
-switch-glyph = 16.0
-switch-name-gap = 5.0
-strip-left = 12.0
-strip-name-gap = 10.0
-# A switch while on, and the shield while it blocks: the accent over the plate at this, a step
-# more under the pointer and another pressed. Off is the plain plate.
-tint = 0.16
-tint-hovered = 0.22
-tint-pressed = 0.28
-# Ours (#2334): "This site"'s lines, each a glyph, a name and its value at the right in the
-# secondary ink, in place of Arc's 43 pt rows with a circle and a second line.
-item-height = 28.0
-item-pitch = 30.0
+tile-glyph = 19.5
+# "This site" and "Extensions", over their plates.
+label-size = 11.0
+label-line = 14.0
+label-above = 14.0
+label-below = 6.0
+# The site's plate (#4404): a row each, a glyph, a name and its value at the right in the
+# secondary ink with a chevron where a click opens a menu, or a switch; hairlines between them
+# from the names' edge.
+row = 30.0
 item-inset = 8.0
 item-glyph = 16.0
-# The name's widest, past which the value gives way first.
-item-name = 132.0
-# The glyph's ink while its value isn't on or Allow; on, it's the accent.
 item-glyph-off = 0.6
-heading-to-items = 17.0
-items-to-divider = 9.0
+# The name's widest, past which the value gives way first.
+# A row's value at its widest; its name takes the rest, cut at its end.
+item-value = 96.0
+chevron = 12.0
+hairline = 0.12
 # Ours: a policy's row, which the user can't change.
 managed-opacity = 0.5
-divider = 0.17
-footer = 32.0
-lock-radius = 6.0
-lock-left = 10.0
-lock-slot = 10.0
-lock-glyph = 15.0
-lock-text-gap = 6.0
-lock-right = 8.0
-# Ours (#2339): the profile's chip, against "…" while there's more than one profile: the Profiles
-# glyph, the name, and this chevron this far after it, in the secondary ink.
-profile-chevron = 12.0
-profile-chevron-gap = 4.0
-# Beside a lock in words the chip's name cuts at its end, and with less room than this it goes,
-# the glyph and chevron left, as a letter and an ellipsis say nothing.
-profile-name-min = 24.0
-# The lock's words' cap top in its plate.
-lock-cap = 11.5
-# Ours: the lock button with no certificate to show.
-disabled-opacity = 0.5
-more-fill = 0.05
-more-glyph = 17.5
-heading-to-tiles = 23.0
-divider-to-footer = 11.0
-# SF's ascent, descent and cap height for its size, which put a line's cap where it was measured.
-ascent = 0.967
-descent = 0.211
-cap = 0.705
-line = 20.0
+# The switch, in the ink: its track at these alphas on and off, its knob the panel's fill.
+switch-width = 26.0
+switch-height = 16.0
+switch-knob = 12.0
+switch-on = 0.85
+switch-off = 0.18
+# The foot, only while Reset permissions has something to reset: a hairline this far under the
+# extensions, and its row this far under the line.
+foot-above = 12.0
+foot-below = 6.0
+foot-row = 28.0
 
 [tab-switcher]
 # ⌃Tab held shows the Space's recent tabs (#2954). Arc's was never recorded, so it's ours: ⌘T's

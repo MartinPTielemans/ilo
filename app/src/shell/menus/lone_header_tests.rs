@@ -200,7 +200,7 @@ fn under_the_favorites_the_rows_rise_less(cx: &mut TestAppContext) {
 fn a_named_space_or_one_of_two_keeps_its_name_row(cx: &mut TestAppContext) {
     let cases = [
         vec![space(1, "Work", "")],
-        vec![space(1, "Space 1", "🌿")],
+        vec![space(1, "Space 1", "glyph:star")],
         vec![space(1, "Space 1", ""), space(2, "Space 2", "")],
     ];
     for spaces in cases {

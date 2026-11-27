@@ -50,6 +50,7 @@ jobs:
             .github/scripts/tree-proven.sh
             .github/scripts/ci-changes.cjs
             .github/scripts/ci-changes.test.cjs
+            .github/scripts/rework-head.sh
             .github/actions/ci-changes/
             tools/core-same.sh
             tools/core-same-test.sh

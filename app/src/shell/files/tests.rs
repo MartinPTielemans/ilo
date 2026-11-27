@@ -205,7 +205,8 @@ fn a_file_tab_is_a_file_row(cx: &mut TestAppContext) {
 fn the_plus_menu_adds_files_and_folders(cx: &mut TestAppContext) {
     let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
     shell.update(cx, |shell, cx| {
-        shell.plus_menu(point(px(200.), px(700.)), cx)
+        let items = shell.space_switcher_items(cx);
+        shell.show_space_switcher(items, point(px(200.), px(700.)), cx)
     });
     let menu: Vec<String> = host
         .menus

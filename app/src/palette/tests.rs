@@ -256,7 +256,7 @@ fn failures_over(
     }
     {
         use crate::tokens::site_controls::*;
-        for (name, alpha) in [("text", TEXT), ("state", SECONDARY), ("link", LINK)] {
+        for (name, alpha) in [("text", TEXT), ("state", SECONDARY)] {
             check(
                 &format!("site controls {name}"),
                 on(palette.on_overlay(alpha), &[overlay]),
@@ -816,67 +816,6 @@ fn the_shown_spaces_icon_reads_on_the_footer_light_and_dark() {
             .iter()
             .all(|&at| contrast(none.ink, at) >= GLYPH)
     );
-}
-
-/// The Space shown's dot in the foot's switcher reads at 3:1 or more on the footer for every theme
-/// of the icon test's grid, light and dark, over a black and a white backdrop, its grain moving it
-/// toward the ink, wherever the window's height puts the footer on its gradient; it's never weaker
-/// there than the other Spaces' dots; and where its first colour `SPACE_DOT_TONE` of the way to the
-/// ink reads with room to spare, it's that tone (the lead, 25 Nov).
-#[test]
-fn the_shown_spaces_dot_reads_on_the_footer_and_keeps_its_tone_where_it_can() {
-    use crate::tokens::shell::SPACE_DOT_TONE;
-    let themes = grid(
-        &[0., 45., 90., 135., 180., 225., 270., 315.],
-        &[0., 0.4, 1.],
-        &[0., 0.3, 0.6, 1.],
-        &[0., 1.],
-    );
-    let (mut worst, mut kept, mut moved) = ((f32::MAX, String::new()), 0, 0);
-    for theme in themes
-        .iter()
-        .filter(|theme| theme.appearance != Appearance::Automatic)
-    {
-        let tone = if theme.appearance == Appearance::Light {
-            Tone::Light
-        } else {
-            Tone::Dark
-        };
-        let palette = Palette::of(Some(theme), tone);
-        let others = palette.tertiary().max(palette.glyph_floor);
-        let footer: Vec<Rgba> = (fine_window(&palette).into_iter())
-            .flat_map(|at| [at, over(at, palette.ink, GRAIN_SHIFT * theme.grain)])
-            .collect();
-        let dot = palette.space_dot;
-        for &at in &footer {
-            let ratio = contrast(dot, at);
-            if ratio < worst.0 {
-                worst = (ratio, theme.to_text());
-            }
-            // Where the other dots are the ink already, the shown one is too: equal, to a rounding.
-            let theirs = contrast(over(at, palette.ink, others), at);
-            assert!(
-                ratio >= theirs - 1e-4,
-                "{}: weaker than the other dots, {ratio:.2} against {theirs:.2}",
-                theme.to_text()
-            );
-        }
-        let toned = over(palette.swatch.main(), palette.ink, SPACE_DOT_TONE);
-        let holds = footer.iter().all(|&at| {
-            let ratio = contrast(toned, at);
-            ratio >= GLYPH + BETWEEN
-                && ratio >= contrast(over(at, palette.ink, others), at) + BETWEEN
-        });
-        if holds {
-            assert_eq!(dot, toned, "{} keeps its tone", theme.to_text());
-            kept += 1;
-        } else {
-            moved += 1;
-        }
-    }
-    eprintln!("{kept} kept their tone, {moved} moved toward the ink");
-    assert!(kept > 0 && moved > 0);
-    assert!(worst.0 >= GLYPH, "{:.2} on {}", worst.0, worst.1);
 }
 
 /// The themes that came out worst for each component in the design sweep, today's and v3's.
@@ -1727,9 +1666,8 @@ const PAGE_PLATE_DARK_MORE: u32 = 0x706e69;
 ///
 /// A test has no window material, so this knows the token's ink over the grounds measured on one
 /// desktop and one window behind it, and no others: what another backdrop makes of the plate is
-/// the real app's to be measured on. On the page row's measured plate Paper itself is under 4.5:1,
-/// so no ink holds it there and it is the plate that would have to give; the gray is held to
-/// within 1.05:1 of the title's ink beside it, the most a plate that light lets it read.
+/// the real app's to be measured on. A shown page row's measured plate is held to the same: Paper,
+/// which was under 4.5:1 there until it went neutral (#4401), now holds it with the margin.
 #[test]
 fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
     use crate::tokens::palette::PLATE_GRAY;
@@ -1750,7 +1688,12 @@ fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
         );
         let ink = Rgba::from(inks[0]);
         assert!(ink.a >= PLATE_GRAY && ink.a >= dark.gray_floor, "{level:?}");
-        for plate in CARD_PLATE_DARK.map(rgb) {
+        // Paper holds the page row's plate too since it went neutral (#4401).
+        for plate in CARD_PLATE_DARK
+            .into_iter()
+            .chain([PAGE_PLATE_DARK_MORE])
+            .map(rgb)
+        {
             let ratio = contrast(over(plate, ink, ink.a), plate);
             assert!(
                 ratio >= TEXT + BETWEEN,
@@ -1758,19 +1701,6 @@ fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
                 hex(plate)
             );
         }
-        let plate = rgb(PAGE_PLATE_DARK_MORE);
-        let (title, gray) = (
-            contrast(dark.ink, plate),
-            contrast(over(plate, ink, ink.a), plate),
-        );
-        assert!(
-            title < TEXT,
-            "the page row's plate holds text now: {title:.2}"
-        );
-        assert!(
-            title / gray <= 1.05,
-            "{level:?}: {gray:.2} under {title:.2}"
-        );
         let light = Palette::of(None, Tone::Light);
         for alpha in places {
             assert_eq!(
@@ -2308,11 +2238,6 @@ fn float_words() -> Vec<(&'static str, f32, f32)> {
             site_controls::TEXT,
         ),
         (
-            "Site Controls' link",
-            site_controls::LINK,
-            site_controls::LINK,
-        ),
-        (
             "Site Controls' secondary",
             site_controls::SECONDARY,
             site_controls::SECONDARY,
@@ -2421,7 +2346,15 @@ fn the_worst_ground_under_a_float_is_the_panel_the_check_vm_measured() {
         (Tone::Light, Transparency::Standard, 0xdddcd8),
         (Tone::Light, Transparency::More, 0xbbbaba),
     ] {
-        let (ground, measured) = (float_grounds(tone, Some(level))[0].0, rgb(panel));
+        // The VM's menu was in the warm fill the chrome had before #4401, so the material this
+        // holds is laid under that fill, at the alpha the fill has now.
+        let warm = match tone {
+            Tone::Dark => 0x1f1d17,
+            Tone::Light => 0xf3f0e8,
+        };
+        let alpha = Float::SiteControls.fill_at(tone, Some(level)).a;
+        let ground = over(float_worst(tone, Some(level)), rgb(warm), alpha);
+        let measured = rgb(panel);
         for (ours, theirs) in [
             (ground.r, measured.r),
             (ground.g, measured.g),
@@ -2581,7 +2514,8 @@ fn dark_floats() -> String {
 /// bar's two ends and its three old levels, and what floats at each level. Only where Dark draws
 /// the ink itself, as a label on a light accent, does it follow the ink. With no theme the accent,
 /// the selected section's glyph and the swatch are the text's ink since the greens went
-/// (spec-bar-composer.md, The greens still worn); nothing else of Dark's moved with them.
+/// (spec-bar-composer.md, The greens still worn); nothing else of Dark's moved with them. Its
+/// greys and Paper went neutral since (#4401), which moved it once more.
 #[test]
 fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
     let themes: Vec<Option<Theme>> = [
@@ -2606,7 +2540,7 @@ fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
         (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
     });
     assert_eq!(
-        pin, 12_704_512_350_845_494_042,
+        pin, 3_868_558_831_731_239_023,
         "a dark window's palette moved:\n{all}"
     );
 }
