@@ -24,6 +24,12 @@
 //   dragto <x> <y>                        moves the pointer pressed to (x, y)
 //   release <x> <y>                       lets go of it at (x, y)
 //   move <x> <y>                          moves the pointer to (x, y), without a button down
+//   cursor <x> <y> [<name>]               moves the pointer to (x, y), a negative x from the window's
+//                                         right edge, and logs the cursor the app has and the view
+//                                         the point hits, as "browser: cursor <name> over <view
+//                                         class>". With <name> (arrow, ibeam, hand, left-right, left,
+//                                         right, up-down) it waits, moving again each time, for that
+//                                         cursor, then logs what it has (#4455)
 //   key <key> [cmd] [shift] [alt] [ctrl]  <key> is a lowercase letter, a digit, ".", "-", "+",
 //                                         "[", "]", return, escape, tab, space, backspace,
 //                                         delete (forward), pageup, pagedown, up, down, left,
@@ -1265,6 +1271,54 @@ NSSavePanel* SavePanel(id self, SEL selector) {
   return panel;
 }
 
+// The name of the cursor the app has, as `cursor` logs it.
+const char* CursorName() {
+  NSCursor* now = NSCursor.currentCursor;
+  struct {
+    NSCursor* cursor;
+    const char* name;
+  } known[] = {{NSCursor.arrowCursor, "arrow"},
+               {NSCursor.IBeamCursor, "ibeam"},
+               {NSCursor.pointingHandCursor, "hand"},
+               {NSCursor.resizeLeftRightCursor, "left-right"},
+               {NSCursor.resizeLeftCursor, "left"},
+               {NSCursor.resizeRightCursor, "right"},
+               {NSCursor.resizeUpDownCursor, "up-down"}};
+  for (auto& entry : known) {
+    if (now == entry.cursor) {
+      return entry.name;
+    }
+  }
+  return "other";
+}
+
+// Moves the pointer to (x, y) in `window` and logs the cursor the app has, and the view the point
+// hits, which says whether the page's view covers it. With `want` it moves again until the
+// cursor is that one (tracking areas and cursor rects answer a move on the next turn of the run
+// loop), up to `tries` times.
+void AwaitCursor(NSWindow* window, double x, double y, std::string want, int tries,
+                 void (^done)(void)) {
+  NSWindow* target = WindowAt(window, x, y);
+  double tx = x, ty = y;
+  Convert(window, target, &tx, &ty);
+  MoveIn(target, tx, ty);
+  NSView* content = target.contentView;
+  NSView* hit = [content hitTest:[content.superview
+                                     convertPoint:NSMakePoint(tx, NSHeight(target.frame) - ty)
+                                         fromView:nil]];
+  const char* name = CursorName();
+  if (want.empty() || want == name || tries == 0) {
+    fprintf(stderr, "browser: cursor %s over %s\n", name,
+            NSStringFromClass(hit.class).UTF8String);
+    done();
+    return;
+  }
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(),
+                 ^{
+                   AwaitCursor(window, x, y, want, tries - 1, done);
+                 });
+}
+
 // Logs the key window's title once it has |text|, for up to 10 s, or the app's windows if none
 // does: a window Chrome opens, such as undocked DevTools, takes the keyboard a moment after the
 // command that opens it, and its page's title after that.
@@ -2110,6 +2164,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     fprintf(stderr, "browser: desktop shown%s\n", shown.UTF8String);
     done();
+    return true;
+  }
+  if (action == "cursor") {
+    double x, y;
+    std::string want;
+    if (!(words >> x >> y)) {
+      return false;
+    }
+    words >> want;
+    if (x < 0) {
+      x += NSWidth(window.contentView.frame);
+    }
+    AwaitCursor(window, x, y, want, 50, done);
     return true;
   }
   if (action == "layout") {

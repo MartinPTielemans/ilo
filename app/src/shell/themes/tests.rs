@@ -50,43 +50,33 @@ fn a_theme_of_one_colour_at_its_start_looks_as_the_colour_alone(cx: &mut TestApp
     let theme = Theme::at(0.3, -0.5);
     let color = theme.main_color();
     let (alone, cx) = shell(Some(color), None, cx);
-    let before: Vec<_> = alone.update(cx, |shell, _| {
-        [0., 0.5, 1.].map(|y| shell.window_fill_at(y)).to_vec()
-    });
+    let before = alone.update(cx, |shell, _| shell.window_fill());
     alone.update(cx, |shell, cx| {
         shell.set_spaces(vec![entry(Some(color), Some(theme))], cx)
     });
-    let after: Vec<_> = alone.update(cx, |shell, _| {
-        [0., 0.5, 1.].map(|y| shell.window_fill_at(y)).to_vec()
-    });
+    let after = alone.update(cx, |shell, _| shell.window_fill());
     assert_eq!(before, after);
 }
 
-/// A Space's colour is a glow from the sidebar's foot, the main colour there, and a faint one of
-/// its second colour from the far top corner, with nothing of either between them (#4089); with
-/// the sidebar on the right, its foot is on the right.
+/// A Space's colour is a faint tint of the sidebar's glass, flat: its main colour at the tint's
+/// alpha, the same on either side, with its second colour kept but unused (#4402).
 #[gpui::test]
-fn a_space_glows_from_the_sidebars_foot_and_faintly_from_the_far_corner(cx: &mut TestAppContext) {
+fn a_spaces_colour_is_its_main_colour_flat_at_the_tint(cx: &mut TestAppContext) {
     let theme = Theme::at(0.6, 0.).with_count(2);
-    let [main, second] = theme.colors()[..] else {
-        panic!("two colours")
-    };
+    let main = theme.colors()[0];
     let (shell, cx) = shell(Some(main), Some(theme), cx);
     shell.update(cx, |shell, cx| {
         let palette = shell.palette_of(1);
-        let foot = shell.space_color_at(1, 0., 1.);
-        let far = shell.space_color_at(1, 1., 0.);
-        let same = |a: Rgba, b: Rgba| rgb_of(a) == rgb_of(b) && (a.a - b.a).abs() < 1e-5;
-        assert!(same(foot, palette.glow), "{foot:?} {:?}", palette.glow);
-        assert!(far.a > 0. && far.a < foot.a, "{far:?} {foot:?}");
-        assert_eq!(shell.space_color_at(1, 0.5, 0.5).a, 0.);
-        assert_eq!(shell.space_color_at(1, 1., 1.).a, 0.);
-        // The glows are the theme's colours, the foot's moved no further than the window needs.
-        assert_eq!(rgb_of(palette.far_glow), second);
-        assert_eq!(rgb_of(palette.glow), main);
+        let tint = shell.space_color_of(1);
+        assert_eq!(tint, palette.space_tint);
+        assert_eq!(rgb_of(tint), main);
+        let alpha = match palette.tone {
+            Tone::Dark => crate::tokens::palette::SPACE_TINT,
+            Tone::Light => crate::tokens::palette::LIGHT_SPACE_TINT,
+        };
+        assert_eq!(tint.a, alpha);
         shell.set_sidebar_right(true, cx);
-        assert!(same(shell.space_color_at(1, 1., 1.), palette.glow));
-        assert_eq!(shell.space_color_at(1, 0., 1.).a, 0.);
+        assert_eq!(shell.space_color_of(1), tint);
     });
 }
 
@@ -98,7 +88,7 @@ fn intensity_washes_the_colours_out(cx: &mut TestAppContext) {
     shell.update(cx, |_, _| {
         let alpha = |intensity| {
             let theme = Theme { intensity, ..theme };
-            Palette::of(Some(&theme), Tone::Dark).glow.a
+            Palette::of(Some(&theme), Tone::Dark).space_tint.a
         };
         assert!(alpha(0.) < alpha(0.24) && alpha(0.24) < alpha(DEFAULT_INTENSITY));
         assert!(alpha(DEFAULT_INTENSITY) < alpha(1.));
@@ -438,8 +428,8 @@ fn the_window_is_opaque_where_nothing_blurs_what_is_behind_it(cx: &mut TestAppCo
             shell.blurred = false;
             let ground = shell.window_tint();
             assert_eq!(ground.a, 1., "{tone:?}: {ground:?}");
-            // A Space without a theme has no gradient over the ground.
-            let fill = shell.window_fill_at(0.5).to_rgb();
+            // A Space without a theme has no tint over the ground.
+            let fill = shell.window_fill().to_rgb();
             let channels = |c: Rgba| [c.r, c.g, c.b, c.a];
             let same = channels(ground)
                 .iter()

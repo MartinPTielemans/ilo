@@ -8,7 +8,12 @@
 //! as Arc's does. What it asks of the core and of its window goes through `Host`.
 
 use std::time::Instant;
-use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    sync::Arc,
+};
 
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight,
@@ -24,6 +29,12 @@ use crate::{
     shell::{self, Match, MenuEntry},
     text_input::{self, PasteAndGo, PasteAndSearch, TextInput, without_javascript},
     tooltip::{Anchor, Tip},
+};
+
+use crate::model_menu::SIGN_IN;
+pub use crate::model_menu::{
+    DEFAULT_ROW, ModelPick, TaskAgent, TaskAgents, model_choices, model_words, next_model,
+    starts_on,
 };
 
 mod calculator;
@@ -94,13 +105,14 @@ use crate::tokens::command_bar::{
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
-/// There it hangs from the field as the Site Controls do. The modal shadow, 24 down at a 64 blur,
-/// fell mostly below a panel only 50 tall, a grey bar under it over a light page (#1306).
-const FIELD_LEVEL: Level = Level::Popover;
+/// The bar's level wherever it is, centred, at rest or over the field: floating (#4402), as menus
+/// and the switcher are. Over the field it hangs as the Site Controls do, where the window's
+/// shadow, 24 down at a 64 blur, fell mostly below a panel only 50 tall (#1306).
+const BAR_LEVEL: Level = Level::Popover;
 /// The level whose shadow the bar's window keeps room for round the bar where it draws its own
-/// shadow (#2988): the modal's, which reaches past the popover's, so the bar keeps one margin as it
-/// moves between the centre and the field.
-pub const ROOM: Level = Level::Modal;
+/// shadow (#2988), the same at the centre and over the field, so the bar keeps one margin as it
+/// moves between them.
+pub const ROOM: Level = BAR_LEVEL;
 use crate::elevation::Level;
 use crate::tokens::command_bar::ARROW;
 use crate::tokens::command_bar::ARROW_TILE;
@@ -115,17 +127,12 @@ use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
 use crate::tokens::command_bar::SELECTION as FIELD_SELECTION;
 use crate::tokens::command_bar::TITLE;
-use crate::tokens::command_bar::site_colors;
-use crate::tokens::command_bar::{
-    CHOICES_HEIGHT, CHOICES_MENU_DROP, FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT,
-    FOOT_TEXT, PLUS,
-};
-use crate::tokens::command_bar::{CHOSEN, CHOSEN_KIND, LIGHT_CHOSEN, LIGHT_CHOSEN_KIND};
+use crate::tokens::command_bar::{CHOICES_HEIGHT, CHOICES_MENU_DROP, PLUS};
+use crate::tokens::command_bar::{CHOSEN_KIND, LIGHT_CHOSEN_KIND};
+use crate::tokens::shell::HAIRLINE;
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
-/// What the bar's field says with nothing typed where the bar can start a thread (Z2).
-const THREAD_PLACEHOLDER: &str = "Search, or start a thread";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const SPACES_PLACEHOLDER: &str = "Search Spaces…";
@@ -159,13 +166,19 @@ fn hint_key(key: &str, off_the_mac: bool) -> String {
     shell::key_name(key, off_the_mac)
 }
 
-/// The row that grows the bar into the composer with what's typed, second once something is
-/// typed, and the kind at its end (the words table's Z2b).
+/// The composer's round button, to a screen reader, and a thread row's kind at its end (Z2b).
 const NEW_THREAD: &str = crate::agents::task::handed::NEW_THREAD;
 const THREAD_KIND: &str = "Thread";
-/// The composer's foot: what ⇥ does at its left, and what ↩ does at its right (Z8).
-const BACK_TO_SEARCH: &str = "Back to Search";
-const OPENS_AS: &str = "Opens as a thread in its own tab";
+/// The switch at the input's end, wherever an assistant is ready: the key chip and what it does
+/// before it, its halves, the one the bar is in lifted, and for a screen reader its name and help,
+/// with the half as its value; the chip and its words aren't read, so the help is heard once (Z53).
+const SWITCH_KEY: &str = "Tab";
+const TO_SWITCH: &str = "to switch";
+const SWITCH: [&str; 2] = ["Search", "Ask"];
+const SWITCH_NAME: &str = "Search or Ask";
+const SWITCH_HELP: &str = "Press Tab to switch";
+/// What the composer's field says with nothing typed (Z53a, U2).
+const ASK_PLACEHOLDER: &str = "Ask anything";
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -237,71 +250,6 @@ pub enum TaskRow {
     Thread,
 }
 
-/// An agent ⌘T's ask lists (Agent task).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TaskAgent {
-    pub id: SharedString,
-    pub name: SharedString,
-    /// Its glyph, Settings › Agents' own.
-    pub glyph: &'static str,
-    /// The model it runs tasks on, by name, or None for its own default.
-    pub model: Option<SharedString>,
-    /// That model by id, empty for its own default: Settings' Model row.
-    pub model_id: String,
-    /// Settings' name for its default, `{assistant}'s default` (Y1), which the model trigger shows
-    /// while it's picked, and which model that is where it said. The menu's row is `Default` (D3).
-    pub default_row: SharedString,
-    pub default_model: Option<SharedString>,
-    /// The models it offers after its default, as id and name: the one list Settings' Model row
-    /// is built from.
-    pub models: Vec<(String, String)>,
-    /// When its plan's limit resets, if it's at it.
-    pub resets: Option<SharedString>,
-}
-
-/// What ⌘T's ask offers, as the browser last learned it: the agents signed in, the default first,
-/// and whether it has learned which are yet.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TaskAgents {
-    pub agents: Vec<TaskAgent>,
-    pub known: bool,
-    /// The assistants installed but not signed in, by id and name, which the composer's model
-    /// menu offers to sign in.
-    pub signed_out: Vec<(SharedString, SharedString)>,
-}
-
-/// The model the next task on `agent` starts on, by id, empty for its own default: the pick for
-/// it, or Settings'. A pick it no longer offers is its default, as in Settings.
-pub fn next_model(picked: Option<&(SharedString, String)>, agent: &TaskAgent) -> String {
-    let picked = picked.filter(|(on, _)| *on == agent.id).map(|(_, id)| id);
-    let id = picked.unwrap_or(&agent.model_id);
-    match agent.models.iter().any(|(each, _)| each == id) {
-        true => id.clone(),
-        false => String::new(),
-    }
-}
-
-/// What the assistant's chip says: its name and the model the next task starts on, or its Model
-/// menu's first row for its own default.
-pub fn model_words(agent: &TaskAgent, id: &str) -> String {
-    match agent.models.iter().find(|(each, _)| each == id) {
-        Some((_, name)) => format!("{} · {name}", agent.name),
-        None => agent.default_row.to_string(),
-    }
-}
-
-/// The assistant a thread starts on: the one `picked` names, while it isn't at its limit, else the
-/// first ready.
-pub fn starts_on<'a>(
-    agents: &'a TaskAgents,
-    picked: Option<&(SharedString, String)>,
-) -> Option<&'a TaskAgent> {
-    let picked = picked.map(|(id, _)| id);
-    let mut ready = agents.agents.iter().filter(|agent| agent.resets.is_none());
-    let first = ready.clone().next();
-    ready.find(|agent| Some(&agent.id) == picked).or(first)
-}
-
 /// The level menu, as each level it offers and its items: every level, `current` checked, and the
 /// line every level holds to. Settings' `A new thread starts with` opens it too, row for row.
 pub fn level_choices(current: Tier) -> (Vec<Tier>, Vec<MenuEntry>) {
@@ -315,73 +263,6 @@ pub fn level_choices(current: Tier) -> (Vec<Tier>, Vec<MenuEntry>) {
     items.push(MenuEntry::line());
     items.push(MenuEntry::named(choices::NEVER_GETS, false));
     (tiers, items)
-}
-
-/// The model menu, as its items and what each picks: each assistant by its own name, then the
-/// models it offers, its default first and the one a thread starts on (`picked`, else Settings')
-/// checked; one at its limit says when it resets, and one not signed in has Sign In, which starts
-/// its own sign-in as Settings' does; then Settings › Agents while `to_settings`. Each assistant's
-/// heading is its name as Settings' page has it. Over them all a field narrows them as the user
-/// types: an assistant with no model matching goes, heading and all, as Sign In does, and Settings
-/// stays whatever is typed; a pick is still one of these rows. The composer and Settings'
-/// `A new thread starts with` both open it.
-pub fn model_choices(
-    agents: &TaskAgents,
-    picked: Option<&(SharedString, String)>,
-    to_settings: bool,
-) -> (Vec<MenuEntry>, Vec<ModelPick>) {
-    let (on, chosen) = match starts_on(agents, picked) {
-        Some(agent) => (Some(agent.id.clone()), Some(next_model(picked, agent))),
-        None => (None, None),
-    };
-    let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
-    let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
-    // Settings' name for the assistant, so the two never say it differently.
-    let label = |id: &SharedString, name: &SharedString| -> SharedString {
-        match crate::agents::runner::Cli::from_id(id) {
-            Some(cli) => crate::settings_rows::assistant_name(cli).into(),
-            None => name.clone(),
-        }
-    };
-    for agent in &agents.agents {
-        items.push(heading(label(&agent.id, &agent.name)));
-        picks.push(ModelPick::Nothing);
-        let at_limit = agent
-            .resets
-            .clone()
-            .map(|resets| format!("Limit resets {resets}"));
-        let checked = chosen.as_deref().filter(|_| on.as_ref() == Some(&agent.id));
-        let default = agent.default_model.as_deref();
-        let (ids, entries) = crate::agents::task::model_menu(
-            checked.unwrap_or("\0"),
-            DEFAULT_ROW,
-            default,
-            agent.models.clone(),
-        );
-        for ((id, _), entry) in ids.into_iter().zip(entries) {
-            let entry = MenuEntry {
-                enabled: at_limit.is_none(),
-                detail: at_limit.clone().map(Into::into).or(entry.detail.clone()),
-                over: false,
-                ..entry
-            };
-            items.push(entry);
-            picks.push(ModelPick::Model(agent.id.clone(), id));
-        }
-    }
-    for (id, name) in &agents.signed_out {
-        items.push(heading(label(id, name)));
-        picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SIGN_IN, true).offer().out());
-        picks.push(ModelPick::SignIn(id.clone()));
-    }
-    if to_settings {
-        items.push(MenuEntry::line());
-        picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SETTINGS, true).kept().out());
-        picks.push(ModelPick::Settings);
-    }
-    (items, picks)
 }
 
 /// The effort menu, as what each row picks and its items: Default, which leaves the level to the
@@ -413,51 +294,17 @@ fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
         .is_some_and(|(on, _)| on == id)
 }
 
-/// A heading in a menu named as written, such as an assistant's name over its models.
-fn heading(title: SharedString) -> MenuEntry {
-    MenuEntry {
-        header: true,
-        ..MenuEntry::named(title, false)
-    }
-}
-
 /// The folder the system's panel gave, its links resolved, granted for a thread, unless ilo never
 /// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
 /// and the start checks it again.
 fn granted(picked: &std::path::Path) -> Option<Granted> {
-    let never = Never::here(None);
-    let root = task_files::resolved(picked);
-    let root = root.filter(|root| !task_files::never_grantable(root, &never))?;
-    Granted::picked(root).ok()
+    task_files::grant(picked, &Never::here(None))
 }
 
-/// A pick on the composer's model menu.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ModelPick {
-    /// A header or a line, which is never chosen.
-    Nothing,
-    /// A model of an assistant, by the assistant's id and the model's, empty for its default.
-    Model(SharedString, String),
-    /// Sign In under an assistant not signed in, by its id.
-    SignIn(SharedString),
-    Settings,
-}
-
-/// Words on the composer's choices, from the words table (Z9, A5).
-const SIGN_IN: &str = "Sign In";
-const SETTINGS: &str = "Settings";
-/// The model menu's search field (Z9).
-const SEARCH_MODELS: &str = "Search models";
-/// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
-/// `{assistant}'s default`.
-pub const DEFAULT_ROW: &str = "Default";
-/// The selected row's plate, `shown`, and its kind's ink, text-2, each the ink at its tone's.
+/// The selected row's plate, the keyboard's, and its kind's ink, text-2, each the ink at its tone's.
 fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
-    let (plate, kind) = match palette.tone {
-        palette::Tone::Dark => (CHOSEN, CHOSEN_KIND),
-        palette::Tone::Light => (LIGHT_CHOSEN, LIGHT_CHOSEN_KIND),
-    };
-    (palette.plate(plate), palette.on_overlay(kind))
+    let kind = palette.toned(CHOSEN_KIND, LIGHT_CHOSEN_KIND);
+    (palette.flat_plate(), palette.on_overlay(kind))
 }
 
 /// The composer's triggers, by their elements' ids.
@@ -476,10 +323,8 @@ pub const EFFORT_DEFAULT: &str = "Default";
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
 
-/// The widest the chip before the input grows, as a page's title can be long, and its favicon's
-/// size, as the chip's text is the rows' body size.
+/// The widest the chip before the input grows.
 const CHIP_MAX: f32 = 180.;
-const CHIP_FAVICON: f32 = 12.;
 /// The tile after a row's end, as Switch to Tab's: its margin from the row's end, and its glyph's
 /// box.
 const END_TILE_RIGHT: f32 = 3.;
@@ -492,10 +337,9 @@ fn bare_end() -> f32 {
     END_TILE_RIGHT + (ICON_BOX - END_GLYPH) / 2.
 }
 
-/// A task ⇥ is making of what's typed: the page that goes with it, as its address and title, which
-/// ⌫ at the field's start takes off.
+/// A task ⇥ is making of what's typed. No page of the user's goes with it: a thread never gets
+/// the tab the user is on.
 struct Ask {
-    page: Option<(SharedString, SharedString)>,
     /// The level the thread starts at: what the composer last started one with in the profile,
     /// or the user's pick on its level menu. Only these set it.
     tier: Tier,
@@ -513,6 +357,9 @@ struct Ask {
     /// and the watch on the window's tabs kept while there is one (picks.rs).
     picks: crate::tab_picks::Picks,
     picks_watch: Option<gpui::Subscription>,
+    /// A ↩ that came before the browser had learned which agents are ready, which runs once it
+    /// has (`learned`). It goes with the ask.
+    held: Option<futures::channel::oneshot::Sender<()>>,
 }
 
 /// What the composer opens with: the level and model it last started a thread with, by the
@@ -524,10 +371,10 @@ pub struct Opens {
     pub effort: Option<&'static str>,
 }
 
-/// The effort levels the program of the assistant `id` takes, from the one list
-/// (`Cli::efforts`); none for an assistant ilo doesn't run, or one that takes none.
+/// The effort levels the program of the assistant `id` takes, as its provider says them
+/// (provider.rs); none for an assistant ilo doesn't run, or one that takes none.
 pub fn efforts_of(id: &str) -> &'static [&'static str] {
-    crate::agents::runner::Cli::from_id(id).map_or(&[], |cli| cli.efforts())
+    crate::agents::provider::caps(id).map_or(&[], |caps| caps.efforts)
 }
 
 /// A level's name on the effort menu and its trigger: the words table's for those it names (D6),
@@ -821,18 +668,14 @@ pub trait Host {
     /// learns again which agents are ready, in the background, which `agents_changed` then gives
     /// the page's bar.
     fn look_for_agents(&self, cx: &mut App);
-    /// The page the user is on, if it's a web page: its address and title, all of it that goes
-    /// with an ask, as the agent never gets the user's tab.
-    fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
-    /// Starts `asked` as a task on the agent `agent`, with `page`, the files and folder the user
-    /// added on the plus and the tabs of theirs they picked there, from the Space the bar shows over, and hides the bar by folding it
-    /// into the ask's slot, which its card takes, or where the window shows no slot, as `hide`
-    /// does.
+    /// Starts `asked` as a task on the agent `agent`, with the files and folder the user added on
+    /// the plus and the tabs of theirs they picked there, from the Space the bar shows over, and
+    /// hides the bar by folding it into the ask's slot, which its card takes, or where the window
+    /// shows no slot, as `hide` does.
     fn run_task(
         &self,
         agent: &str,
         asked: &str,
-        page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
@@ -941,29 +784,7 @@ struct Site {
     /// The word typed before Tab, which leaving puts back in the keyword's place, as Arc's
     /// `queryBeforeEnteringScopedSearch` (#1397): "yout" comes back as "yout", not youtube.com.
     word: String,
-    /// The site's own colour, which its chip and the selected row are in, if it has one.
-    color: Option<u32>,
 }
-
-/// The colours of the site searches a new profile has (core/site_searches.cc), by keyword, for those
-/// whose brand has one.
-pub(crate) const SITE_COLORS: [(&str, u32); 15] = [
-    ("drive.google.com", site_colors::GOOGLE_DRIVE),
-    ("mail.google.com", site_colors::GMAIL),
-    ("maps.google.com", site_colors::GOOGLE_MAPS),
-    ("calendar.google.com", site_colors::GOOGLE_CALENDAR),
-    ("docs.google.com", site_colors::GOOGLE_DOCS),
-    ("dropbox.com", site_colors::DROPBOX),
-    ("amazon.com", site_colors::AMAZON),
-    ("figma.com", site_colors::FIGMA),
-    ("youtube.com", site_colors::YOUTUBE),
-    ("reddit.com", site_colors::REDDIT),
-    ("soundcloud.com", site_colors::SOUNDCLOUD),
-    ("asana.com", site_colors::ASANA),
-    ("linkedin.com", site_colors::LINKEDIN),
-    ("music.apple.com", site_colors::APPLE_MUSIC),
-    ("spotify.com", site_colors::SPOTIFY),
-];
 
 /// Where the bar shows the page chosen.
 #[derive(Clone, Copy)]
@@ -1016,6 +837,8 @@ pub struct CommandBar {
     a11y: bool,
     /// Whether it shows over the URL field, from a click on it, rather than centred.
     over_field: bool,
+    /// Where the switch's halves, Search and Ask, were last drawn, for the tests' clicks.
+    switch_drawn: Rc<RefCell<[Option<Bounds<Pixels>>; 2]>>,
     /// The URL it opened on, whose favicon the input shows until it's edited, as Arc's does.
     page: String,
     /// The site search the bar is in, if any.
@@ -1221,14 +1044,17 @@ fn bind_keys(cx: &mut App) {
 }
 
 /// A bar to rest in `window`'s empty Space, which its page draws where ⌘T's opens: the same bar,
-/// whose ⇥ grows it into the composer in place. It asks nothing of the core or the host until it's
-/// typed in, so the Space's first frame reads nothing for it.
+/// whose ⇥ grows it into the composer in place. It asks the core nothing until it's typed in, and
+/// reads only what the browser last learned of the assistants, in memory, for its switch and
+/// placeholder (#4393).
 pub fn in_place(host: Rc<dyn Host>, window: &mut Window, cx: &mut App) -> Entity<CommandBar> {
     if !cx.has_global::<CommandBarWindow>() && !cx.has_global::<InPlaceKeys>() {
         bind_keys(cx);
         cx.set_global(InPlaceKeys);
     }
-    new_bar(host, Surface::InPlace, window, cx)
+    let bar = new_bar(host, Surface::InPlace, window, cx);
+    bar.update(cx, |bar, cx| bar.agents_changed(cx));
+    bar
 }
 
 /// The bar, in its own window or at rest in `window`.
@@ -1287,6 +1113,7 @@ fn new_bar(
             remove_drawn: None,
             a11y: false,
             over_field: false,
+            switch_drawn: Rc::default(),
             page: String::new(),
             site: None,
             commands: None,
@@ -1358,10 +1185,10 @@ pub fn show(
                 top,
                 FIELD_WIDTH,
                 FIELD_RADIUS,
-                FIELD_LEVEL,
+                BAR_LEVEL,
             );
         }
-        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal),
+        None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, BAR_LEVEL),
     }
 }
 
@@ -1403,7 +1230,7 @@ pub fn show_in(
     log!("browser: command bar opens inside the window");
     if let Some(host) = reset(target, text, shown, tabs, false, cx) {
         let (left, top, width) = (bar.left().into(), bar.top().into(), bar.size.width.into());
-        host.show(false, left, top, width, RADIUS, Level::Modal);
+        host.show(false, left, top, width, RADIUS, BAR_LEVEL);
     }
 }
 
@@ -1427,7 +1254,7 @@ pub fn show_spaces(spaces: Vec<shell::BarSpace>, bar: Bounds<Pixels>, cx: &mut A
         cx,
     ) {
         let (left, top, width) = (bar.left().into(), bar.top().into(), bar.size.width.into());
-        host.show(false, left, top, width, FIELD_RADIUS, FIELD_LEVEL);
+        host.show(false, left, top, width, FIELD_RADIUS, BAR_LEVEL);
     }
 }
 
@@ -1449,7 +1276,7 @@ pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
         false,
         cx,
     ) {
-        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal);
+        host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, BAR_LEVEL);
     }
 }
 
@@ -1473,7 +1300,7 @@ pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mu
         // The card is as far in from the window's bottom as from its top.
         let window = f32::from(card.top() + card.bottom());
         let top = centered_top(window) + f32::from(pane.top() - card.top());
-        host.show(false, left.into(), top, WIDTH, RADIUS, Level::Modal);
+        host.show(false, left.into(), top, WIDTH, RADIUS, BAR_LEVEL);
     }
 }
 
@@ -1651,14 +1478,12 @@ pub fn task_agents_changed(cx: &mut App) {
             if agents == bar.task_agents {
                 return;
             }
-            bar.task_agents = agents;
+            bar.learned(agents);
             if bar.ask.is_some() {
                 bar.log_agents();
+                bar.show_placeholder(cx);
             } else if bar.site.is_none() && bar.commands.is_none() && bar.lists_commands() {
-                let placeholder = bar.search_placeholder();
-                bar.input.update(cx, |input, cx| {
-                    input.set_placeholder(placeholder.into(), cx)
-                });
+                bar.show_placeholder(cx);
             }
             cx.notify();
         })
@@ -1687,13 +1512,8 @@ pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
         .ok();
 }
 
-/// A chip before the input: a mode's or a page's, with the page's favicon, in `fill`.
-fn mode_chip(
-    fill: impl Into<gpui::Fill>,
-    label: Hsla,
-    favicon: Option<AnyElement>,
-    name: SharedString,
-) -> gpui::Div {
+/// A chip before the input: a mode's, in `fill`.
+fn mode_chip(fill: impl Into<gpui::Fill>, label: Hsla, name: SharedString) -> gpui::Div {
     div()
         .flex_none()
         .max_w(px(CHIP_MAX))
@@ -1706,7 +1526,6 @@ fn mode_chip(
         .bg(fill)
         .text_color(label)
         .text_size(px(text::BODY))
-        .children(favicon)
         .child(div().min_w_0().truncate().child(name))
 }
 
@@ -2043,10 +1862,6 @@ impl CommandBar {
             self.completion.clear();
             return;
         }
-        // A resting bar reads nothing of tasks for the page's first frame, only once typed in.
-        if self.surface == Surface::InPlace && self.task_agents.is_none() {
-            self.task_agents = self.learned_agents(cx);
-        }
         let shown = format!("{}{}", self.asked, self.completion);
         // Moving the selection off the completion takes it as typed, as in Chrome.
         if text == shown
@@ -2336,15 +2151,10 @@ impl CommandBar {
             input.set_placeholder(SITE_PLACEHOLDER.into(), cx);
             input.set_spoken(Some(spoken), cx);
         });
-        let color = SITE_COLORS
-            .iter()
-            .find(|(site, _)| *site == keyword)
-            .map(|&(_, color)| color);
         self.site = Some(Site {
             keyword,
             name,
             word,
-            color,
         });
         self.completion.clear();
         let caret = query.len();
@@ -2417,8 +2227,19 @@ impl CommandBar {
         if self.leave_ask(window, cx) {
             return;
         }
+        // At rest with threads off there's nothing to switch to, and ⇥ means only that (#4140).
+        if self.surface == Surface::InPlace && self.task_agents.is_none() {
+            return;
+        }
+        // With tasks on, ⇥ in an empty field opens the composer, as with words (#4393); with them
+        // off it lists only the commands, as Arc's does.
         let empty = self.input.read(cx).text().is_empty();
-        if empty && self.site.is_none() && self.commands.is_none() && self.lists_commands() {
+        if empty
+            && self.task_agents.is_none()
+            && self.site.is_none()
+            && self.commands.is_none()
+            && self.lists_commands()
+        {
             return self.enter_commands("", window, cx);
         }
         let hint = self
@@ -2457,19 +2278,13 @@ impl CommandBar {
     }
 
     /// ⌫, ⌘⌫ or ⌥⌫ with the caret at the start of a site search's input, or the commands-only
-    /// list's, leaves it. In an ask it takes the page's chip off first, then leaves.
+    /// list's, or an ask's, leaves it.
     fn leave_at_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).selection() != (0..0) {
             return;
         }
         // In the empty field the last picked tab's chip goes first.
         if self.unpick_last(cx) {
-            return cx.stop_propagation();
-        }
-        if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
-            log!("browser: command bar ask without its page");
-            ask.page = None;
-            cx.notify();
             return cx.stop_propagation();
         }
         if self.leave_site(window, cx)
@@ -2488,15 +2303,14 @@ impl CommandBar {
             .flatten()
     }
 
-    /// Whether ⇥ makes what's typed a task: tasks are on, and the bar opens a page, outside a site
-    /// search and the commands-only list.
-    fn may_ask(&self, cx: &App) -> bool {
+    /// Whether ⇥ opens the composer with what's typed, if anything is: tasks are on, and the bar
+    /// opens a page, outside a site search and the commands-only list.
+    fn may_ask(&self, _: &App) -> bool {
         self.task_agents.is_some()
             && self.lists_commands()
             && self.site.is_none()
             && self.commands.is_none()
             && self.ask.is_none()
-            && !self.typed(cx).is_empty()
     }
 
     /// Whether the input's end says Ask ⇥: ⇥ makes a task, and an agent is ready, or the browser
@@ -2510,45 +2324,30 @@ impl CommandBar {
         (self.task_agents.as_ref()).is_some_and(|agents| !agents.known || !agents.agents.is_empty())
     }
 
-    /// What the field says with nothing typed, outside a site search and the commands-only list:
-    /// Z2 where the bar can start a thread, as New Thread is offered; else E1, as with tasks off or
-    /// no assistant set up.
+    /// What the field says with nothing typed in search: E1 always, as the switch says the bar can
+    /// start a thread (Z53a).
     fn search_placeholder(&self) -> &'static str {
-        match self.surface == Surface::Window && self.lists_commands() && self.agents_ready() {
-            true => THREAD_PLACEHOLDER,
-            false => PLACEHOLDER_TEXT,
-        }
+        PLACEHOLDER_TEXT
     }
 
-    /// ⇥: what's typed becomes a thread's, with the page the user is on as a chip before it, and
-    /// the rows give way to the composer's choices, which open as it last started a thread in the
-    /// profile.
+    /// ⇥: what's typed becomes a thread's, and the rows give way to the composer's choices, which
+    /// open as it last started a thread in the profile. The page the user is on is never taken
+    /// along: a tab goes in only when the user picks it (#4094).
     fn enter_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // check.sh reads this line.
         log!("browser: command bar asks an agent");
         let typed = self.typed(cx);
-        // At rest the Space shows no page to ask over.
-        let page = match self.surface {
-            Surface::Window => self.host.task_page(cx),
-            Surface::InPlace => None,
-        };
-        if let Some((url, _)) = &page
-            && !self.favicons.contains_key(url.as_ref())
-        {
-            self.favicons.insert(url.to_string(), None);
-            self.host.page_favicon(url);
-        }
         let last = self.host.composer_last(cx);
         let picked = Picked::default();
         self.picks_height.set(0.);
         self.ask = Some(Ask {
-            page,
             tier: last.tier,
             model: last.model,
             effort: last.effort,
             picked,
             picks: Default::default(),
             picks_watch: None,
+            held: None,
         });
         self.completion.clear();
         self.asked = typed.clone();
@@ -2556,6 +2355,7 @@ impl CommandBar {
         self.input.update(cx, |input, cx| {
             input.set_text(typed.into(), caret, window, cx)
         });
+        self.show_placeholder(cx);
         self.ask_shown(true, cx);
         self.log_agents();
         self.set_rows(String::new(), Vec::new(), window, cx);
@@ -2579,6 +2379,16 @@ impl CommandBar {
     fn composer_assistant(&self) -> Option<&TaskAgent> {
         let picked = self.ask.as_ref().and_then(|ask| ask.model.as_ref());
         starts_on(self.task_agents.as_ref()?, picked)
+    }
+
+    /// Puts what the field says with nothing typed: `Ask anything` in the composer, E1 in search.
+    fn show_placeholder(&self, cx: &mut App) {
+        let placeholder: SharedString = match self.ask.is_some() {
+            true => ASK_PLACEHOLDER.into(),
+            false => self.search_placeholder().into(),
+        };
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
     }
 
     /// The model the composer's thread starts on, by id, empty for its assistant's own default:
@@ -2607,6 +2417,7 @@ impl CommandBar {
         if self.ask.take().is_none() {
             return false;
         }
+        self.show_placeholder(cx);
         self.ask_shown(false, cx);
         true
     }
@@ -2627,15 +2438,14 @@ impl CommandBar {
     /// neither words nor a chip, or with no assistant ready.
     fn run_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = self.ask.as_ref() else { return };
-        let (page, tier, effort, files) =
-            (ask.page.clone(), ask.tier, ask.effort, ask.picked.clone());
+        let (tier, effort, files) = (ask.tier, ask.effort, ask.picked.clone());
         let asked = self.input.read(cx).text().trim().to_string();
-        let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
-            return;
-        };
         if asked.is_empty() && !self.picked() {
             return;
         }
+        let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
+            return self.hold_ask(by, window, cx);
+        };
         let id = agent.id.clone();
         // Settings' model unless the user picked one for this assistant, here or last time.
         let picked = ask_model_on(self.ask.as_ref(), &id);
@@ -2654,7 +2464,7 @@ impl CommandBar {
         if self.surface == Surface::Window {
             return self
                 .host
-                .run_task(&id, &asked, page, tier, model, effort, files, tabs, cx);
+                .run_task(&id, &asked, tier, model, effort, files, tabs, cx);
         }
         // At rest the bar stays, empty for the next, as the thread's view takes the page's place.
         self.asked.clear();
@@ -2663,6 +2473,35 @@ impl CommandBar {
         self.set_rows(String::new(), Vec::new(), window, cx);
         self.host
             .run_task_at_rest(&id, &asked, tier, model, effort, files, tabs, cx);
+    }
+
+    /// ↩ with no agent to start on, while the browser hasn't learned which are ready, as on the
+    /// first ask of a run: it runs once the browser has, unless the ask goes first. Nothing wakes
+    /// for it meanwhile: the look the ask started ends it.
+    fn hold_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
+        let unknown = (self.task_agents.as_ref()).is_some_and(|agents| !agents.known);
+        let Some(ask) = self.ask.as_mut().filter(|_| unknown) else {
+            return;
+        };
+        let (held, learned) = futures::channel::oneshot::channel();
+        ask.held = Some(held);
+        log!("browser: command bar holds ↩ until the agents are learned");
+        cx.spawn_in(window, async move |bar, cx| {
+            if learned.await.is_ok() {
+                _ = bar.update_in(cx, |bar, window, cx| bar.run_ask(by, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// The agents ⇥ asks changed to `agents`: once the browser has learned them, a held ↩ runs.
+    fn learned(&mut self, agents: Option<TaskAgents>) {
+        self.task_agents = agents;
+        if (self.task_agents.as_ref()).is_some_and(|agents| agents.known)
+            && let Some(held) = self.ask.as_mut().and_then(|ask| ask.held.take())
+        {
+            _ = held.send(());
+        }
     }
 
     /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's
@@ -2873,6 +2712,8 @@ impl CommandBar {
                 let Some(ask) = &mut self.ask else { return };
                 log!("browser: composer model picked");
                 ask.model = Some((agent, id));
+                // The field names the assistant the pick starts the thread on.
+                self.show_placeholder(cx);
                 cx.notify();
             }
             ModelPick::SignIn(agent) => self.host.sign_in(&agent, cx),
@@ -3234,18 +3075,6 @@ impl CommandBar {
         taken
     }
 
-    /// The mode chip's fill and its label: in a site search with a colour of its own, that colour,
-    /// made to read on the bar, else a chip's plate and the ink.
-    fn site_chip(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
-        match self.site.as_ref().and_then(|site| site.color) {
-            Some(color) => {
-                let (fill, label) = palette.site_accent(gpui::rgb(color));
-                (fill.into(), label.into())
-            }
-            None => (palette.plate(CHIP), palette.ink.into()),
-        }
-    }
-
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
     fn is_shown(&self, tab: u64) -> bool {
         matches!(self.target, Target::Tab(shown) | Target::Beside(shown) if shown == tab)
@@ -3302,11 +3131,11 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// How tall the bar draws: its input, its rows, and the composer's chips, choices and foot.
+    /// How tall the bar draws: its input, its rows, and the composer's chips and choices.
     fn drawn_height(&self) -> f32 {
         let rows = self.rows.len();
         let foot = match self.ask.is_some() {
-            true => self.picks_height.get() + CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
+            true => self.picks_height.get() + CHOICES_HEIGHT,
             false => 0.,
         };
         foot + match (self.surface, self.over_field) {
@@ -3317,18 +3146,9 @@ impl CommandBar {
         }
     }
 
-    /// `rows` with New Thread second, where ⇥ would grow the bar into the composer with what's
-    /// typed. The first row stays the page or search for it, which ↩ takes.
-    fn with_thread_row(&self, mut rows: Vec<Suggestion>, cx: &App) -> Vec<Suggestion> {
+    /// `rows` with none that starts a thread: the switch says what ⇥ does, so no row does (#4094).
+    fn with_thread_row(&self, mut rows: Vec<Suggestion>, _: &App) -> Vec<Suggestion> {
         rows.retain(|row| !row.starts_thread());
-        if !rows.is_empty() && self.offers_ask(cx) {
-            let thread = Suggestion {
-                text: NEW_THREAD.into(),
-                task: Some(TaskRow::Thread),
-                ..Suggestion::default()
-            };
-            rows.insert(1, thread);
-        }
         rows
     }
 
@@ -4007,17 +3827,11 @@ impl CommandBar {
         }
     }
 
-    /// What the chip before the input names: the site search's engine, the commands-only list, or
-    /// in an ask, the page that goes with it.
+    /// What the chip before the input names: the site search's engine or the commands-only list.
+    /// An ask has none.
     fn mode_name(&self) -> Option<SharedString> {
-        if let Some(ask) = &self.ask {
-            return ask
-                .page
-                .as_ref()
-                .map(|(url, title)| match title.is_empty() {
-                    true => SharedString::from(crate::agents::site(url)),
-                    false => title.clone(),
-                });
+        if self.ask.is_some() {
+            return None;
         }
         match (&self.site, self.commands) {
             (Some(site), _) => Some(site.name.clone()),
@@ -4028,6 +3842,123 @@ impl CommandBar {
 
     /// "Search <site>" and the Tab key, at the input's end, while the row ↩ takes hints a site
     /// search; "Ask Claude" and ⇥ where ⇥ would make what's typed a task; "Run" and ↩ in the ask.
+    /// Whether the input's end shows the switch: an assistant is ready and ⇥ goes between the
+    /// search and the composer, in ⌘T's bar and the resting one. A keyword row's site hint takes the
+    /// end while it shows, as ⇥ enters its site search then, and over the URL field there's no room.
+    fn shows_switch(&self) -> bool {
+        self.agents_ready()
+            && self.lists_commands()
+            && !self.over_field
+            && self.site.is_none()
+            && self.commands.is_none()
+            && !self.hints_site()
+    }
+
+    /// Whether the selected row hints its site search, which ⇥ enters.
+    fn hints_site(&self) -> bool {
+        (self.chosen()).is_some_and(|row| self.site.is_none() && !row.keyword.is_empty())
+    }
+
+    /// A click on a half of the switch: it picks that half, Search or Ask, as ⇥ would get there.
+    fn pick_half(&mut self, ask: bool, window: &mut Window, cx: &mut Context<Self>) {
+        log!("browser: command bar switch clicked");
+        match ask {
+            false => {
+                self.leave_ask(window, cx);
+            }
+            true if self.may_ask(cx) => self.enter_ask(window, cx),
+            true => {}
+        }
+    }
+
+    /// The switch at the input's end (Z53): the `Tab` chip and `to switch`, then Search and Ask on
+    /// a flat plate with the half the bar is in lifted, as the open tab's pane is (#4398). One
+    /// control to a screen reader, its value the half it's in.
+    fn mode_switch(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        use crate::tokens::settings::{
+            CONTROL_RADIUS, SEGMENT_HEIGHT, SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS,
+            SEGMENT_TEXT, SEGMENT_X,
+        };
+        if !self.shows_switch() {
+            return None;
+        }
+        let palette = palette::current(cx);
+        let on = usize::from(self.ask.is_some());
+        let (plate, _) = chosen(&palette);
+        let drawn = self.switch_drawn.clone();
+        let halves = SWITCH.iter().enumerate().map(|(index, words)| {
+            let drawn = drawn.clone();
+            div()
+                .id(("switch-half", index))
+                .relative()
+                .flex_none()
+                .h(px(SEGMENT_HEIGHT))
+                .px(px(SEGMENT_X))
+                .flex()
+                .items_center()
+                .rounded(px(CONTROL_RADIUS))
+                .when(index == on, |half| {
+                    half.bg(plate)
+                        .shadow(Level::Resting.shadow())
+                        .border(px(HAIRLINE))
+                        .border_color(Level::Resting.rim_in(&palette))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.on_overlay(TITLE))
+                })
+                .when(index != on, |half| half.text_color(palette.on_overlay(DIM)))
+                .on_click(
+                    cx.listener(move |bar, _, window, cx| bar.pick_half(index == 1, window, cx)),
+                )
+                .child(*words)
+                .child(
+                    canvas(
+                        move |bounds, _, _| drawn.borrow_mut()[index] = Some(bounds),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+        });
+        let track = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .p(px(SEGMENT_INSET))
+            .gap(px(SEGMENT_INSET))
+            .rounded(px(SEGMENT_RADIUS))
+            .bg(palette.plate(CHIP))
+            .text_size(px(SEGMENT_TEXT))
+            .line_height(px(SEGMENT_LINE))
+            .children(halves);
+        Some(
+            div()
+                .id("search-or-ask")
+                .when(self.a11y, |switch| {
+                    switch
+                        .role(Role::Button)
+                        .aria_label(SWITCH_NAME)
+                        .aria_value(SWITCH[on])
+                        .aria_description(SWITCH_HELP)
+                })
+                .flex_none()
+                .ml(px(HINT_GAP))
+                .flex()
+                .items_center()
+                .gap(px(HINT_KEY_GAP))
+                // The key chip at the size of every hint's at the input's end.
+                .text_size(px(text::BODY))
+                .cursor_pointer()
+                .child(key_chip(SWITCH_KEY.into(), &palette))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(palette.on_overlay(DIM))
+                        .child(TO_SWITCH),
+                )
+                .child(div().flex_none().ml(px(HINT_GAP)).child(track)),
+        )
+    }
+
     fn site_hint(&self, cx: &App) -> Option<impl IntoElement + use<>> {
         let site = self
             .chosen()
@@ -4099,7 +4030,7 @@ impl CommandBar {
         let (mark, said) = match self.composer_assistant() {
             Some(agent) => {
                 let model = self.composer_model().unwrap_or_default();
-                (Some(agent.glyph), model_words(agent, &model))
+                (crate::model_menu::mark(agent), model_words(agent, &model))
             }
             None => (None, SIGN_IN.to_string()),
         };
@@ -4133,6 +4064,7 @@ impl CommandBar {
         choices::row(choices::Row {
             form: choices::Form::BAR,
             inks: choices::Inks {
+                light: palette.tone == palette::Tone::Light,
                 text: palette.on_overlay(TITLE),
                 dim: palette.on_overlay(DIM),
                 plate: palette.plate(CHIP),
@@ -4157,44 +4089,6 @@ impl CommandBar {
             ),
             round_at: None,
         })
-    }
-
-    /// The composer's foot: ⇥ and Back to Search, which a click does too, then what ↩ does.
-    fn foot(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let palette = palette::current(cx);
-        let words = |said: &'static str| {
-            div()
-                .flex_none()
-                .text_size(px(FOOT_TEXT))
-                .line_height(px(FOOT_LINE))
-                .text_color(palette.on_overlay(DIM))
-                .child(said)
-        };
-        let back = div()
-            .id("back-to-search")
-            .when(self.a11y, |back| {
-                back.role(Role::Button).aria_label(BACK_TO_SEARCH)
-            })
-            .flex()
-            .items_center()
-            .gap(px(FOOT_GAP))
-            .on_click(cx.listener(|bar, _, window, cx| {
-                bar.leave_ask(window, cx);
-            }))
-            .child(key_chip(hint_key("tab", shell::OFF_THE_MAC), &palette))
-            .child(words(BACK_TO_SEARCH));
-        div()
-            .h(px(FOOT_HEIGHT))
-            .flex_none()
-            .flex()
-            .items_center()
-            .pl(px(FOOT_LEFT))
-            .pr(px(FOOT_RIGHT))
-            .gap(px(FOOT_GAP))
-            .child(back)
-            .child(div().flex_1())
-            .child(words(OPENS_AS))
-            .child(key_chip(hint_key("enter", shell::OFF_THE_MAC), &palette))
     }
 
     /// What VoiceOver reads for a row: what it says, then what ↩ does on it when that isn't to
@@ -4457,7 +4351,13 @@ impl CommandBar {
                     bar.leave_at_start(window, cx)
                 }),
             )
-            .on_action(cx.listener(|bar, _: &Next, window, cx| bar.select_next(true, window, cx)))
+            .on_action(cx.listener(|bar, _: &Next, window, cx| {
+                // At rest with no rows, ↓ goes on to the recents under the bar (#4140).
+                if bar.surface == Surface::InPlace && bar.rows.is_empty() && bar.ask.is_none() {
+                    return cx.propagate();
+                }
+                bar.select_next(true, window, cx)
+            }))
             .on_action(
                 cx.listener(|bar, _: &Previous, window, cx| bar.select_next(false, window, cx)),
             )
@@ -4470,11 +4370,7 @@ impl CommandBar {
     /// The chip before the input that names the mode it's in, if it's in one (`mode_name`).
     fn mode_chip(&self, palette: &palette::Palette) -> Option<gpui::Div> {
         let name = self.mode_name()?;
-        let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
-        let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
-        // A site search with a colour of its own is in it.
-        let (fill, label) = self.site_chip(palette);
-        Some(mode_chip(fill, label, favicon, name))
+        Some(mode_chip(palette.plate(CHIP), palette.ink.into(), name))
     }
 
     /// The rows, `top` under the input's row, as many as show before the list scrolls.
@@ -4514,7 +4410,6 @@ impl CommandBar {
     }
 
     /// Whether ⇥ grew it into the composer.
-    #[cfg(test)]
     pub fn composing_thread(&self) -> bool {
         self.ask.is_some()
     }
@@ -4549,16 +4444,16 @@ impl CommandBar {
     /// resting bar that has read them reads them again, so its New Thread row and composer show
     /// the ones found. Whether they changed.
     pub fn agents_changed(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.task_agents.is_none() {
-            return false;
-        }
         let agents = self.learned_agents(cx);
         if agents == self.task_agents {
             return false;
         }
-        self.task_agents = agents;
+        self.learned(agents);
         if self.ask.is_some() {
             self.log_agents();
+            self.show_placeholder(cx);
+        } else if self.site.is_none() && self.commands.is_none() {
+            self.show_placeholder(cx);
         }
         cx.notify();
         true
@@ -4628,10 +4523,10 @@ impl Render for CommandBar {
                 crate::tokens::radius::PANEL,
                 REST_HEIGHT,
                 LIST_TOP,
-                Level::Modal,
+                BAR_LEVEL,
             ),
-            (false, true) => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
-            (false, false) => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
+            (false, true) => (FIELD_RADIUS, FIELD_INPUT, 0., BAR_LEVEL),
+            (false, false) => (RADIUS, HEIGHT, LIST_TOP, BAR_LEVEL),
         };
         // Over the field the input's icon and text are in the rows' columns.
         let (icon_x, icon, text_x, text_size) = match (in_place, self.over_field) {
@@ -4707,7 +4602,8 @@ impl Render for CommandBar {
                         .child(self.input_icon(cx))
                         .children(self.mode_chip(&palette))
                         .child(div().flex_1().min_w_0().child(self.input.clone()))
-                        .children(self.site_hint(cx)),
+                        .children(self.site_hint(cx))
+                        .children(self.mode_switch(cx)),
                 )
                 .when(!rows.is_empty() && !self.over_field, |bar| {
                     bar.child(
@@ -4719,26 +4615,16 @@ impl Render for CommandBar {
                     )
                 })
                 .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
-                .when(self.ask.is_some(), |bar| {
-                    bar.child(self.choices(cx))
-                        .child(
-                            div()
-                                .h(px(hairline))
-                                .mx(px(LINE_INSET))
-                                .flex_none()
-                                .bg(palette.faint(LINE_COLOR)),
-                        )
-                        .child(self.foot(cx))
-                })
+                .when(self.ask.is_some(), |bar| bar.child(self.choices(cx)))
                 .children(self.a11y.then(|| self.announcer()))
-                // The modal level's rim in the palette's ink; its outline and shadow are the host's,
+                // The floating level's rim in the palette's ink; its outline and shadow are the host's,
                 // round the window, or on Windows round it in the window.
                 .child(edge(
                     0.,
                     1.,
                     match bare {
                         true => Level::Resting.rim_in(&palette),
-                        false => Level::Modal.rim_in(&palette),
+                        false => BAR_LEVEL.rim_in(&palette),
                     },
                 ));
         // At rest no window is round it: it casts the level's shadow on its page itself, and is
@@ -4748,7 +4634,7 @@ impl Render for CommandBar {
                 .w_full()
                 .h(px(self.drawn_height()))
                 .font_family(crate::face::UI)
-                .child(panel.when(!bare, |panel| panel.shadow(Level::Modal.shadow())))
+                .child(panel.when(!bare, |panel| panel.shadow(BAR_LEVEL.shadow())))
                 .into_any_element();
         }
         // The browser's shortcuts work here too, below the bar's own keys.

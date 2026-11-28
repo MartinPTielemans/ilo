@@ -754,6 +754,21 @@ void host_show_reveal(void* ui_view, double width);
 // Hides |ui_view|'s reveal window.
 void host_hide_reveal(void* ui_view);
 
+// Makes the window of |edge_knot_view| the edge knot of |ui_view|'s window: the tab the hidden
+// sidebar leaves at the window's edge while a thread needs the user. It shows over the page and
+// never takes the keyboard, a click on it included. The window reaches |margin| points past the tab
+// on every side but the window's edge, for its shadow, which the UI draws, and the margin lets the
+// mouse through to the page. It starts hidden.
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin);
+
+// Shows |ui_view|'s edge knot window with its tab flush with its browser window's edge on the
+// sidebar's side, |top| points down the content, |width| points across and |height| tall, or moves
+// it there if it shows.
+void host_show_edge_knot(void* ui_view, double top, double width, double height);
+
+// Hides |ui_view|'s edge knot window.
+void host_hide_edge_knot(void* ui_view);
+
 // Makes the window of |settings_view| the Settings window: a standard one, dark, that can show
 // over the browser window in full screen. It starts hidden.
 void host_add_settings(void* settings_view);
@@ -774,8 +789,11 @@ void host_add_first_run(void* first_run_view);
 // corners of |radius|. The system's blur, where the window has it, and its shadow are behind that
 // shape alone. The UI calls it on the entry's frames as the card grows and once as the entry ends,
 // and again only on the exit's frames after host_grow_first_run said yes, so nothing keeps it
-// alive. A host that can't shape a window does nothing.
-void host_set_first_run_frame(double width, double height, double radius);
+// alive. A host that can't shape a window does nothing. |frame| is the UI's count of the frames
+// it has drawn the card in: under the checks the Mac logs each shape with it as it's set and,
+// once Core Animation has committed it, the last frame the UI had drawn by then, so a check can
+// read the glass's lag behind the card. It logs nothing otherwise.
+void host_set_first_run_frame(double width, double height, double radius, uint64_t frame);
 
 // Mac only: grows first run's window to the frame of the browser window held behind it, for the
 // card to grow in to that window's size (first-run v9 §10), and says whether it will. Asked once,
@@ -788,14 +806,12 @@ void host_set_first_run_frame(double width, double height, double radius);
 // shown, or not at all where either window is no longer the one it answered for, the card then
 // growing to the window as it is. With the frame, on that same turn, it puts the held browser
 // window right under first run's, all but transparent, neither key nor main, so the UI and its
-// pages draw it before the card gives way to it (host_set_first_run_reveal). It starts no timer.
-bool host_grow_first_run(void);
-
-// Mac only: the opacity, 0 to 1, of the browser window under a grown first run's window, and of
-// the glass behind first run's card. The UI says both on each frame of a grown exit, the window's
-// again though unchanged, as Chromium may put a new window's opacity back at its first frame.
-// Nothing where no window is under first run's.
-void host_set_first_run_reveal(double window, double glass);
+// pages draw it before it takes the card's place at host_show_window, whole in one frame. It
+// stays unseen when Chromium puts a new window's opacity back at its first frame. An overlay
+// shown over it there, or over the held window, waits unseen too, neither key nor taking clicks,
+// and comes in over |reveal| seconds once the window is shown, as its content does, the keys
+// typed meanwhile given to it. It starts no timer.
+bool host_grow_first_run(double reveal);
 
 // Shows first run's window, as the UI draws it now, in front and with the keyboard, centred on the
 // screen the browser window opens on, and takes the launch window down: until first run ends it's

@@ -1,8 +1,8 @@
 //! The card of a window that shows no page, which is a fresh ⌘N window, a Space with no tab shown
 //! and what's left after the last Today tab closes (docs/ux-spec.md › Window › Card, no page).
 //! Nothing native covers it, since the core lays out no page view with no tab shown
-//! (`Window::ShowNothing`), so GPUI draws the bar at rest on it under the product's mark
-//! (`composer`) and takes its clicks. On the first run it shows the welcome instead, until a page shows.
+//! (`Window::ShowNothing`), so GPUI draws the bar at rest on it with the recents under it
+//! (`composer`, `recents`) and takes its clicks. On the first run it shows the welcome instead, until a page shows.
 
 use std::time::Instant;
 
@@ -140,13 +140,17 @@ impl Shell {
     /// card does what that key does: ⌘T's command bar, centred on the window. With the bar at
     /// rest on it, the card is the bar's page instead, and a click on it gives its field the
     /// keyboard.
-    pub(super) fn empty_card(&mut self, cx: &mut Context<Self>) -> Option<Stateful<gpui::Div>> {
+    pub(super) fn empty_card(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<gpui::Div>> {
         if self.selected != 0 {
             return None;
         }
         let (frame, _) = self.page_frame(self.viewport);
         let page = match self.rests_on_bar() {
-            true => self.resting_page(frame, cx),
+            true => self.resting_page(frame, window, cx),
             false => None,
         };
         if let Some(page) = page {
@@ -188,8 +192,8 @@ impl Shell {
                 }))
                 .child(sign.opacity(self.card_opacity(cx.background_executor().now())))
                 // Under ⌘T's bar, which first run's end leaves up over the welcome.
-                .children(self.landing_hint(
-                    self.opened_bar_top(f32::from(frame.top())),
+                .children(self.welcome_hint(
+                    f32::from(frame.top()),
                     f32::from(frame.size.width),
                     cx,
                 )),
@@ -273,6 +277,7 @@ fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
 
 pub(super) mod composer;
 mod hint;
+pub(super) mod recents;
 pub use hint::field_typed;
 #[cfg(test)]
 mod tests;

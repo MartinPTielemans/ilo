@@ -242,6 +242,14 @@ impl Shell {
         }
     }
 
+    /// The user closed the find bar, with escape or its close button: the page it searched takes
+    /// the keyboard back, wherever in the window it was before ⌘F, as Chrome's and Arc's do. The
+    /// bar's window going leaves the browser window's own focus where it was (#4489).
+    pub fn find_closed(&mut self, cx: &mut Context<Self>) {
+        self.browser.focus_page(cx);
+        self.field_let_go(cx);
+    }
+
     /// The host said the page took the keyboard from the UI, which GPUI's focus doesn't see: a
     /// field still drawn with the focus no longer has the keys.
     pub(super) fn page_took_keyboard(&mut self, window: &Window, cx: &mut Context<Self>) {

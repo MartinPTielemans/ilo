@@ -140,13 +140,10 @@ impl Agents {
         let Some(root) = self.kept_root() else {
             return (Keep::Nothing, None);
         };
-        // A task with files runs where its assistant can keep no conversation, and reach none
-        // it kept (wall.rs).
-        let walled = self.walled(agent);
         let keep = match self.tasks.kept.of(agent) {
-            Some(record) if record.gone || walled => Keep::Nothing,
+            Some(record) if record.gone => Keep::Nothing,
             Some(record) => Keep::Resume(record.id.clone()),
-            None => kept::decide(cli, walled),
+            None => kept::decide(cli),
         };
         let folder = match &keep {
             Keep::Nothing => None,
@@ -201,16 +198,10 @@ impl Agents {
         self.tasks.kept.write(&root);
     }
 
-    /// Whether `agent`'s task has files, and so runs inside a wall.
-    fn walled(&self, agent: &str) -> bool {
-        self.task(agent).is_some_and(|task| task.files.any())
-    }
-
     /// Whether `agent`'s next run goes on with a conversation its assistant kept, and so takes
-    /// only what's new as its first message. A task with files never does: it starts from its
-    /// own words, whatever was kept of it.
+    /// only what's new as its first message.
     pub(super) fn resumes(&self, agent: &str) -> bool {
-        !self.walled(agent) && (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
+        (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
     }
 
     /// The user replies to `agent`'s task: if it had ended and its conversation is kept, the reply
@@ -219,8 +210,7 @@ impl Agents {
     /// than it ended at, or it's one a run before left, whose assistant ilo starts again. A reply
     /// to a task done or stopped in this run, at the access it had, is the resume and has no line.
     /// Nothing the assistant or a page says has a part in it, and its assistant is told nothing
-    /// of the access: ilo's own check holds it. A run inside a wall the lower access changes is
-    /// over, so the reply starts one inside the new level's (rewall.rs).
+    /// of the access: ilo's own check holds it, as the box is the same at every level (wall.rs).
     pub(super) fn pick_up(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task(agent) else {
             return;
@@ -231,8 +221,7 @@ impl Agents {
         let was = task.state.clone();
         let said = replies(task);
         // A level the user picked since it ended is the one the reply starts at, as the chip
-        // says; else the app decides from the one it ended at. Its wall was that one's.
-        let ended_at = task.picked_from.unwrap_or(task.tier);
+        // says; else the app decides from the one it ended at.
         let back = match task.picked_from {
             Some(_) => task.tier,
             None => kept::comes_back(task.tier),
@@ -263,10 +252,6 @@ impl Agents {
         log!("browser: task {agent} picked up");
         // The activity log's entry for it, under the task's own name.
         self.note(agent, 0, "resumed", "", "");
-        let same = (self.task(agent)).is_none_or(|task| task.files.same_rules(ended_at, back));
-        if !same {
-            self.wall_outgrown(agent, cx);
-        }
     }
 
     /// `agent`'s run went, saying `said`. If it was to go on with a conversation its assistant no
@@ -876,14 +861,14 @@ impl Agents {
         self.tasks.kept.write(&root);
         cx.notify();
         let folder = root.clone();
+        // A few of the assistant's runs at once, as a launch may leave hundreds (#4446).
         let removed = cx.background_spawn(async move {
-            (removing.into_iter())
-                .map(|(id, program, path)| {
-                    let removed = program.is_some_and(|program| {
-                        kept::remove(&program, path.as_deref(), &folder, &id)
-                    });
-                    (id, removed)
-                })
+            let removed = kept::remove_each(removing, kept::AT_ONCE, |(id, program, path)| {
+                (program.as_ref())
+                    .is_some_and(|program| kept::remove(program, path.as_deref(), &folder, id))
+            });
+            (removed.into_iter())
+                .map(|((id, ..), removed)| (id, removed))
                 .collect::<Vec<_>>()
         });
         cx.spawn(async move |agents, cx| {
@@ -1017,10 +1002,8 @@ impl Task {
             told: None,
             helpers: Helpers::default(),
             files: crate::agents::files::Given::default(),
-            rising: None,
-            rewalled: Vec::new(),
-            ran_walled: Vec::new(),
-            restart: None,
+            seen_tabs: Vec::new(),
+            ran_boxed: Vec::new(),
             copying: false,
             sends: Default::default(),
             names: crate::agents::files::Names::default(),

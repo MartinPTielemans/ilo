@@ -12,7 +12,7 @@
 # shown. Little ilo's bar picks the other profile for its page, which is kept for the site, and a
 # link from another app to the site opens in Little ilo in that profile. Each profile picks the
 # service New Note opens a new document in, under Settings › General, and ⌃⇧N, the command bar's
-# New Note, the footer's + and New Note Split open one in the Space's profile's service.
+# New Note, the Space button's menu and New Note Split open one in the Space's profile's service.
 # Deleting the Space leaves its profile with only a favorite, and Delete in the menu deletes it,
 # favorite and all, once the user confirms. From macOS 14, a page's icon in Safari's engine is kept
 # in its Space's profile alone.
@@ -368,9 +368,13 @@ step=0
 work_downloads="$(native_path "$PWD/$out/work-downloads")"
 mkdir -p "$work_downloads"
 rm -f "$work_downloads/profile.txt"
-BROWSER_DOWNLOAD_FOLDER="$work_downloads" BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
-pid=$!
-exec 3> "$out/drive"
+# With a DevTools client that says when Clear browsing data's dialog has the keyboard (cdp.py), as
+# clear.sh's launch has, and no page of its own: the Spaces come back as they were.
+cdp_log="$out/profiles-cdp.log"
+scratch=$(mktemp -d)
+BROWSER_DOWNLOAD_FOLDER="$work_downloads"
+export BROWSER_DOWNLOAD_FOLDER
+start_with_cdp "" "$BROWSER_PROFILE_DIR" ""
 await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
 await '^browser: spaces [0-9]* [0-9]*$' || fail "the relaunch didn't bring back two Spaces"
 first=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f3)
@@ -529,25 +533,35 @@ picks=$(sed -n 's/^browser: command bar picks kept in //p' "$log" | tail -1)
 [ -e "$picks" ] || fail "the command bar's picks aren't where it said: $picks"
 expect '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' \
   "the command bar didn't open Clear browsing data: $(grep '^browser: loaded' "$log" | tail -1)"
-# The dialog takes the keyboard a moment after its page loads, which the app's log can't tell
-# (clear.sh asks DevTools, which this run hasn't): Tab and Space sent before then follow the
-# settings page's link instead, and ⌘← brings the dialog back for another try.
-deleted=
-for _ in 1 2 3; do
-  send key tab
-  send key space
-  missed=
-  for _ in $(seq 100); do
-    logged '^browser: history deleted ' && deleted=1 && break
-    logged '^browser: page [0-9]* back 1 forward 0 loading [01] chrome://settings/' && missed=1 && break
+# The dialog takes the keyboard a moment after its page loads, which the app's log can't tell: a
+# Tab sent before then follows the settings page's link instead, and the dialog opens under the keys
+# after. The run waits for its Cancel to have it, as cdp.py sees it, and Delete is after it.
+focused() {
+  if ! kill -0 "$helper" 2>/dev/null; then
+    echo "no DevTools client, as it exited: $(tail -1 "$cdp_log")"
+    return
+  fi
+  asked=$(grep -c '^cdp: focus ' "$cdp_log" || true)
+  echo "focus chrome://settings/" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -gt "$asked" ] && break
     sleep 0.1
   done
-  [ -z "$deleted" ] && [ -n "$missed" ] || break
-  history_key left back page
-  expect '^browser: page [0-9]* back 0 forward 1 loading 0 chrome://settings/clearBrowserData$' \
-    "⌘← didn't bring Clear browsing data back"
+  if [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -le "$asked" ]; then
+    echo "no answer from the DevTools client in 5 s: $(tail -1 "$cdp_log")"
+    return
+  fi
+  grep '^cdp: focus ' "$cdp_log" | tail -1 | cut -d' ' -f3-
+}
+for _ in $(seq 100); do
+  [ "$(focused)" = Cancel ] && break
+  sleep 0.1
 done
-[ -n "$deleted" ] || fail "Delete in Clear browsing data didn't delete the history"
+[ "$(focused)" = Cancel ] ||
+  fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); $(grep '^browser: link target ' "$log" | tail -1)"
+send key tab
+send key space
+expect '^browser: history deleted ' "Delete in Clear browsing data didn't delete the history: $(grep '^browser: link target ' "$log" | tail -1)"
 # A pattern of the path, whose backslashes on Windows grep would read as its own, \b in \browser-app.
 expect "^browser: command bar picks none in $(printf '%s\n' "$picks" | sed 's/[][\\.*^$]/\\&/g')\$" \
   "deleting the history kept the bar's picks"
@@ -785,7 +799,7 @@ expect '^browser: dialog settled$' "the dialog didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/profile-delete.png" || fail "no window to capture"
 send key return
 expect "^browser: removed profile $work personal\$" "the profile wasn't deleted"
-# The first profile's New Note opens a Notion page from the command bar and from the footer's +,
+# The first profile's New Note opens a Notion page from the command bar and from the Space button's menu,
 # each at the top of Today, and New Note Split opens one beside the page shown (#698).
 # Picks the command bar's row $1, typed, with ↓ and ↩, once the core's rows are in among the bar's.
 bar_runs() {
@@ -819,23 +833,21 @@ send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the bar's note"
 expect "^browser: selected $opener\( in .*\)\{0,1\}\$" \
   "closing the bar's note didn't show tab $opener, which it opened over"
-send layout
-height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
-  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
-post click 204 $((height - 25))
-expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View, New Board, New Note'), " \
-  "the footer's + didn't offer New Note"
+# The Space button, where the footer logged it, lists the Spaces before New Space….
+post click $(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)
+expect "^browser: menu shown \(.*, \)\{0,1\}$(cased 'New Space…, New Folder…, New Split View, New Board, New Note'), " \
+  "the Space button's menu didn't offer New Note"
 send choose "$(cased 'New Note')"
-expect '^browser: new note https://notion\.new$' "the footer's New Note didn't open a new Notion page"
-expect "$atop" "the footer's note didn't open at the top of Today: Today is \"$(today)\""
-# New Note Split opens beside the page shown, as the bar offers it only with one, so the footer's
+expect '^browser: new note https://notion\.new$' "the Space button's New Note didn't open a new Notion page"
+expect "$atop" "the Space button's note didn't open at the top of Today: Today is \"$(today)\""
+# New Note Split opens beside the page shown, as the bar offers it only with one, so the Space button's
 # note stays for it.
 shown=$(sed -n 's/^browser: selected \([0-9]*\).*/\1/p' "$log" | tail -1)
 bar_runs "New Note Split"
 expect '^browser: new note https://notion\.new split$' "New Note Split didn't open a new Notion page"
 expect "^browser: splits\(.* \)\{0,1\}$shown+[0-9][0-9]*" "New Note Split's note isn't beside the page"
 ../tools/window-screenshot.sh "$pid" "$out/new-note-split.png" || fail "no window to capture"
-# Off in Settings › General, as its neighbours can be, New Note leaves the + menu and ⌃⇧N does
+# Off in Settings › General, as its neighbours can be, New Note leaves the Space button's menu and ⌃⇧N does
 # nothing; on again, ⌃⇧N opens one (#1636). Its switch: Settings' General section, then ⌘W.
 # Settings opens again on the section it showed last, so General is clicked only the first time.
 new_note_switch() {
@@ -863,17 +875,20 @@ expect '^browser: command bar shown$' "⌘T didn't open the command bar after �
 none_since '^browser: new note https' "$pressed" || fail "⌃⇧N opened a note with New Note off"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
-post click 204 $((height - 25))
-expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View'), " \
-  "the footer's + didn't show its menu with New Note off"
+post click $(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)
+expect "^browser: menu shown \(.*, \)\{0,1\}$(cased 'New Space…, New Folder…, New Split View'), " \
+  "the Space button's menu didn't show with New Note off"
 grep '^browser: menu shown ' "$log" | tail -1 | grep -q "$(cased 'New Note')" &&
-  fail "the footer's + offered New Note while it's off: $(grep '^browser: menu shown ' "$log" | tail -1)"
+  fail "the Space button's menu offered New Note while it's off: $(grep '^browser: menu shown ' "$log" | tail -1)"
 expect '^browser: menu window at ' "the menu's window didn't take the keyboard"
 send key escape
-expect '^browser: menu closed$' "escape didn't close the footer's menu"
+expect '^browser: menu closed$' "escape didn't close the Space button's menu"
 new_note_switch on
 send key n ctrl shift
 expect '^browser: new note https://notion\.new$' "⌃⇧N didn't open a note once New Note was on again"
-exec 3>&-
+# Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit asked
+# then finds it ending, which the Mac answers with an error (#3870).
 quit
-echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Clear Browsing Data from the command bar is a pick, kept in the profile's folder, which the dialog's Delete takes with the history; Settings › General sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms, with what the app kept in its folder; a profile no Space is in is deleted from the menu, its favorite with it, once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space; each profile's New Note opens its own service's page, by ⌃⇧N, the command bar, the footer's + and New Note Split beside the page, and with its switch in Settings off, the + menu has no New Note and ⌃⇧N does nothing until it's on again. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/clear-browsing-data-deleted.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png, $out/settings-new-note.png, $out/new-note-split.png, $out/settings-new-note-off.png.$profile_icon"
+exec 5>&-
+rm -rf "$scratch"
+echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Clear Browsing Data from the command bar is a pick, kept in the profile's folder, which the dialog's Delete takes with the history; Settings › General sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms, with what the app kept in its folder; a profile no Space is in is deleted from the menu, its favorite with it, once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space; each profile's New Note opens its own service's page, by ⌃⇧N, the command bar, the Space button's menu and New Note Split beside the page, and with its switch in Settings off, the Space button's menu has no New Note and ⌃⇧N does nothing until it's on again. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/clear-browsing-data-deleted.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png, $out/settings-new-note.png, $out/new-note-split.png, $out/settings-new-note-off.png.$profile_icon"

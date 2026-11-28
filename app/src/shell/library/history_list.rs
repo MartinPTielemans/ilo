@@ -146,7 +146,7 @@ pub(super) fn day_span(day: NaiveDate) -> Option<(i64, i64)> {
 /// When a History row's tab closed or its page was visited, under its day's heading: the time
 /// today and yesterday, with the weekday this week and last, and the date before. Times are on the
 /// system's clock, 12- or 24-hour (`twelve`).
-pub(super) fn history_when(at: f64, starts: [f64; 4], twelve: bool) -> String {
+pub(in crate::shell) fn history_when(at: f64, starts: [f64; 4], twelve: bool) -> String {
     let Some(time) = Local.timestamp_millis_opt(at as i64).single() else {
         return String::new();
     };

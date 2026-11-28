@@ -5,7 +5,8 @@
 
 use std::time::Instant;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
+    collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
@@ -16,24 +17,16 @@ use gpui::{
     Entity, Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState,
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
     RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
-    canvas, div, img, list, point, prelude::*, px, relative, svg,
+    canvas, deferred, div, img, list, point, prelude::*, px, relative, svg,
 };
 
 use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry,
-    NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, SECONDARY,
-    SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
-    URL_BUTTON_SIZE, What,
-    access::Accessible,
-    clear_label, dashed_square,
-    display_face::display_text,
-    divider_box, favicon, file_url, folder_icon,
-    header::TipSide,
-    host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn,
-    space_order::{Along, DraggedSpace},
-    split_plate, spring_to,
-    task_cards::number as task_number,
-    title,
+    NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, SECONDARY, Shell,
+    Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What, access::Accessible,
+    clear_label, dashed_square, display_face::display_text, divider_box, favicon, file_url,
+    folder_icon, header::TipSide, host, keystroke_label, plate, row_box, selected_plate,
+    space_order::DraggedSpace, split_plate, spring_to, task_cards::number as task_number, title,
 };
 use crate::agents::task::{ArchivedTask, TaskAction};
 use crate::tokens::shell::EMOJI_SIZE;
@@ -111,7 +104,6 @@ use crate::tokens::shell::library::CARD_FIELD_HEIGHT;
 use crate::tokens::shell::library::CARD_FIELD_INSET;
 use crate::tokens::shell::library::CARD_FIELD_PLATE;
 use crate::tokens::shell::library::CARD_FIELD_RADIUS;
-use crate::tokens::shell::library::CARD_GAP;
 use crate::tokens::shell::library::CARD_NAME_COLOR;
 use crate::tokens::shell::library::CARD_NAME_GAP;
 use crate::tokens::shell::library::CARD_NAME_HEIGHT;
@@ -128,6 +120,7 @@ use crate::tokens::shell::library::PLUS_SIZE;
 use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
+use crate::tokens::shell::library::{CARD_GAP, CARD_LIFT_SCALE};
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
 use crate::tokens::shell::{
@@ -231,13 +224,16 @@ pub struct Archived {
     pub archived: f64,
     /// Whether it closed in a Little ilo window, which the archive's filter picks out (Arc).
     pub little: bool,
+    /// The Space it closed in, or 0 once that Space is gone: its profile's empty window lists it.
+    pub space: u64,
 }
 
 mod board_list;
 mod history_list;
 pub(super) mod keys;
 pub use history_list::Visited;
-use history_list::{History, Pointed, history_time, history_when};
+pub(in crate::shell) use history_list::history_when;
+use history_list::{History, Pointed, history_time};
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
 /// its first.
@@ -760,6 +756,15 @@ impl Shell {
         !self.private || matches!(section, Section::Media | Section::Downloads)
     }
 
+    /// The section the Library opens on, by any way in: the last it showed, or a private window's
+    /// downloads where that's a section it hasn't.
+    pub(super) fn opening_section(&self) -> Section {
+        match self.has_section(self.section) {
+            true => self.section,
+            false => Section::Downloads,
+        }
+    }
+
     /// The downloads changed, all of them, newest first: the window keeps those it lists.
     pub fn set_downloads(&mut self, downloads: Vec<Download>, cx: &mut Context<Self>) {
         let downloads: Vec<Download> = downloads
@@ -1039,12 +1044,8 @@ impl Shell {
         if open == self.library_open || (open && (self.page_fullscreen || self.blank)) {
             return;
         }
-        // A private window's Library opens on its downloads where it last showed a section it
-        // hasn't.
-        if open && !self.has_section(self.section) {
-            self.section = Section::Downloads;
-        }
         if open {
+            self.section = self.opening_section();
             self.hide_link(cx);
         }
         let speed = self.library_step().map_or(0., |(_, speed)| speed);
@@ -2223,16 +2224,20 @@ impl Shell {
     /// order, and the + after them, which scroll across together if they don't fit (`card_strip`),
     /// clipped at the Library's edge.
     fn space_cards(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // A card dragged by its handle dims in its place, and the cards glide to their places once
-        // the Spaces' order changes, as the switcher's dots do (#1580).
+        // The card dragged follows the pointer along the row, over the others, which spring aside
+        // to make room, and settle where it lands (#4452).
         let cards: Vec<_> = self
             .spaces
             .iter()
             .map(|space| {
                 let id = space.id;
-                self.space_card(space, cx)
-                    .left(px(self.space_slide(Along::Cards, id)))
-                    .when(self.space_dragged(id), |card| card.opacity(SPACE_DRAGGED))
+                let card = self.space_card(space, cx).left(px(self.space_shift(id)));
+                match self.space_lifted(id) {
+                    true => deferred(super::scaled::scaled_from_middle(card, CARD_LIFT_SCALE))
+                        .with_priority(1)
+                        .into_any_element(),
+                    false => card.into_any_element(),
+                }
             })
             .collect();
         let plus = div()
@@ -2295,11 +2300,10 @@ impl Shell {
             )
             .on_drag_move(
                 cx.listener(|shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
-                    shell.drag_space_over(Along::Cards, event, cx)
+                    shell.drag_space_over(event, cx)
                 }),
             )
-            .children(self.space_drop_line(Along::Cards))
-            .child(self.space_drop_listener(Along::Cards, cx));
+            .child(self.space_drop_listener(cx));
         self.with_card_keys(cards, cx)
     }
 
@@ -2310,8 +2314,7 @@ impl Shell {
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
         let palette = self.palette_of(id);
-        let height = f32::from(self.viewport.height);
-        let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
+        let tint = self.space_tint_layer(id, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
                 let clear = clear_label(&palette, palette.tertiary());
@@ -2380,7 +2383,7 @@ impl Shell {
             }
         });
         let rows: Vec<_> = rows.collect();
-        let field = self.card_field(space, &palette, Hsla::from(palette.underlay), cx);
+        let field = self.card_field(space, &palette, cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
         let half = URL_BUTTON_SIZE / 2.;
@@ -2408,6 +2411,7 @@ impl Shell {
                     shell.space_menu(id, event.position, cx)
                 }),
             )
+            .child(self.said_place("more", id))
             .child(
                 svg()
                     .path("icons/ellipsis.svg")
@@ -2422,7 +2426,7 @@ impl Shell {
             .overflow_hidden()
             .rounded(px(CARD_RADIUS))
             .bg(palette.underlay)
-            .child(glow)
+            .child(tint)
             .shadow(Level::Resting.shadow())
             .block_mouse_except_scroll()
             .on_click(cx.listener(move |shell, _, _, cx| shell.pick_space(id, cx)))
@@ -2456,11 +2460,37 @@ impl Shell {
                             .border_color(palette.accent)
                     }),
             )
+            .child(self.said_place("card", id))
             .child(field)
             .child(div().children(rows))
             .child(more)
             .child(self.card_handle(id, &palette, cx));
         self.card_keyed(card, id, space.name.clone())
+    }
+
+    /// Over its parent, says where `what` of `space`'s card is drawn, once the column is at rest
+    /// and again when it moves: check.sh points there, never where it sums the layout to be, and
+    /// the lib tests hold the layout.
+    fn said_place(&self, what: &'static str, space: u64) -> impl IntoElement + use<> {
+        let places = self.card_places.clone();
+        let at_rest = !self.library_moving() && self.library_resize.is_none();
+        canvas(
+            move |bounds, _, _| {
+                if at_rest && places.borrow_mut().insert((what, space), bounds) != Some(bounds) {
+                    // check.sh reads this line.
+                    log!(
+                        "browser: library {what} {space} at {} {} {} {}",
+                        f32::from(bounds.origin.x).round(),
+                        f32::from(bounds.origin.y).round(),
+                        f32::from(bounds.size.width).round(),
+                        f32::from(bounds.size.height).round(),
+                    );
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
     }
 
     /// The handle at the card's foot, on the •••'s line and as far in from the card's left (Arc),
@@ -2488,12 +2518,27 @@ impl Shell {
             .opacity(0.)
             .group_hover("space-card", |style| style.opacity(1.))
             .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // GPUI holds the handle where it was pressed; the card is held that far into it.
-            .on_drag(DraggedSpace, move |_, grab, _, cx| {
-                let grab = CARD_MORE_X - half + f32::from(grab.x);
-                Shell::start_space_drag(&shell, id, Along::Cards, CARD_WIDTH, grab, cx)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                    shell.space_press = Some(f32::from(event.position.x));
+                    cx.stop_propagation()
+                }),
+            )
+            // GPUI's offset is where the pointer is as the drag starts, which a flick's first move
+            // already has far from the press: the card is held where the press was.
+            .on_drag(DraggedSpace, move |_, offset, window, cx| {
+                let now = f32::from(window.mouse_position().x);
+                let handle = now - f32::from(offset.x);
+                let pressed = shell
+                    .read_with(cx, |shell, _| shell.space_press)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(now);
+                let grab = CARD_MORE_X - half + (pressed - handle);
+                Shell::start_space_drag(&shell, id, CARD_WIDTH, grab, cx)
             })
+            .child(self.said_place("handle", id))
             .child(
                 svg()
                     .path("icons/grip-vertical.svg")
@@ -2502,31 +2547,10 @@ impl Shell {
             )
     }
 
-    /// The card dragged by its handle, whole, as it follows the pointer, lifted with a popover's
-    /// shadow as a card's dragged tab is. GPUI draws the drag from the handle's corner, so the
-    /// card hangs from there.
-    pub(super) fn space_card_ghost(
-        &self,
-        space: u64,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let space = self.spaces.iter().find(|each| each.id == space)?;
-        let height = f32::from(self.viewport.height) - 2. * SPACES_INSET;
-        let half = URL_BUTTON_SIZE / 2.;
-        let card = self
-            .space_card(space, cx)
-            .absolute()
-            .left(px(half - CARD_MORE_X))
-            .top(px(CARD_MORE_Y + half - height))
-            .h(px(height))
-            .shadow(Level::Popover.shadow());
-        Some(div().child(card).into_any_element())
-    }
-
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
     /// picker hangs from, its name, which a click puts in a field there to type over, and the
-    /// brush, which the theme picker opens beside. `behind` is the card's colour at its top, for
-    /// the swatch of a Space with no icon. At rest it's the icon and the name alone; its plate, the
+    /// brush, which the theme picker opens beside. A Space with no glyph shows its first letter in
+    /// the icon's place. At rest it's the icon and the name alone; its plate, the
     /// slot's dashes and the brush show with the pointer anywhere on the field, the slot and the
     /// brush too, at once as other hover plates do, and while the name is being typed over (#811)
     /// or a picker shows for the Space. They keep their places at rest, so nothing moves as they
@@ -2536,7 +2560,6 @@ impl Shell {
         &self,
         space: &Space,
         palette: &Palette,
-        behind: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let id = space.id;
@@ -2545,13 +2568,9 @@ impl Shell {
             .as_ref()
             .filter(|renaming| renaming.naming == Naming::Space(id) && renaming.in_library);
         let held = renaming.is_some() || self.card_picking(id);
-        // A Space without an icon shows its swatch in the icon's place.
-        let icon = space_icon_drawn(palette, &space.icon).unwrap_or_else(|| {
-            palette
-                .swatch
-                .draw(SPACE_SWATCH_SHOWN, &[behind.to_rgb()])
-                .into_any_element()
-        });
+        // A Space without a glyph, or with an emoji kept from before, shows its first letter there.
+        let ink = palette.text(super::SPACE_NAME);
+        let icon = crate::space_icon::mark(&space.icon, &space.name, super::SPACE_GLYPH, ink);
         let frames = self.slot_frames.clone();
         let slot = div()
             .id(("space-icon-slot", id))
@@ -2607,6 +2626,7 @@ impl Shell {
                     })
                     .child(dashed_square(palette.glyph(CARD_SLOT_DASH)).size_full()),
             )
+            .child(self.said_place("slot", id))
             .child(icon);
         let name = match renaming {
             // A click in the field places the caret, and mustn't reach the card.
@@ -2628,6 +2648,8 @@ impl Shell {
                     cx.stop_propagation();
                     shell.rename_space_in_card(id, window, cx);
                 }))
+                .relative()
+                .child(self.said_place("name", id))
                 .child(div().truncate().child(space.name.clone())),
         };
         let brushes = self.brush_frames.clone();
@@ -2659,6 +2681,7 @@ impl Shell {
                     shell.edit_space_theme_in_card(id, cx);
                 }
             }))
+            .child(self.said_place("brush", id))
             .child(
                 canvas(
                     move |bounds, _, _| {
@@ -2716,6 +2739,7 @@ impl Shell {
                     .text_size(px(text::BODY))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(log_drawn)
+                    .child(self.said_place("field", id))
                     .child(slot)
                     .child(name)
                     .child(brush),
@@ -2738,7 +2762,7 @@ impl Shell {
     fn card_ghost(&self, dragged: CardTab) -> AnyElement {
         let CardTab { tab, space, depth } = dragged;
         let palette = self.palette_of(space);
-        let behind = Hsla::from(self.space_color_at(space, 0.5, 0.));
+        let behind = Hsla::from(self.space_color_of(space));
         let behind = Hsla::from(palette.underlay).blend(behind);
         let label = title(&palette, self.title(tab), true).pr(px(PLATE_INSET));
         // A row lifted off its card, not the shown tab, so never Developer Mode's firmer fill.
@@ -4683,6 +4707,9 @@ fn card_row(depth: usize, plate: impl IntoElement) -> AnyElement {
         .into_any_element()
 }
 
+/// Where each part of each Space card was last drawn at rest, by its name and the card's Space.
+pub(super) type Places = Rc<RefCell<HashMap<(&'static str, u64), Bounds<Pixels>>>>;
+
 /// Where a card's left edge is in the Spaces section, the `index`th from the Library's left.
 fn card_x(index: usize) -> f32 {
     COLUMN_WIDTH + SPACES_LEFT + index as f32 * (CARD_WIDTH + CARD_GAP)
@@ -5089,6 +5116,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little: false,
+            space: 0,
         };
         shell.update(cx, |shell, cx| shell.set_archive(vec![tab], cx));
         assert_eq!(menu(cx), [("Clear Archive".into(), true)]);
@@ -5190,6 +5218,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little,
+            space: 0,
         };
         shell.update(cx, |shell, cx| {
             shell.section = Section::Archive;
@@ -5870,12 +5899,7 @@ mod tests {
             set_transparency(level);
             for tone in [Tone::Dark, Tone::Light] {
                 let palette = Palette::of(None, tone);
-                let mut window = Vec::new();
-                for foot in 0..=4 {
-                    for far in 0..=4 {
-                        window.extend(palette.window_at(foot as f32 / 4., far as f32 / 4.));
-                    }
-                }
+                let window = palette.window();
                 let red = gpui::Rgba::from(
                     palette.toned(gpui::rgba(DARK_DESTRUCTIVE), gpui::rgba(LIGHT_DESTRUCTIVE)),
                 );

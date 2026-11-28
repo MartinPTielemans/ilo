@@ -686,7 +686,7 @@ impl Shell {
         });
         // check.sh finds the front card's buttons from where it's drawn.
         let listener = front.then(|| card_listener("media player", &self.media_drawn, tab));
-        let fill = self.window_fill_at(1.).blend(self.palette.plate(TILE));
+        let fill = self.window_fill().blend(self.palette.plate(TILE));
         let card = div()
             .id(("media-player", tab))
             .rounded(px(TILE_RADIUS))

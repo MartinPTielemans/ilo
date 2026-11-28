@@ -787,6 +787,15 @@ send key tab
 expect '^browser: command bar asks an agent$' "⇥ didn't make a task with threads on"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
+# With nothing typed ⇥ opens the composer too, and ⇥ again goes back to search (#4393).
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send key tab
+expect '^browser: command bar asks an agent$' "⇥ in the empty field didn't open the composer"
+send key tab
+expect '^browser: command bar leaves the ask$' "⇥ in the empty composer didn't go back to search"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send menu Settings…
 expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
 settings_drew Threads

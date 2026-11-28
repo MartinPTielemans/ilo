@@ -16,15 +16,16 @@ use std::{rc::Rc, time::Duration};
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, Global, Hsla,
     KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, Radians, Rgba, Role, SharedString, Subscription, Task, TitlebarOptions,
-    Transformation, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    Pixels, Point, Radians, Rgba, Role, ScrollEvent, SharedString, Subscription, Task,
+    TitlebarOptions, Transformation, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
     elevation::Reach,
     list_keys::TypeAhead,
-    shell::{MenuEntry, Shell, keystroke_label},
+    shell::{MenuEntry, Shell, keystroke_label, row_spring},
+    sortable::{self, Sent},
     text_input::{self, FieldMenu, TextInput},
 };
 
@@ -88,14 +89,19 @@ impl Highlight {
         }
     }
 
-    /// The row under the pointer or the keys in a `light` or dark menu: a neutral plate in the
-    /// label's ink, never the Space's accent (#4090), under the label in its whole ink.
+    /// The row under the pointer or the keys in a `light` or dark menu: the flat plate in the
+    /// label's ink (#4402), never the Space's accent (#4090), under the label in its whole ink.
     pub fn plate(light: bool) -> Self {
         let ink = rgba(if light { LIGHT_LABEL } else { DARK_LABEL });
+        let plate = if light {
+            crate::tokens::selected::plate::LIGHT
+        } else {
+            crate::tokens::selected::plate::DARK
+        };
         Highlight {
-            fill: Rgba { a: PLATE, ..ink },
+            fill: Rgba { a: plate, ..ink },
             pressed: Rgba {
-                a: PLATE_PRESSED,
+                a: plate + PRESSED_STEP,
                 ..ink
             },
             label: Rgba { a: 1., ..ink },
@@ -275,6 +281,38 @@ pub struct Request {
     pub look: Look,
     /// Called once it closes, with how it closed.
     pub chosen: Chosen,
+    /// What it tells of its rows reordered (`MenuEntry::reorders`), where they can be.
+    pub reorder: Option<Reorder>,
+}
+
+/// How a menu tells of its rows reordered by a drag along them (#4440), which it does itself: the
+/// rows are in their new order as it's let go, and the menu stays open.
+#[derive(Clone)]
+pub struct Reorder {
+    /// `item` was let go after `after`, or first of the run if None, both by their index among
+    /// the items asked for.
+    pub moved: Rc<dyn Fn(usize, Option<usize>, &mut App)>,
+    /// ⌘Z, which undoes the last move the menu made, as it's open: the rows go back, and so does
+    /// whatever `moved` did.
+    pub undo: Rc<dyn Fn(&mut App)>,
+}
+
+/// Set for the next menu shown, which tells of its rows reordered (`reorder_next`).
+struct ReorderNext(Reorder);
+
+impl Global for ReorderNext {}
+
+/// Makes the next menu shown one that tells of its rows reordered, as the Space button's does.
+pub fn reorder_next(reorder: Reorder, cx: &mut App) {
+    cx.set_global(ReorderNext(reorder));
+}
+
+fn take_reorder(cx: &mut App) -> Option<Reorder> {
+    let next = cx.try_global::<ReorderNext>().map(|next| next.0.clone());
+    if next.is_some() {
+        cx.remove_global::<ReorderNext>();
+    }
+    next
 }
 
 pub type Chosen = Box<dyn FnOnce(Closed, &mut App)>;
@@ -364,6 +402,52 @@ pub(crate) struct Level {
     tops: Vec<f32>,
     /// Whether a column for checks comes before the titles: a level of choices, in quiet rows.
     checks: bool,
+    /// The run of rows that scroll, where it's longer than `SCROLL_ROWS`.
+    scroll: Option<Scroll>,
+}
+
+/// A run of rows marked `scrolls` that shows `SCROLL_ROWS` of them at a time, as the Space
+/// button's menu shows its Spaces, with the rows after it kept in place under it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Scroll {
+    /// The run's first and last rows, in the level.
+    first: usize,
+    last: usize,
+    /// Where the run starts, from the panel's top, how tall it shows and how tall it is.
+    top: f32,
+    shown: f32,
+    whole: f32,
+    /// How far down it's scrolled.
+    by: f32,
+}
+
+impl Scroll {
+    fn holds(&self, row: usize) -> bool {
+        (self.first..=self.last).contains(&row)
+    }
+
+    /// Scrolled by `by`, as far as the run goes.
+    fn to(mut self, by: f32) -> Scroll {
+        self.by = by.clamp(0., self.whole - self.shown);
+        self
+    }
+}
+
+/// The run of `heights`' rows marked to scroll, its first and last, how tall `SCROLL_ROWS` of them
+/// are and how tall it is, where it's longer than that.
+fn scroll_run(heights: &[(bool, f32)]) -> Option<(usize, usize, f32, f32)> {
+    let first = heights.iter().position(|&(scrolls, _)| scrolls)?;
+    let last = first
+        + heights[first..]
+            .iter()
+            .take_while(|&&(scrolls, _)| scrolls)
+            .count()
+        - 1;
+    let run = &heights[first..=last];
+    (run.len() > SCROLL_ROWS as usize).then(|| {
+        let shown = run.iter().take(SCROLL_ROWS as usize).map(|&(_, h)| h).sum();
+        (first, last, shown, run.iter().map(|&(_, h)| h).sum())
+    })
 }
 
 /// How tall `entry` stands in its level, a line or a row, quiet in a level of choices.
@@ -379,6 +463,28 @@ fn row_height(entry: &MenuEntry, choices: bool) -> f32 {
 }
 
 impl Level {
+    /// Whether row `at` takes the pointer at `point`: under it, and where the run of rows that
+    /// scroll shows, if it's one of them.
+    fn takes(&self, at: usize, point: Point<Pixels>, entries: &[MenuEntry]) -> bool {
+        let shows = self
+            .scroll
+            .filter(|scroll| scroll.holds(at))
+            .is_none_or(|scroll| {
+                let y = f32::from(point.y - self.bounds.origin.y);
+                (scroll.top..scroll.top + scroll.shown).contains(&y)
+            });
+        shows && self.row_bounds(at, entries).contains(&point)
+    }
+
+    /// The run scrolled as far as keeps row `at` in sight, if it's one of the run's.
+    fn revealing(&self, at: usize, entries: &[MenuEntry]) -> Option<Scroll> {
+        let scroll = self.scroll.filter(|scroll| scroll.holds(at))?;
+        let top = self.tops[at] - scroll.top;
+        let bottom = top + row_height(&entries[self.items[at]], self.checks);
+        let by = scroll.by.min(top).max(bottom - scroll.shown);
+        Some(scroll.to(by))
+    }
+
     /// The panel's corner and its rows', quiet in a level of choices.
     fn radii(&self) -> (f32, f32) {
         match self.checks {
@@ -389,7 +495,8 @@ impl Level {
 
     fn row_bounds(&self, at: usize, entries: &[MenuEntry]) -> Bounds<Pixels> {
         let height = row_height(&entries[self.items[at]], self.checks);
-        let origin = self.bounds.origin + point(px(PADDING), px(self.tops[at]));
+        let by = (self.scroll.filter(|scroll| scroll.holds(at))).map_or(0., |scroll| scroll.by);
+        let origin = self.bounds.origin + point(px(PADDING), px(self.tops[at] - by));
         Bounds::new(
             origin,
             size(self.bounds.size.width - px(2. * PADDING), px(height)),
@@ -475,7 +582,9 @@ fn panel_width(
     let lead = lead + if swatches { SWATCH + GAP } else { 0. };
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
-    let icons = items.iter().any(|&at| entries[at].icon.is_some());
+    let icons = (items.iter()).any(|&at| {
+        entries[at].icon.is_some() || entries[at].mark.is_some() || entries[at].maker_mark.is_some()
+    });
     let lead = lead + if icons { ICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
     let out = items.iter().any(|&at| entries[at].out);
@@ -515,13 +624,26 @@ fn marked(entry: &MenuEntry) -> bool {
     entry.checked || entry.stays.is_some()
 }
 
+/// How wide the menu of `entries` is, without its submenus, as `lay_out` makes its panel in
+/// `window`'s text, for a menu that hangs from a control by its right edge.
+pub(crate) fn root_width(entries: &[MenuEntry], window: &Window) -> f32 {
+    let items: Vec<usize> = (0..entries.len())
+        .filter(|&at| entries[at].parent.is_none() && !entries[at].alternate)
+        .collect();
+    let checks = items.iter().any(|&at| marked(&entries[at]));
+    panel_width(entries, &items, checks, &measure(window))
+}
+
 /// How tall the menu of `entries` is, without its submenus, as `lay_out` stacks its rows and lines,
 /// so a control can open it with its foot where it wants.
 pub(crate) fn height(entries: &[MenuEntry]) -> f32 {
     let top = (entries.iter()).filter(|entry| entry.parent.is_none() && !entry.alternate);
     let choices = top.clone().any(marked);
-    let rows: f32 = top.map(|entry| row_height(entry, choices)).sum();
-    PADDING + rows + PADDING
+    let heights: Vec<(bool, f32)> =
+        (top.map(|entry| (entry.scrolls, row_height(entry, choices)))).collect();
+    let rows: f32 = heights.iter().map(|&(_, height)| height).sum();
+    let hidden = scroll_run(&heights).map_or(0., |(_, _, shown, whole)| whole - shown);
+    PADDING + rows - hidden + PADDING
 }
 
 /// Lays `entries` out as a menu with its top left at `at`, flipping up or left where `area` has
@@ -561,11 +683,34 @@ fn lay_out_wide(
             .collect();
         let checks =
             items.iter().any(|&item| marked(&entries[item])) || (choices && parent.is_none());
+        let heights: Vec<(bool, f32)> = (items.iter())
+            .map(|&item| (entries[item].scrolls, row_height(&entries[item], checks)))
+            .collect();
+        let run = scroll_run(&heights);
         let mut tops = Vec::with_capacity(items.len());
         let mut y = PADDING;
-        for &item in &items {
+        let mut scroll = None;
+        for (row, &(_, height)) in heights.iter().enumerate() {
+            if let Some((first, _, shown, whole)) = run
+                && row == first
+            {
+                scroll = Some(Scroll {
+                    first,
+                    last: run.map_or(first, |run| run.1),
+                    top: y,
+                    shown,
+                    whole,
+                    by: 0.,
+                });
+            }
             tops.push(y);
-            y += row_height(&entries[item], checks);
+            y += height;
+            // The rows after the run stand under what it shows.
+            if let Some((_, last, shown, whole)) = run
+                && row == last
+            {
+                y -= whole - shown;
+            }
         }
         let width = panel_width(entries, &items, checks, width_of);
         let width = if parent.is_none() {
@@ -614,6 +759,7 @@ fn lay_out_wide(
             bounds,
             tops,
             checks,
+            scroll,
         });
     }
     let frame = framed(&levels, crate::elevation::menu_reach());
@@ -675,6 +821,8 @@ pub(crate) enum Outcome {
     Pick(usize),
     Escape,
     ReleasedOutside,
+    /// A row was let go in the open slot of its run (#4440): after the row, or first if none.
+    Moved(usize, Option<usize>),
 }
 
 /// An open level and the item highlighted in it.
@@ -701,6 +849,44 @@ pub(crate) struct Tracking {
     /// Since when the pointer has rested in the safe triangle, keeping the submenu open.
     resting: Option<Instant>,
     typed: TypeAhead,
+    /// The rows that reorder, as they're dragged (#4440).
+    sorting: Sorting,
+}
+
+/// A run of rows that reorder, held and sent aside as the pointer drags one of them along it
+/// (`sortable`, on y), and the moves made, for ⌘Z.
+#[derive(Default)]
+pub(crate) struct Sorting {
+    /// Whether the menu's rows can be reordered.
+    pub(crate) on: bool,
+    /// When the springs of what's sent start: now, or long ago under Reduce Motion.
+    pub(crate) start: Option<Instant>,
+    grab: Option<Grab>,
+    held: Option<Held>,
+    sent: Sent<usize>,
+    /// Each move made, as the item and the row of its run it followed before it.
+    moves: Vec<(usize, Option<usize>)>,
+    /// When the last frame stepped what scrolls under a held row.
+    last: Option<Instant>,
+}
+
+/// A row of the run pressed, which a drag past the slop holds.
+#[derive(Clone, Copy)]
+struct Grab {
+    item: usize,
+    press: Point<Pixels>,
+    /// How far under its top the press was.
+    offset: f32,
+}
+
+/// A row of the run held by the pointer, which follows it along y.
+#[derive(Clone, Copy)]
+struct Held {
+    item: usize,
+    y: Pixels,
+    offset: f32,
+    /// The gap among the run's others its middle is over.
+    slot: usize,
 }
 
 /// Whether `at` is inside the triangle `a`, `b`, `c`.
@@ -720,11 +906,17 @@ pub(crate) fn in_triangle(
 }
 
 impl Tracking {
-    pub(crate) fn new(entries: Vec<MenuEntry>, layout: Layout, at: Point<Pixels>) -> Self {
+    pub(crate) fn new(entries: Vec<MenuEntry>, mut layout: Layout, at: Point<Pixels>) -> Self {
         // A pop-up's menu opens with its current item highlighted.
         let over = (layout.levels[0].items.iter().copied()).find(|&item| {
             entries[item].over && entries[item].enabled && !entries[item].title.is_empty()
         });
+        // A run of rows that scrolls opens with its checked one in sight.
+        let root = &layout.levels[0];
+        let checked = (root.items.iter()).position(|&item| entries[item].checked);
+        if let Some(scroll) = checked.and_then(|row| root.revealing(row, &entries)) {
+            layout.levels[0].scroll = Some(scroll);
+        }
         Tracking {
             entries,
             layout,
@@ -737,6 +929,7 @@ impl Tracking {
             pointer: Some(at),
             resting: None,
             typed: TypeAhead::default(),
+            sorting: Sorting::default(),
         }
     }
 
@@ -773,8 +966,7 @@ impl Tracking {
             if !level.bounds.contains(&at) {
                 continue;
             }
-            let row = (0..level.items.len())
-                .find(|&row| level.row_bounds(row, &self.entries).contains(&at));
+            let row = (0..level.items.len()).find(|&row| level.takes(row, at, &self.entries));
             return match row {
                 Some(row)
                     if !self.entries[level.items[row]].title.is_empty()
@@ -864,6 +1056,12 @@ impl Tracking {
         if let Some(press) = self.press.as_mut() {
             press.get_or_insert(at);
         }
+        // A row of the run held follows the pointer, which highlights nothing and opens nothing.
+        if self.hold(at) {
+            self.pointer = Some(at);
+            self.resting = None;
+            return false;
+        }
         // A move to where the pointer already is, as AppKit can deliver one move twice, isn't one:
         // it would end a rest in the triangle before its time.
         if self.pointer == Some(at) {
@@ -905,6 +1103,7 @@ impl Tracking {
         self.pointer = Some(at);
         self.resting = None;
         self.point_at(at);
+        self.sorting.grab = self.grab_at(at);
         true
     }
 
@@ -912,6 +1111,12 @@ impl Tracking {
     /// the press that opened the menu, which outside closes it. The release of a click that opened
     /// it picks nothing, as AppKit's menus and pop-ups leave theirs open.
     pub(crate) fn released(&mut self, at: Point<Pixels>) -> Outcome {
+        self.sorting.grab = None;
+        if let Some(held) = self.sorting.held.take() {
+            self.press = None;
+            self.pressed = false;
+            return self.drop_held(Held { y: at.y, ..held }, at);
+        }
         let opening = self.press.take();
         let pressed = std::mem::replace(&mut self.pressed, false);
         match opening {
@@ -982,6 +1187,10 @@ impl Tracking {
             self.type_select(c, now);
             return Outcome::Stay;
         }
+        if key == Key::Escape && self.sorting.held.is_some() {
+            self.put_back();
+            return Outcome::Stay;
+        }
         let (k, items) = self.deepest();
         let current = self.open[k]
             .highlight
@@ -1029,7 +1238,336 @@ impl Tracking {
             }
             Key::Char(_) => {}
         }
+        self.reveal();
         Outcome::Stay
+    }
+
+    /// The root level's run of rows that reorder, its first and last position among its items.
+    fn sortable_run(&self) -> Option<(usize, usize)> {
+        let items = &self.layout.levels[0].items;
+        let first = items.iter().position(|&item| self.entries[item].reorders)?;
+        let count = (items[first..].iter())
+            .take_while(|&&item| self.entries[item].reorders)
+            .count();
+        Some((first, first + count - 1))
+    }
+
+    /// How tall each row of the run is, and where it starts along the run, from the panel's top.
+    fn run_cells(&self, first: usize) -> (f32, f32) {
+        let level = &self.layout.levels[0];
+        let pitch = row_height(&self.entries[level.items[first]], level.checks);
+        (pitch, level.tops[first])
+    }
+
+    /// `y`, in the browser window's content, as a distance along the run from the panel's top: the
+    /// run is scrolled across its box.
+    fn along_run(&self, y: Pixels) -> f32 {
+        let level = &self.layout.levels[0];
+        f32::from(y - level.bounds.origin.y) + level.scroll.map_or(0., |scroll| scroll.by)
+    }
+
+    /// The row of the run under a press at `at`, if it reorders and the menu can.
+    fn grab_at(&self, at: Point<Pixels>) -> Option<Grab> {
+        let Hit::Row(0, item) = self.hit(at) else {
+            return None;
+        };
+        self.sortable_run()?;
+        let at_row = self.layout.levels[0]
+            .items
+            .iter()
+            .position(|&each| each == item)?;
+        (self.sorting.on && self.entries[item].reorders).then(|| Grab {
+            item,
+            press: at,
+            offset: self.along_run(at.y) - self.layout.levels[0].tops[at_row],
+        })
+    }
+
+    /// Where the row held is drawn, how far under its place, with the pointer where it is.
+    fn held_offset(&self, held: Held) -> f32 {
+        let Some((first, last)) = self.sortable_run() else {
+            return 0.;
+        };
+        let Some(at) = (self.layout.levels[0].items.iter()).position(|&item| item == held.item)
+        else {
+            return 0.;
+        };
+        let (pitch, top) = self.run_cells(first);
+        let middle = sortable::held_middle(self.along_run(held.y), held.offset, pitch);
+        let (from, count) = (at - first, last - first + 1);
+        sortable::held_offset(middle, top, pitch, from)
+            .clamp(-(from as f32) * pitch, (count - 1 - from) as f32 * pitch)
+    }
+
+    /// How far under its place `item`'s row is drawn: with the pointer if it's the one held, else
+    /// where it's been sent and the way it still has to go.
+    pub(crate) fn row_offset(&self, item: usize) -> f32 {
+        match self.sorting.held.filter(|held| held.item == item) {
+            Some(held) => self.held_offset(held),
+            None => self.sorting.sent.drawn(item, row_spring),
+        }
+    }
+
+    /// Whether `item`'s row is the one held, which is drawn over the others.
+    pub(crate) fn is_held(&self, item: usize) -> bool {
+        self.sorting.held.is_some_and(|held| held.item == item)
+    }
+
+    /// The pointer moved to `at` with a row of the run pressed: past the slop it holds the row,
+    /// and the others make room as its middle passes theirs. Returns whether a row is held.
+    fn hold(&mut self, at: Point<Pixels>) -> bool {
+        let Some(grab) = self.sorting.grab else {
+            return false;
+        };
+        if self.sorting.held.is_none() {
+            let (dx, dy) = (
+                f32::from(at.x - grab.press.x),
+                f32::from(at.y - grab.press.y),
+            );
+            if dx.hypot(dy) <= DRAG_SLOP {
+                return false;
+            }
+            let (Some((first, _)), Some(from)) = (
+                self.sortable_run(),
+                (self.layout.levels[0].items.iter()).position(|&item| item == grab.item),
+            ) else {
+                return false;
+            };
+            self.sorting.held = Some(Held {
+                item: grab.item,
+                y: at.y,
+                offset: grab.offset,
+                slot: from - first,
+            });
+        }
+        if let Some(held) = self.sorting.held.as_mut() {
+            held.y = at.y;
+        }
+        self.aim();
+        true
+    }
+
+    /// The gap among the run's others the row held's middle is over, and every row sent aside
+    /// for it, if it changed.
+    fn aim(&mut self) {
+        let (Some(held), Some((first, last))) = (self.sorting.held, self.sortable_run()) else {
+            return;
+        };
+        let Some(at) = (self.layout.levels[0].items.iter()).position(|&item| item == held.item)
+        else {
+            return;
+        };
+        let (pitch, top) = self.run_cells(first);
+        let count = last - first + 1;
+        let middle = sortable::held_middle(self.along_run(held.y), held.offset, pitch);
+        let from = at - first;
+        let gap = sortable::gap_at(&vec![pitch; count], top, from, middle);
+        if gap == held.slot {
+            return;
+        }
+        let items: Vec<usize> = self.layout.levels[0].items[first..=last].to_vec();
+        let shifts = (sortable::shifts_for(count, from, gap, pitch).into_iter())
+            .map(|(at, by)| (items[at], by))
+            .collect();
+        let start = self.sorting.start.unwrap_or_else(Instant::now);
+        self.sorting
+            .sent
+            .send(items, shifts, None, start, row_spring);
+        if let Some(held) = self.sorting.held.as_mut() {
+            held.slot = gap;
+        }
+    }
+
+    /// The row held let go at `at`: into the open slot if that's elsewhere and the pointer is on
+    /// the menu, else back in its place with nothing moved.
+    fn drop_held(&mut self, held: Held, at: Point<Pixels>) -> Outcome {
+        let Some((first, _)) = self.sortable_run() else {
+            return Outcome::Stay;
+        };
+        let from = (self.layout.levels[0].items.iter())
+            .position(|&item| item == held.item)
+            .map(|at| at - first);
+        self.sorting.held = Some(held);
+        self.aim();
+        let slot = self.sorting.held.map_or(held.slot, |held| held.slot);
+        self.sorting.held = None;
+        let on_menu = self.layout.levels[0].bounds.contains(&at);
+        let drawn = self.held_offset(Held { slot, ..held });
+        if !on_menu || from == Some(slot) || from.is_none() {
+            self.send_home(held.item, drawn);
+            return Outcome::Stay;
+        }
+        let before = from
+            .and_then(|from| from.checked_sub(1))
+            .map(|before| self.layout.levels[0].items[first + before]);
+        match self.permute(held.item, slot, Some(drawn)) {
+            Some(after) => {
+                self.sorting.moves.push((held.item, before));
+                Outcome::Moved(held.item, after)
+            }
+            None => Outcome::Stay,
+        }
+    }
+
+    /// Esc while a row is held: it springs home from where the pointer had it, the others spring
+    /// back, and the release moves nothing.
+    fn put_back(&mut self) {
+        let Some(held) = self.sorting.held.take() else {
+            return;
+        };
+        let drawn = self.held_offset(held);
+        self.send_home(held.item, drawn);
+        // The release of that press is the drag's, not a pick of the row under it.
+        self.press = None;
+        self.pressed = false;
+        self.sorting.grab = None;
+    }
+
+    /// Every row of the run goes back to its place from where it's drawn, `item`'s from `drawn`.
+    fn send_home(&mut self, item: usize, drawn: f32) {
+        let Some((first, last)) = self.sortable_run() else {
+            return;
+        };
+        let items: Vec<usize> = self.layout.levels[0].items[first..=last].to_vec();
+        let start = self.sorting.start.unwrap_or_else(Instant::now);
+        self.sorting.sent.send(
+            items,
+            Default::default(),
+            Some((item, drawn)),
+            start,
+            row_spring,
+        );
+    }
+
+    /// Puts `item` in the gap `gap` among the run's others, its rows springing from where they're
+    /// drawn to their new places, `item` from `held` if the pointer was holding it. Returns the
+    /// row it now follows, None if it's first.
+    fn permute(&mut self, item: usize, gap: usize, held: Option<f32>) -> Option<Option<usize>> {
+        let (first, last) = self.sortable_run()?;
+        let (pitch, _) = self.run_cells(first);
+        let old: Vec<usize> = self.layout.levels[0].items[first..=last].to_vec();
+        let from = old.iter().position(|&each| each == item)?;
+        let mut new = old.clone();
+        new.remove(from);
+        let after = gap
+            .checked_sub(1)
+            .and_then(|before| new.get(before).copied());
+        new.insert(gap.min(new.len()), item);
+        let totals: Vec<f32> = (old.iter())
+            .map(|&each| match (each == item, held) {
+                (true, Some(held)) => held,
+                _ => self.sorting.sent.drawn(each, row_spring),
+            })
+            .collect();
+        let start = self.sorting.start.unwrap_or_else(Instant::now);
+        self.sorting.sent.to.clear();
+        for &each in &old {
+            self.sorting.sent.slides.remove(&each);
+        }
+        for (now, &each) in new.iter().enumerate() {
+            let was = old.iter().position(|&other| other == each)?;
+            let total = totals[was] + (was as f32 - now as f32) * pitch;
+            if total != 0. {
+                self.sorting.sent.slides.insert(each, (total, start));
+            }
+        }
+        self.layout.levels[0].items.splice(first..=last, new);
+        Some(after)
+    }
+
+    /// Whether ⌘Z has a move this menu made to undo.
+    pub(crate) fn can_undo(&self) -> bool {
+        self.sorting.held.is_none() && !self.sorting.moves.is_empty()
+    }
+
+    /// Puts the row the menu last moved back after the one it followed, its rows springing there.
+    pub(crate) fn undo_move(&mut self) -> bool {
+        let Some((item, before)) = self.sorting.moves.pop() else {
+            return false;
+        };
+        let Some((first, last)) = self.sortable_run() else {
+            return false;
+        };
+        let others: Vec<usize> = self.layout.levels[0].items[first..=last]
+            .iter()
+            .copied()
+            .filter(|&each| each != item)
+            .collect();
+        let gap = before
+            .and_then(|before| others.iter().position(|&each| each == before))
+            .map_or(0, |at| at + 1);
+        self.permute(item, gap, None).is_some()
+    }
+
+    /// Steps the rows' springs at `now`, and scrolls the run while a row held is at its top or
+    /// foot. Returns whether another frame is wanted.
+    pub(crate) fn step_sorting(&mut self, now: Instant) -> bool {
+        let mut again = false;
+        if let Some(held) = self.sorting.held {
+            again = true;
+            let dt = self
+                .sorting
+                .last
+                .map_or(0., |last| now.duration_since(last).as_secs_f32().min(0.05));
+            self.sorting.last = Some(now);
+            let level = &self.layout.levels[0];
+            if let (Some(scroll), Some((first, _))) = (level.scroll, self.sortable_run()) {
+                let (pitch, _) = self.run_cells(first);
+                let panel = f32::from(held.y - level.bounds.origin.y);
+                let middle = panel - held.offset + pitch / 2.;
+                let step = crate::sortable::edge_scroll(
+                    middle,
+                    scroll.top,
+                    scroll.shown,
+                    REORDER_SCROLL_EDGE,
+                    REORDER_SCROLL_SPEED,
+                    dt,
+                );
+                if step != 0. {
+                    let by = scroll.by + step;
+                    self.layout.levels[0].scroll = Some(scroll.to(by));
+                    self.aim();
+                }
+            }
+        } else {
+            self.sorting.last = None;
+        }
+        let (moving, _) = self.sorting.sent.step(row_spring);
+        again || moving
+    }
+
+    /// Scrolls each open level's run as far as keeps its highlighted row in sight.
+    fn reveal(&mut self) {
+        for open in &self.open {
+            let level = &self.layout.levels[open.level];
+            let row = (open.highlight).and_then(|item| level.items.iter().position(|&i| i == item));
+            if let Some(scroll) = row.and_then(|row| level.revealing(row, &self.entries)) {
+                self.layout.levels[open.level].scroll = Some(scroll);
+            }
+        }
+    }
+
+    /// Whether `at` is over a run of rows that scrolls, in an open level.
+    pub(crate) fn over_scroll(&self, at: Point<Pixels>) -> bool {
+        (self.open.iter()).any(|open| {
+            let level = &self.layout.levels[open.level];
+            level.scroll.is_some_and(|scroll| {
+                let y = f32::from(at.y - level.bounds.origin.y);
+                level.bounds.contains(&at) && (scroll.top..scroll.top + scroll.shown).contains(&y)
+            })
+        })
+    }
+
+    /// The run of rows under `at` scrolled `down` points further, and what's under the pointer
+    /// highlighted, as the rows moved under it.
+    pub(crate) fn scrolled(&mut self, at: Point<Pixels>, down: f32) {
+        for open in self.open.clone() {
+            let level = &mut self.layout.levels[open.level];
+            if let Some(scroll) = level.scroll.filter(|_| level.bounds.contains(&at)) {
+                level.scroll = Some(scroll.to(scroll.by + down));
+            }
+        }
+        self.point_at(at);
     }
 
     /// Type-to-select, as a list's type-ahead finds a row (list_keys.rs): in the deepest level,
@@ -1279,12 +1817,33 @@ struct Shown {
     alt: bool,
     /// Whether it has drawn on screen, and with ⌥ held, which the log says as it changes.
     drawn: Option<bool>,
+    /// When it was asked for, which its first frame on screen is timed from (#4394).
+    asked: Instant,
     /// The items whose submenus it has drawn open since they last opened, which the log says.
     drawn_open: Vec<usize>,
     /// Whether its window blends with what's under it (`Host::blends`).
     blends: bool,
     /// Its search, where its first row is a field (`MenuEntry::field`).
     search: Option<Search>,
+    /// Whether a drag in the browser window opened it and drives it (`lead_by_drag`): the
+    /// pointer's moves and release are the drag's, which the browser window hears.
+    led: bool,
+    /// How it tells of its rows reordered, where they can be.
+    reorder: Option<Reorder>,
+}
+
+/// Set for the next menu shown, which a drag in the browser window drives (`lead_by_drag`).
+struct LedByDrag;
+
+impl Global for LedByDrag {}
+
+/// Whether the next menu shown was to be led by a drag, which only it is.
+fn take_led(cx: &mut App) -> bool {
+    let led = cx.has_global::<LedByDrag>();
+    if led {
+        cx.remove_global::<LedByDrag>();
+    }
+    led
 }
 
 /// A menu's search: what's typed in its field narrows its rows (`narrowed`). The text lives in the
@@ -1448,6 +2007,7 @@ fn measure(window: &Window) -> impl Fn(&str) -> f32 + use<> {
 
 /// Shows the menu `request` asks for, closing one that shows.
 pub fn show(request: Request, cx: &mut App) {
+    let asked = Instant::now();
     crate::lazy_window::ready::<ContextMenu>(cx);
     let mut request = Some(request);
     // The window it opens from saw the press or key that opened it, with what was held then.
@@ -1469,6 +2029,21 @@ pub fn show(request: Request, cx: &mut App) {
         let layout = if blends { layout } else { layout.opaque() };
         // check.sh waits for this line before it chooses.
         log!("browser: menu shown {}", described(&request.items));
+        let reorder = request.reorder.clone().or_else(|| take_reorder(cx));
+        if reorder.is_some() {
+            // spaces.sh reads these lines, to drag a row from where it's drawn: the middle of each row of the first
+            // level, in the browser window's content, before the run scrolls.
+            let level = &layout.levels[0];
+            for (at, &item) in level.items.iter().enumerate() {
+                let row = level.row_bounds(at, &request.items);
+                log!(
+                    "browser: menu row {} at {} {}",
+                    request.items[item].title,
+                    f32::from(row.center().x).round(),
+                    f32::from(row.center().y).round()
+                );
+            }
+        }
         let frame = layout.frame;
         let origin = menu.fixed.unwrap_or(frame.origin);
         let search = (request.items.iter().any(|item| item.field)).then(|| {
@@ -1494,8 +2069,11 @@ pub fn show(request: Request, cx: &mut App) {
                 choices: layout.levels[0].checks,
             }
         });
+        let led = take_led(cx);
+        let mut tracking = Tracking::new(request.items, layout, request.at);
+        tracking.sorting.on = reorder.is_some() && !led && search.is_none();
         let shown = Shown {
-            tracking: Tracking::new(request.items, layout, request.at),
+            tracking,
             at: request.at,
             look: request.look,
             origin,
@@ -1504,9 +2082,12 @@ pub fn show(request: Request, cx: &mut App) {
             logged_open: Vec::new(),
             alt,
             drawn: None,
+            asked,
             drawn_open: Vec::new(),
             blends,
             search,
+            led,
+            reorder,
         };
         let (panels, glass, light) = (shown.panels(), shown.glass(), shown.look.light);
         // A search's field has the keyboard, so the cursor is in it as the menu opens.
@@ -1523,6 +2104,47 @@ pub fn show(request: Request, cx: &mut App) {
             host.glass(&glass, light);
         });
         cx.notify();
+    });
+}
+
+/// Makes the next menu shown one a drag in the browser window drives, as a tab held over the
+/// Space button opens its menu: the drag's moves highlight its rows (`dragged_over`) and the
+/// browser window's drop asks what's highlighted (`drag_target`), as the menu doesn't take the
+/// pointer from the drag. One that never shows is let go with the drag (`drag_ended`).
+pub fn lead_by_drag(cx: &mut App) {
+    cx.set_global(LedByDrag);
+}
+
+/// The drag leading the menu is at `at`, in the browser window's content: what's under it takes
+/// the highlight.
+pub fn dragged_over(at: Point<Pixels>, cx: &mut App) {
+    update(cx, |menu, _, cx| {
+        if let Some(shown) = menu.shown.as_mut().filter(|shown| shown.led) {
+            shown.tracking.point_at(at);
+            menu.changed(cx);
+            cx.notify();
+        }
+    });
+}
+
+/// The item highlighted in the menu the drag leads, if one is.
+pub fn drag_target(cx: &mut App) -> Option<usize> {
+    let mut target = None;
+    update(cx, |menu, _, _| {
+        let shown = menu.shown.as_ref().filter(|shown| shown.led);
+        target = shown.and_then(|shown| shown.tracking.open[0].highlight);
+    });
+    target
+}
+
+/// The drag leading the menu ended: the menu closes, choosing nothing, as the browser window
+/// does what the drop asked itself.
+pub fn drag_ended(cx: &mut App) {
+    take_led(cx);
+    update(cx, |menu, _, cx| {
+        if menu.shown.as_ref().is_some_and(|shown| shown.led) {
+            menu.close(Closing::Left, cx);
+        }
     });
 }
 
@@ -1567,6 +2189,14 @@ pub fn pointer(event: Pointer, at: Point<Pixels>, cx: &mut App) -> bool {
 /// resizing, moving or going full screen.
 pub fn dismissed(cx: &mut App) {
     update(cx, |menu, _, cx| menu.close(Closing::Left, cx));
+}
+
+/// ⌘Z at the menu, which the Mac's host hears before the window does and would close the menu
+/// with: undoes the last reorder the menu made, if it made one. Returns whether it did.
+pub fn undo_reorder(cx: &mut App) -> bool {
+    let mut undone = false;
+    update(cx, |menu, _, cx| undone = menu.undo_reorder(cx));
+    undone
 }
 
 /// Chooses the enabled item titled `title`, as the driver does. Returns whether there was one.
@@ -1638,6 +2268,7 @@ pub fn entries_menu(show: Rc<ShowOver>) -> EntriesMenu {
                     area: Bounds::default(),
                     look,
                     chosen,
+                    reorder: None,
                 },
                 cx,
             );
@@ -1730,6 +2361,15 @@ impl ContextMenu {
             Outcome::Pick(item) => self.pick(item, cx),
             Outcome::Escape => self.close(Closing::Escape, cx),
             Outcome::ReleasedOutside => self.close(Closing::ReleasedOutside, cx),
+            Outcome::Moved(item, after) => {
+                let moved = self.shown.as_ref().and_then(|shown| shown.reorder.clone());
+                if let Some(reorder) = moved {
+                    // spaces.sh reads this line, which names no Space.
+                    log!("browser: menu reordered a row");
+                    cx.defer(move |cx| (reorder.moved)(item, after, cx));
+                }
+                cx.notify()
+            }
         }
     }
 
@@ -1738,12 +2378,29 @@ impl ContextMenu {
         self.shown.as_ref().map_or(at, |shown| shown.origin + at)
     }
 
+    /// A scroll over the menu's window, which only a run of rows that scrolls takes.
+    fn wheel(&mut self, event: &ScrollEvent, window: &Window, cx: &mut Context<Self>) {
+        let at = self.in_content(event.position);
+        let Some(shown) = self.shown.as_mut() else {
+            return;
+        };
+        let down = -f32::from(event.delta.pixel_delta(window.line_height()).y);
+        shown.tracking.scrolled(at, down);
+        self.changed(cx);
+        cx.notify();
+    }
+
     fn pointer(&mut self, event: Pointer, at: Point<Pixels>, cx: &mut Context<Self>) -> bool {
         let at = self.in_content(at);
         let Some(shown) = self.shown.as_mut() else {
             return false;
         };
+        // A drag in the browser window leads it, and has the pointer's moves and its release.
+        if shown.led && event != Pointer::Scrolled {
+            return false;
+        }
         let tracking = &mut shown.tracking;
+        tracking.sorting.start = Some(crate::motion::start(cx));
         match event {
             Pointer::Moved => {
                 if tracking.moved(at, Instant::now()) {
@@ -1772,8 +2429,9 @@ impl ContextMenu {
                 true
             }
             // A scroll is the menu's wherever the pointer is: it stays open, and nothing under
-            // the pointer outside it scrolls.
-            Pointer::Scrolled => true,
+            // the pointer outside it scrolls. Over rows that scroll it goes on to the menu's own
+            // window, whose run of rows takes it.
+            Pointer::Scrolled => !tracking.over_scroll(at),
         }
     }
 
@@ -1845,8 +2503,29 @@ impl ContextMenu {
         cx.notify();
     }
 
+    /// Puts back the row this menu last moved, and tells the shell to undo the move, if there is
+    /// one. Returns whether there was.
+    fn undo_reorder(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(shown) = self
+            .shown
+            .as_mut()
+            .filter(|shown| shown.tracking.can_undo())
+        else {
+            return false;
+        };
+        shown.tracking.sorting.start = Some(crate::motion::start(cx));
+        shown.tracking.undo_move();
+        if let Some(reorder) = shown.reorder.clone() {
+            // spaces.sh reads this line.
+            log!("browser: menu undid a reorder");
+            cx.defer(move |cx| (reorder.undo)(cx));
+        }
+        cx.notify();
+        true
+    }
+
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let Some(shown) = self.shown.as_mut() else {
+        let Some(shown) = self.shown.as_ref() else {
             return;
         };
         // While an input method composes in a search's field, every key is the composition's: ↩
@@ -1862,6 +2541,16 @@ impl ContextMenu {
         let modifiers = event.keystroke.modifiers;
         // A shortcut closes the menu, as the menu shows them but doesn't run them. A search's
         // field takes its own, such as ⌘⌫, before they come here.
+        // ⌘Z undoes the last reorder this menu made, with the menu open (#4440).
+        if (modifiers.platform || modifiers.control)
+            && !modifiers.shift
+            && !modifiers.alt
+            && event.keystroke.key == "z"
+            && self.undo_reorder(cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
         if modifiers.platform || modifiers.control {
             return self.close(Closing::Shortcut, cx);
         }
@@ -1874,6 +2563,9 @@ impl ContextMenu {
             if search.is_some() {
                 cx.stop_propagation();
             }
+            let Some(shown) = self.shown.as_mut() else {
+                return;
+            };
             let outcome = shown.tracking.key(key, Instant::now());
             self.outcome(outcome, cx);
             self.changed(cx);
@@ -1973,7 +2665,9 @@ impl ContextMenu {
         let item = lay.items[row];
         let entry = &tracking.entries[as_held(&tracking.entries, item, shown.alt)];
         let bounds = lay.row_bounds(row, &tracking.entries);
-        let top = bounds.origin.y - lay.bounds.origin.y;
+        // A row of the run that scrolls stands in the run's own box, which hides what's out of it.
+        let run = (lay.scroll.filter(|scroll| scroll.holds(row))).map_or(0., |scroll| scroll.top);
+        let top = bounds.origin.y - lay.bounds.origin.y - px(run) + px(tracking.row_offset(item));
         let (_, row_radius) = lay.radii();
         let placed = div()
             .absolute()
@@ -2063,12 +2757,40 @@ impl ContextMenu {
                 .text_color(secondary)
                 .into_any_element(),
         });
-        let icon = entry.icon.map(|icon| {
+        // A Space with no glyph of its own shows its first letter in the glyph's box.
+        let icon = match (entry.icon, &entry.mark) {
+            (Some(icon), _) => Some(
+                svg()
+                    .path(icon)
+                    .size(px(ICON))
+                    .flex_none()
+                    .text_color(secondary)
+                    .into_any_element(),
+            ),
+            (None, Some(mark)) => Some(
+                div()
+                    .size(px(ICON))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(ICON * crate::tokens::shell::SPACE_LETTER))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(secondary)
+                    .child(mark.clone())
+                    .into_any_element(),
+            ),
+            (None, None) => None,
+        };
+        // A maker's mark in its own ink whatever the row's state, as its maker gives it, centred
+        // on the icons' column with its clear space spilling past it.
+        let maker = entry.maker_mark.map(|mark| {
             svg()
-                .path(icon)
-                .size(px(ICON))
+                .path(mark.path)
+                .size(px(mark.size))
+                .m(px((ICON - mark.size) / 2.))
                 .flex_none()
-                .text_color(secondary)
+                .text_color(mark.ink(shown.look.light))
         });
         let trailing = match (&shortcut, submenu) {
             (_, true) => Some(
@@ -2101,10 +2823,10 @@ impl ContextMenu {
             (None, false) => None,
         };
         let a11y = self.a11y;
-        let name = match (&entry.spoken, &entry.detail) {
-            (Some(spoken), _) => spoken.clone(),
-            (None, Some(detail)) => format!("{}, {detail}", entry.title).into(),
-            (None, None) => entry.title.clone(),
+        let title = entry.spoken.as_ref().unwrap_or(&entry.title);
+        let name = match &entry.detail {
+            Some(detail) => format!("{title}, {detail}").into(),
+            None => title.clone(),
         };
         let enabled = entry.enabled || entry.header;
         let (checked, keys) = (entry.checked, shortcut.clone());
@@ -2143,6 +2865,7 @@ impl ContextMenu {
             .children(swatch)
             .children(favicon)
             .children(icon)
+            .children(maker)
             .child(
                 div()
                     .flex_1()
@@ -2199,10 +2922,35 @@ impl ContextMenu {
         let level = &tracking.layout.levels[open.level];
         let at = level.bounds.origin - shown.origin;
         let next = tracking.open.get(depth + 1).map(|next| next.level);
-        let rows = (0..level.items.len()).map(|row| {
+        let row = |row: usize| {
             let opens = next
                 .is_some_and(|next| tracking.layout.levels[next].parent == Some(level.items[row]));
             self.row(shown, open.level, row, open.highlight, opens)
+        };
+        let held_last = |mut at: Vec<usize>| {
+            at.sort_by_key(|&at| tracking.is_held(level.items[at]));
+            at
+        };
+        let scrolls = |at: &usize| level.scroll.is_some_and(|scroll| scroll.holds(*at));
+        let rows: Vec<gpui::AnyElement> = held_last((0..level.items.len()).collect())
+            .into_iter()
+            .filter(|at| !scrolls(at))
+            .map(row)
+            .collect();
+        let run = level.scroll.map(|scroll| {
+            div()
+                .id(("menu-scroll", open.level))
+                .absolute()
+                .left_0()
+                .top(px(scroll.top))
+                .w_full()
+                .h(px(scroll.shown))
+                .overflow_hidden()
+                .children(
+                    held_last((scroll.first..=scroll.last).collect())
+                        .into_iter()
+                        .map(row),
+                )
         });
         let name = level.parent.map_or(SharedString::from("Menu"), |parent| {
             tracking.entries[parent].title.clone()
@@ -2218,6 +2966,7 @@ impl ContextMenu {
         glass(panel, shown.look.light, level.radii().0, shown.blends)
             .text_size(px(TEXT))
             .children(rows)
+            .children(run)
             // The root level's rows go under the window's own node, which has the keyboard.
             .when(self.a11y && level.parent.is_some(), |panel| {
                 panel.role(Role::Menu).aria_label(name)
@@ -2261,10 +3010,15 @@ impl Render for ContextMenu {
             match window.is_visible() {
                 // check.sh waits for these lines.
                 true => match shown.drawn.replace(shown.alt) {
-                    None => log!(
-                        "browser: menu drawn {}",
-                        described_held(&shown.tracking.entries, shown.alt)
-                    ),
+                    None => {
+                        // How long from the click that asked for it to its first frame on screen.
+                        let took = shown.asked.elapsed().as_secs_f64() * 1000.;
+                        log!("browser: menu on screen {took:.1} ms after it was asked for");
+                        log!(
+                            "browser: menu drawn {}",
+                            described_held(&shown.tracking.entries, shown.alt)
+                        )
+                    }
                     Some(_) => log!(
                         "browser: menu drawn with ⌥ {} {}",
                         if shown.alt { "held" } else { "up" },
@@ -2289,6 +3043,13 @@ impl Render for ContextMenu {
                 );
             }
             shown.drawn_open = open;
+        }
+        // The rows that reorder spring and scroll under a held one frame by frame, and stop asking
+        // for frames once they're still.
+        if let Some(shown) = self.shown.as_mut()
+            && shown.tracking.step_sorting(Instant::now())
+        {
+            window.request_animation_frame();
         }
         let Some(shown) = self.shown.as_ref() else {
             return root;
@@ -2333,6 +3094,9 @@ impl Render for ContextMenu {
         .on_mouse_up(
             MouseButton::Right,
             move |event: &MouseUpEvent, window, cx| right_released(&event.position, window, cx),
+        )
+        .on_scroll(
+            cx.listener(|menu, event: &ScrollEvent, window, cx| menu.wheel(event, window, cx)),
         )
         .children(panels)
     }

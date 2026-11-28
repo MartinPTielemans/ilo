@@ -26,14 +26,14 @@ use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
 use super::tier::{self, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
-use crate::shell::MenuEntry;
+use crate::shell::{MakerMark, MenuEntry};
 
+pub(super) mod boxed;
 pub mod handed;
 pub mod ilo;
 mod log_of;
 mod pick_up;
 pub(super) mod revoke;
-pub(super) mod rewall;
 pub use revoke::FolderInUse;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
@@ -189,12 +189,11 @@ pub struct Conversation {
     /// The folder a live task holds, by its name as the system's panel showed it, which the chip
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
-    /// The model it runs on, as the composer's model trigger reads it, with its assistant's mark:
-    /// its CLI's name and the model's, or its default's row; then the model's own word as the model
-    /// menu's row says it (D3's `Default` for its default), which the panel beside a page draws
-    /// alone; and whether its program takes another for the
-    /// next message, so the trigger opens its menu. None for an outside agent's session.
-    pub model: Option<(&'static str, SharedString, SharedString, bool)>,
+    /// The model it runs on, as the composer's model trigger reads it, after its maker's mark:
+    /// the model's own name, its default's while it runs on that (Z54); then the same as the panel
+    /// beside a page draws it; and whether its program takes another for the next message, so the
+    /// trigger opens its menu. None for an outside agent's session.
+    pub model: Option<(Option<MakerMark>, SharedString, SharedString, bool)>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -509,7 +508,7 @@ pub struct Task {
     /// stopped turn has no answer, so all it said stays in its stretch of work.
     pub stopped_turns: Vec<usize>,
     /// The level it ended at, once the user has picked another in the level's menu since: the
-    /// pick is the level its next reply starts at, and this the one its wall was last put up at.
+    /// pick is the level its next reply starts at, and this the one it ended at.
     pub(super) picked_from: Option<Tier>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
@@ -523,29 +522,22 @@ pub struct Task {
     pub(super) writing: Option<Writing>,
     /// What ilo holds of its helpers (#4102), which it has only if it started with the switch on.
     pub(super) helpers: Helpers,
-    /// The files the user gave it (#4101), which its assistant then runs inside a wall for. None
-    /// until a grant gives it some.
+    /// The files the user gave it (#4101). None until a grant gives it some.
     pub(in crate::agents) files: Given,
     /// What its files are shown by, in its conversation alone, as long as it has them.
     pub(in crate::agents) names: super::files::Names,
-    /// Its start inside a wall, until the system says the wall is up (rewall.rs).
-    pub(super) rising: Option<rewall::Rising>,
-    /// What came of each wall of its that wasn't put up, in order, each with where it came among
-    /// the task's messages and steps, so its line stands where it happened: what its lines about
-    /// them are written from, by the conversation's words table.
-    pub(in crate::agents) rewalled: Vec<rewall::Came>,
-    /// What each walled run of its was given, by its process, until the sweep after its end
-    /// answers: what anything it left running could still reach, and its place's name, which a
-    /// kept task's row carries while that sweep isn't clean.
-    pub(super) ran_walled: Vec<(u32, Given, Option<String>)>,
-    /// Its start after a change, while it waits on the sweep after the run before (rewall.rs).
-    pub(super) restart: Option<rewall::Restart>,
+    /// Each boxed run of its, by its process, with its place's name, until the sweep after its
+    /// end answers: a kept task's row carries the name while that sweep isn't clean (boxed.rs).
+    pub(super) ran_boxed: Vec<(u32, Option<String>)>,
     /// While ilo copies its attached files, before its assistant first starts: nothing starts or
     /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
     /// `told`, which that one start carries (`attached`).
     pub(in crate::agents) copying: bool,
     /// What its messages of the user's carried of their tabs (handed.rs). In memory alone.
     pub(in crate::agents) sends: handed::Sends,
+    /// The user's tabs its last your_tabs listed, by their numbers there less one, which
+    /// open_your_tab reads (#4403). Kept in memory only, and dropped as it ends.
+    pub(super) seen_tabs: Vec<u64>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -618,6 +610,7 @@ impl Task {
         self.end_entry = super::next_entry_id();
         // Its strands end with it, each call of theirs answered as stopped.
         self.helpers.end_strands(self.trace.len());
+        self.seen_tabs.clear();
         // A refusal is passed once its task ends: there's nothing left to raise or take over.
         for stop in &mut self.stops {
             stop.settled = true;
@@ -931,8 +924,8 @@ pub struct Start {
 }
 
 /// What the composer last started a thread with in a profile, which it opens with there next:
-/// its level, never Full access, and the model picked on its assistant. Nothing of the words.
-/// Settings' `A new thread starts with` sets these too, and its effort, which only Settings sets.
+/// its level, never Full access, the model picked on its assistant and its effort. Nothing of
+/// the words. Settings' `A new thread starts with` sets these too.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Last {
     pub tier: Tier,
@@ -940,8 +933,8 @@ pub struct Last {
     /// Settings' assistant and model.
     pub model: Option<(Cli, String)>,
     /// The effort level a new thread starts at, one a CLI's `efforts` lists, for an assistant
-    /// whose program takes it; None for the program's own. A composer's pick holds for its
-    /// thread alone and never comes here.
+    /// whose program takes it; None for the program's own. The composer's pick comes here as its
+    /// model does, so a relaunch opens it with the last (the owner's 27 Nov call, D13, #4415).
     pub effort: Option<&'static str>,
 }
 
@@ -983,6 +976,8 @@ impl From<Tier> for Start {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArchivedTask {
     pub agent: SharedString,
+    /// The Space it was asked in, whose profile's empty window lists it.
+    pub home: u64,
     pub title: SharedString,
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
@@ -1053,7 +1048,7 @@ pub struct Tasks {
     /// Whether the launch has read the kept tasks an earlier run left (`take_old_kept`).
     pub(super) kept_taken: bool,
     /// The places the launch's cleanup swept clean, by name with how many each sweep ended, while
-    /// they wait on the kept tasks being read (rewall.rs `came_clean`).
+    /// they wait on the kept tasks being read (boxed.rs `came_clean`).
     pub(super) came_clean: Vec<(String, usize)>,
     /// The profiles there are, each by its folder's name, as the core last said them: one that
     /// goes from among them was deleted, and its kept tasks go with it.
@@ -1109,9 +1104,13 @@ pub struct Tasks {
     pub(super) look_again: Vec<(Cli, bool)>,
     /// The user's tabs the threads hold (handed.rs).
     pub(super) handed: handed::Records,
-    /// What answers for `wall::put_up` in a test, which no system does yet.
+    /// What answers for `wall::put_up` in a test, else the system's own.
     #[cfg(test)]
-    pub(super) wall: Option<rewall::PutUp>,
+    pub(super) wall: Option<boxed::PutUp>,
+    /// Whether a test's system boxes a run in (wall.rs `available`). None is one with no
+    /// sandbox, so a test's Claude Code starts outside a box unless the test says otherwise.
+    #[cfg(test)]
+    pub(super) box_available: Option<Result<(), super::wall::Unavailable>>,
     /// The files the tasks a test starts are given, as a grant will give a task its own.
     #[cfg(test)]
     pub(super) files: Given,
@@ -1133,11 +1132,38 @@ impl Agents {
     /// and Settings' `A new thread starts with`, whose rows are this same memory: a pick there is
     /// a pick here.
     pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
+        let effort = self.composer_last(space).effort;
+        self.keep_composer(space, tier, model, effort);
+    }
+
+    /// The composer started a thread on `cli` in `space`: as `remember_composer`, with the effort
+    /// it started at. An assistant whose program takes none leaves the one kept for the others.
+    pub fn remember_start(
+        &mut self,
+        space: u64,
+        cli: Cli,
+        tier: Tier,
+        model: Option<String>,
+        effort: Option<&'static str>,
+    ) {
+        let effort = match cli.efforts().is_empty() {
+            true => self.composer_last(space).effort,
+            false => effort,
+        };
+        self.keep_composer(space, tier, model.map(|model| (cli, model)), effort);
+    }
+
+    fn keep_composer(
+        &mut self,
+        space: u64,
+        tier: Tier,
+        model: Option<(Cli, String)>,
+        effort: Option<&'static str>,
+    ) {
         let profile = self.browser.space_profile(space);
         if profile.is_empty() {
             return;
         }
-        let effort = self.tasks.last.get(&profile).and_then(|last| last.effort);
         let last = Last {
             tier,
             model,
@@ -1217,6 +1243,26 @@ impl Agents {
 
     /// The tasks in the Archive, the last to leave the foot first, as `dismissed` keeps them.
     pub fn archived_tasks(&self, cx: &App) -> Vec<ArchivedTask> {
+        // A task a run before left has no Space; its home is its profile's Space of the user's,
+        // as its kept card's is, asked of the core once a profile.
+        let mut homes: Vec<(&str, u64)> = Vec::new();
+        let mut home = |task: &Task| {
+            if task.home != 0 {
+                return task.home;
+            }
+            let Some(profile) = (self.tasks.kept.of(&task.agent))
+                .map(|kept| kept.profile.as_str())
+                .filter(|profile| !profile.is_empty())
+            else {
+                return 0;
+            };
+            if let Some((_, home)) = homes.iter().find(|(each, _)| *each == profile) {
+                return *home;
+            }
+            let home = self.browser.profile_space(profile);
+            homes.push((profile, home));
+            home
+        };
         (self.tasks.dismissed.iter().rev())
             .filter_map(|agent| self.task(agent))
             .filter(|task| task.dismissed && !task.deleted)
@@ -1232,6 +1278,7 @@ impl Agents {
                 };
                 ArchivedTask {
                     agent: task.agent.clone().into(),
+                    home: home(task),
                     title: task.shown_title(),
                     asked: task.asked.clone(),
                     dot,
@@ -1491,18 +1538,18 @@ impl Agents {
             folder: (task.ended.is_none() && task.files.folder.is_some())
                 .then(|| task.names.folder.clone().map(Into::into))
                 .flatten(),
+            // The model's own name, its version with it (Z54).
             model: task.cli.map(|cli| {
-                let (words, word): (SharedString, SharedString) = match task.model.is_empty() {
-                    true => (
-                        model_default(cli).into(),
-                        crate::command_bar::DEFAULT_ROW.into(),
-                    ),
-                    false => (
-                        format!("{} \u{b7} {}", cli.name(), task.model).into(),
-                        task.model.clone(),
-                    ),
+                let word: SharedString = match task.model.is_empty() {
+                    true => model_name(cli.caps(), &self.task_listing(cli), "").into(),
+                    false => task.model.clone(),
                 };
-                (cli.glyph(), words, word, cli.switches_model())
+                (
+                    Some(cli.caps().mark),
+                    word.clone(),
+                    word,
+                    cli.switches_model(),
+                )
             }),
         })
     }
@@ -1788,6 +1835,15 @@ impl Agents {
         self.look_for_task_agents(cx);
     }
 
+    /// A model menu opens: it draws at once from the lists last kept, and a look runs behind it if
+    /// none is, so the next one opens with them fresh. That and a sign-in are what refresh them,
+    /// with no timer (#4394).
+    pub fn model_menu_opened(&mut self, cx: &mut Context<Self>) {
+        if !self.tasks.looking {
+            self.look_for_task_agents(cx);
+        }
+    }
+
     /// What the browser last learned of `cli`.
     pub fn found(&self, cli: Cli) -> Ready {
         self.tasks
@@ -1901,6 +1957,7 @@ impl Agents {
             program: found.program.clone()?,
             path: found.path.clone(),
             model: Some(self.task_model(Cli::Claude).to_string()).filter(|model| !model.is_empty()),
+            boxed: self.runs(Cli::Claude) == super::wall::Runs::Boxed,
         })
     }
 
@@ -1911,7 +1968,9 @@ impl Agents {
     }
 
     fn sorter(&self) -> Option<&Found> {
-        if !self.threads() || self.tasks.default != Some(Cli::Claude) {
+        // Where Claude Code runs in no box and outside none, it doesn't run (boxed.rs).
+        let runs = self.runs(Cli::Claude) != super::wall::Runs::Not;
+        if !runs || !self.threads() || self.tasks.default != Some(Cli::Claude) {
             return None;
         }
         let found = self.tasks.found.get(&Cli::Claude)?;
@@ -1930,16 +1989,22 @@ impl Agents {
         }
     }
 
-    /// `cli`'s Model menu, as its ids and items: its own default first, saying which model it is
-    /// where the CLI says, then its models, as the CLI last listed them, so the menu never waits
-    /// on the CLI.
-    pub fn task_model_menu(&self, cli: Cli) -> (Vec<(String, String)>, Vec<MenuEntry>) {
-        model_menu(
-            self.task_model(cli),
-            &model_default(cli),
-            self.task_default_model(cli),
-            self.task_models(cli),
-        )
+    /// What `cli` last listed: its models, which its default is and those it keeps out of its
+    /// picker, or ilo's names for them from a CLI too old to list them, with no default.
+    pub fn task_listing(&self, cli: Cli) -> super::ready::Models {
+        match self.cli_models(cli) {
+            Some(models) => models.clone(),
+            None => super::ready::Models {
+                listed: self.task_models(cli),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// `cli`'s Model menu, as what each row picks and its items (`model_rows`), as the CLI last
+    /// listed them, so the menu never waits on the CLI.
+    pub fn task_model_menu(&self, cli: Cli) -> (Vec<ModelRow>, Vec<MenuEntry>) {
+        model_rows(self.task_model(cli), cli.caps(), &self.task_listing(cli), 0)
     }
 
     /// Which model `cli`'s own default is, by name, where it said when last looked for.
@@ -1962,20 +2027,11 @@ impl Agents {
     /// A going thread's model menu, where its program takes another model for its next message:
     /// its assistant's own group alone, from the list Settings' Model row is built from, the
     /// model it runs on checked. None where it can't change.
-    pub fn thread_model_menu(
-        &self,
-        agent: &str,
-    ) -> Option<(Vec<(String, String)>, Vec<MenuEntry>)> {
+    pub fn thread_model_menu(&self, agent: &str) -> Option<(Vec<ModelRow>, Vec<MenuEntry>)> {
         let task = self.task(agent)?;
         let cli = task.cli.filter(|cli| cli.switches_model())?;
         let chosen = (task.model_id.clone()).unwrap_or_else(|| self.task_model(cli).to_string());
-        let first = model_default(cli);
-        Some(model_menu(
-            &chosen,
-            &first,
-            self.task_default_model(cli),
-            self.task_models(cli),
-        ))
+        Some(model_rows(&chosen, cli.caps(), &self.task_listing(cli), 0))
     }
 
     /// The user's pick in a going thread's model menu: only a model of the list it was built
@@ -1986,20 +2042,16 @@ impl Agents {
         else {
             return;
         };
-        let models = self.task_models(cli);
+        let listing = self.task_listing(cli);
         let (name, run_on) = match id.is_empty() {
             // Its own default, which a turn names by the model it is, where the program said.
-            true => {
-                let default = self.task_default_model(cli);
-                let run_on = (models.iter())
-                    .find(|(_, name)| Some(name.as_str()) == default)
-                    .map(|(id, _)| id.clone());
-                (String::new(), run_on)
+            true => (String::new(), listing.default_id.clone()),
+            false => {
+                match (listing.listed.iter().chain(&listing.more)).find(|(each, _)| each == id) {
+                    Some((id, name)) => (name.clone(), Some(id.clone())),
+                    None => return,
+                }
             }
-            false => match models.iter().find(|(each, _)| each == id) {
-                Some((id, name)) => (name.clone(), Some(id.clone())),
-                None => return,
-            },
         };
         let Some(task) = self.task_mut(agent) else {
             return;
@@ -2033,14 +2085,23 @@ impl Agents {
     /// The model `cli` runs tasks with, by name, such as Haiku, or None for its own default.
     pub fn task_model_name(&self, cli: Cli) -> Option<SharedString> {
         let chosen = self.task_model(cli);
-        let (_, name) = (self.task_models(cli).into_iter()).find(|(id, _)| id == chosen)?;
-        Some(name.into())
+        let listing = self.task_listing(cli);
+        let (_, name) =
+            (listing.listed.iter().chain(&listing.more)).find(|(id, _)| id == chosen)?;
+        Some(name.clone().into())
+    }
+
+    /// What Settings' Model pop-up and the trigger say for `cli`'s model: its name with its version,
+    /// the default's while it's picked (Z54).
+    pub fn task_model_words(&self, cli: Cli) -> SharedString {
+        model_name(cli.caps(), &self.task_listing(cli), self.task_model(cli)).into()
     }
 
     /// Sets the model `cli` runs tasks with, only one its Model menu lists, so nothing else, typed
     /// or from a page, an agent or a file, is ever passed to the CLI as one.
     pub fn set_task_model(&mut self, cli: Cli, model: &str, cx: &mut Context<Self>) {
-        let listed = self.task_models(cli).iter().any(|(id, _)| id == model);
+        let listing = self.task_listing(cli);
+        let listed = (listing.listed.iter().chain(&listing.more)).any(|(id, _)| id == model);
         if !model.is_empty() && !listed {
             return;
         }
@@ -2157,10 +2218,8 @@ impl Agents {
             helpers: Helpers::default(),
             files: self.files_at_start(),
             names: self.names_at_start(),
-            rising: None,
-            rewalled: Vec::new(),
-            ran_walled: Vec::new(),
-            restart: None,
+            seen_tabs: Vec::new(),
+            ran_boxed: Vec::new(),
             copying: false,
             sends: Default::default(),
         };
@@ -2205,12 +2264,14 @@ impl Agents {
         let never = Never::here(Some(self.tasks_dir()));
         let refuses = |folder: &super::wall::Granted| {
             let root = folder.root();
-            files::resolved(root).as_deref() != Some(root) || never_grantable(root, &never)
+            match () {
+                _ if files::resolved(root).as_deref() != Some(root) => Some(ilo::NotGiven::Gone),
+                _ if never_grantable(root, &never) => Some(ilo::NotGiven::Never),
+                _ => None,
+            }
         };
-        let refused = match &picked.folder {
-            Some(folder) if refuses(folder) => picked.folder.take(),
-            _ => None,
-        };
+        let why = picked.folder.as_ref().and_then(refuses);
+        let refused = why.and_then(|_| picked.folder.take());
         let names = Names::of(&Picked {
             folder: refused.clone().or(picked.folder.clone()),
             files: picked.files.clone(),
@@ -2220,12 +2281,12 @@ impl Agents {
         {
             task.files.folder = picked.folder.clone();
             task.names = names;
-            if let Some(folder) = &refused {
+            if let (Some(folder), Some(why)) = (&refused, why) {
                 let files = Given {
                     folder: Some(folder.clone()),
                     attached: None,
                 };
-                task.rewalled(rewall::Rewalled::WithoutFiles { files });
+                self.place_in(agent, super::lines::Happened::NotGiven { files, why });
             }
         }
         let with = StartedWith {
@@ -2235,8 +2296,8 @@ impl Agents {
             left_out: refused.is_some(),
         };
         if picked.files.is_empty() {
-            let wall = self.wall_to_begin(agent, with);
-            self.launch_in(agent, &first, wall, cx);
+            self.log_start(agent, with);
+            self.launch(agent, &first, cx);
             return self.wait_for_answer(agent, cx);
         }
         if let Some(task) = self.task_mut(agent) {
@@ -2310,19 +2371,30 @@ impl Agents {
             }
         }
         // The start's log row counts what it starts with, and that its files were left out
-        // where their copies couldn't be made or its wall wasn't put up (rewall.rs).
+        // where their copies couldn't be made.
         let left_out = with.left_out || copied_none;
-        let wall = self.wall_to_begin(agent, StartedWith { left_out, ..with });
-        self.launch_in(agent, first, wall, cx);
+        self.log_start(agent, StartedWith { left_out, ..with });
+        self.launch(agent, first, cx);
         self.wait_for_answer(agent, cx);
     }
 
-    /// Whether this system can wall a task in with its files, which the `+` offers them by.
+    /// The log's row for the start of `agent`'s task at the level it has, with what it starts
+    /// with: counts alone, never a name or a path.
+    pub(super) fn log_start(&mut self, agent: &str, with: StartedWith) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        let started = tier::started_logged(task.tier, with);
+        self.note_on(agent, 0, super::access::ACCESS_ACTION, "", &started, "");
+    }
+
+    /// Whether a task can be given files, which the `+` offers them by: not until its assistant
+    /// reaches them through ilo's own tools (Road B), as its box holds none of the user's.
     pub fn files_available(&self) -> bool {
         #[cfg(test)]
         return self.tasks.files_available;
         #[cfg(not(test))]
-        super::wall::available().is_ok()
+        false
     }
 
     /// While the task thinks, its CLI has NO_ANSWER to take its first step or say something,
@@ -2410,16 +2482,9 @@ impl Agents {
         Names::default()
     }
 
-    /// Starts the task's CLI with its first message.
-    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
-        // A task with files starts inside its wall, or without them (rewall.rs).
-        let wall = self.wall_to_start(agent);
-        self.launch_in(agent, first, wall, cx);
-    }
-
     /// Starts the run of the strand `strand` of the thread `thread`, which reads `first`: the
-    /// thread's assistant, model and effort, with the strand's token and tools, inside the wall
-    /// the thread's files need and reading what the thread reads. It keeps nothing. Why not, in
+    /// thread's assistant, model and effort, with the strand's token and tools, in a box of its
+    /// own as the thread's runs are, and reading what the thread reads. It keeps nothing. Why not, in
     /// the words its call is answered with, if it couldn't start.
     pub(super) fn launch_strand(
         &mut self,
@@ -2436,10 +2501,9 @@ impl Agents {
         let Some(program) = found.program.clone() else {
             return Err(format!("{} isn't installed.", cli.name()));
         };
-        // A strand of a thread with files is held to them as the thread is, in a wall of its own
-        // that reads its own folder and config, or doesn't start.
-        let wall = self
-            .wall_or_without(thread, strand)
+        // A box of its own, which reads its own folder and config, or no start.
+        let dir = self.tasks_dir();
+        let wall = (self.box_for(thread, strand, &dir.join(strand), false))
             .map_err(|()| couldnt.clone())?;
         let Some(task) = self.task(thread) else {
             return Err(couldnt);
@@ -2447,7 +2511,6 @@ impl Agents {
         let Some(token) = task.helpers.token_of(strand) else {
             return Err(couldnt);
         };
-        let dir = self.tasks_dir();
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
@@ -2482,15 +2545,10 @@ impl Agents {
         })
     }
 
-    /// Starts `agent`'s assistant inside `wall`, or with None as a task with no files starts.
-    pub(super) fn launch_in(
-        &mut self,
-        agent: &str,
-        first: &str,
-        wall: Option<Arc<super::wall::Wall>>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
+    /// Starts the task's CLI with its first message, in its box where it runs in one (boxed.rs).
+    /// Whether it started: a run that couldn't fails the task.
+    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) -> bool {
+        let Some(cli) = self.task(agent).and_then(|task| task.cli) else {
             return false;
         };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
@@ -2504,19 +2562,28 @@ impl Agents {
             return false;
         }
         let dir = self.tasks_dir();
-        let walled = wall.is_some();
+        // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
+        let (keep, kept_in) = self.keep_for(agent, cli);
+        let run_dir = kept_in.unwrap_or_else(|| dir.join(agent));
+        let keeps = !matches!(keep, super::kept::Keep::Nothing);
+        let Ok(wall) = self.box_for(agent, agent, &run_dir, keeps) else {
+            let why = format!("{} couldn't start.", cli.name());
+            self.fail(agent, Failure::Other(why), cx);
+            return false;
+        };
+        let Some(task) = self.task(agent) else {
+            return false;
+        };
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
         let model = self.launch_model(agent, cli);
-        let effort = self.task(agent).and_then(|task| task.effort.clone());
-        // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
-        let (keep, kept_in) = self.keep_for(agent, cli);
+        let effort = task.effort.clone();
         let launch = Launch {
             cli,
             program,
             path: found.path.clone(),
-            dir: kept_in.unwrap_or_else(|| dir.join(agent)),
+            dir: run_dir,
             config: dir.join(format!("{agent}.json")),
             server: runner::Server {
                 command,
@@ -2525,10 +2592,12 @@ impl Agents {
             },
             model,
             effort,
-            instructions: tools::task_instructions(task.tier),
-            tools: tools::handed(agent, cli),
+            instructions: tools::task_instructions(task.tier, self.your_tabs()),
+            // With the user's tabs off, neither of their tools is allowed it either.
+            tools: (tools::handed(agent, cli).into_iter())
+                .filter(|tool| self.your_tabs() || !tools::YOUR_TABS.contains(&tool.as_str()))
+                .collect(),
             wall,
-            // The files it starts with: a task whose wall was refused has none by now.
             reads: (task.files.folder.iter())
                 .map(|folder| folder.root().to_path_buf())
                 .chain(task.files.attached.clone())
@@ -2539,12 +2608,9 @@ impl Agents {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     if process.walled() {
-                        let walled = (process.run(), task.files.clone(), process.place());
-                        task.ran_walled.push(walled);
+                        task.ran_boxed.push((process.run(), process.place()));
                     }
                     task.process = Some(process);
-                    // What starts it again if its wall doesn't go up (rewall.rs).
-                    task.rising = walled.then(|| rewall::Rising::of(first));
                 }
                 self.kept_started(agent, cli, &keep);
                 true
@@ -2605,20 +2671,17 @@ impl Agents {
         if let Out::Swept(answer) = out {
             return self.swept(&agent, run, answer, cx);
         }
-        // A line of a run ilo ended as it started the task again isn't the task's (rewall.rs).
+        // A line of a run before the one under way isn't the task's.
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
         if under_way.is_some_and(|under_way| under_way != run) {
             return;
         }
-        // Nor is one of a task whose start waits on the sweep of its run before: it has no run.
-        if self.task(&agent).is_some_and(|task| task.restart.is_some()) {
-            return;
-        }
-        // Its assistant is inside its wall, which is no answer of the assistant's.
+        // Its assistant is inside its box, which is no answer of the assistant's. check.sh reads
+        // this line.
         if out == Out::Walled(Ok(())) {
-            return self.walled_in(&agent);
+            return log!("browser: task {agent} is boxed in");
         }
         // Whatever it said, it answered; a strand of it still unheard keeps its watch.
         if let Some(task) = self.task_mut(&agent) {
@@ -2741,22 +2804,24 @@ impl Agents {
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
+            // Said above.
             Out::Walled(Ok(())) => {}
             // The start the user stopped: their stop ended its launcher, and is what the card says.
             Out::Walled(Err(_))
                 if self
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
-            // Nothing started, so nothing of the task's is behind a wall that isn't up. Its
-            // launcher goes with the process, and the task goes on as the table says of a wall
-            // refused (rewall.rs): its run before went with it, so the Gone that follows is
-            // another run's and changes nothing.
+            // Nothing started, so nothing of the task's ran outside its box. Its launcher goes
+            // with the process, and the run fails as any start that can't, never started again
+            // outside a box: the Gone that follows is its own and changes nothing.
             Out::Walled(Err(refused)) => {
-                log!("browser: task {agent} wasn't walled in: {refused:?}");
-                if let Some(task) = self.task_mut(&agent) {
-                    task.end_run();
-                }
-                self.wall_refused(&agent, cx);
+                log!("browser: task {agent} wasn't boxed in: {refused:?}");
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
+                task.end_run();
+                let why = format!("{} couldn't start.", task.name);
+                self.fail(&agent, Failure::Other(why), cx);
             }
             Out::Gone(said) => {
                 // Its assistant no longer has the conversation it was to go on with, or what it
@@ -2946,11 +3011,6 @@ impl Agents {
             cx.notify();
             return true;
         }
-        // A start waiting on a sweep (rewall.rs) is given the conversation with this in it.
-        if task.restart.is_some() {
-            cx.notify();
-            return true;
-        }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{reply}"),
@@ -3020,8 +3080,6 @@ impl Agents {
         task.asking = None;
         task.writing = None;
         task.waiting = None;
-        // A start waiting on a sweep never happens.
-        task.restart = None;
         // A session's agent is its client's, whose calls under way the user stops, on each of its
         // connections, as the agent path always has. Its Stop is logged before each of its
         // sessions ends, this one too, so each one's record has it (session_stopped).
@@ -4034,10 +4092,8 @@ impl Agents {
             helpers: Helpers::default(),
             files: Given::default(),
             names: Default::default(),
-            rising: None,
-            rewalled: Vec::new(),
-            ran_walled: Vec::new(),
-            restart: None,
+            seen_tabs: Vec::new(),
+            ran_boxed: Vec::new(),
             copying: false,
             sends: Default::default(),
         });
@@ -4569,7 +4625,7 @@ impl Agents {
                 };
             }
             "check" => did.target = format!("“{}”", page::clip(&string("text"), 40)),
-            "list_tabs" | "list_profiles" | "ask" => {
+            "list_tabs" | "list_profiles" | "your_tabs" | "ask" => {
                 (did.site, did.tab, did.page, did.title) =
                     (String::new(), None, String::new(), String::new())
             }
@@ -5730,7 +5786,7 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
         let groups = (did.tab.is_some() || opens)
             && !matches!(
                 did.tool.as_str(),
-                "thought" | "ask" | "list_tabs" | "list_profiles"
+                "thought" | "ask" | "list_tabs" | "list_profiles" | "your_tabs"
             );
         // Closes join only those their pages answered alike.
         let like = |line: &Together| {
@@ -5873,11 +5929,11 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
 /// The page a step acted on, as the log groups it: a step on a tab, or one that opened a page.
 fn on_page(did: &tools::Did) -> Option<OnPage> {
     let went = matches!(did.tool.as_str(), "open_tab" | "navigate");
-    let on_tab = did.tab.is_some()
-        && !matches!(
-            did.tool.as_str(),
-            "thought" | "ask" | "list_tabs" | "list_profiles"
-        );
+    let tabless = matches!(
+        did.tool.as_str(),
+        "thought" | "ask" | "list_tabs" | "list_profiles" | "your_tabs"
+    );
+    let on_tab = did.tab.is_some() && !tabless;
     (went || on_tab).then(|| OnPage {
         tab: did.tab,
         site: did.site.clone().into(),
@@ -6027,6 +6083,91 @@ const MODEL_DEFAULT: &str = "{assistant}'s default";
 /// `cli`'s Model's first choice, as its pop-up and menu say it.
 pub fn model_default(cli: Cli) -> String {
     MODEL_DEFAULT.replace("{assistant}", cli.assistant())
+}
+
+/// The model menu's last row of a maker's models, holding those its assistant lists but keeps out
+/// of its own picker (Z54c), and how a screen reader says it.
+pub const MORE_MODELS: &str = "More Models";
+const MORE_MODELS_SPOKEN: &str = "More {maker} models";
+
+/// What a menu row of the model menu picks: a model by id, empty for its assistant's own default,
+/// or nothing, as More Models, which only opens its own.
+pub type ModelRow = Option<String>;
+
+/// A provider's models as the model menu's rows (Z54), from `start` in its menu: each by its name
+/// with its version, after its maker's mark and spoken with its maker's name, all from `caps`, with
+/// `chosen` checked.
+/// There's no Default row (Z54b): with nothing chosen, the model the assistant defaults to is
+/// checked, and its row picks nothing, so a thread goes on following the assistant's own default.
+/// Then the models it keeps out of its picker, under More Models.
+pub fn model_rows(
+    chosen: &str,
+    caps: &super::provider::Caps,
+    models: &super::ready::Models,
+    start: usize,
+) -> (Vec<ModelRow>, Vec<MenuEntry>) {
+    let default = models.default_id.as_deref();
+    let checked = match chosen.is_empty() {
+        true => default,
+        false => Some(chosen),
+    };
+    let row = |id: &str, name: &str, parent: Option<usize>| {
+        let on = checked == Some(id);
+        let entry = MenuEntry {
+            checked: on,
+            over: on && parent.is_none(),
+            parent,
+            maker_mark: Some(caps.mark),
+            spoken: Some(format!("{} {name}", caps.maker).into()),
+            ..MenuEntry::named(name.to_string(), true)
+        };
+        let id = match Some(id) == default {
+            true => String::new(),
+            false => id.to_string(),
+        };
+        (Some(id), entry)
+    };
+    // An assistant that lists no model yet has its own default alone, by the assistant's name.
+    if models.listed.is_empty() && models.more.is_empty() {
+        let entry = MenuEntry {
+            checked: chosen.is_empty(),
+            over: chosen.is_empty(),
+            maker_mark: Some(caps.mark),
+            spoken: Some(format!("{} {}", caps.maker, caps.assistant).into()),
+            ..MenuEntry::named(caps.assistant, true)
+        };
+        return (vec![Some(String::new())], vec![entry]);
+    }
+    let (mut ids, mut items): (Vec<ModelRow>, Vec<MenuEntry>) = (models.listed.iter())
+        .map(|(id, name)| row(id, name, None))
+        .unzip();
+    if !models.more.is_empty() {
+        let more = start + items.len();
+        ids.push(None);
+        items.push(MenuEntry {
+            spoken: Some(MORE_MODELS_SPOKEN.replace("{maker}", caps.maker).into()),
+            ..MenuEntry::named(MORE_MODELS, true)
+        });
+        for (id, name) in &models.more {
+            let (id, entry) = row(id, name, Some(more));
+            ids.push(id);
+            items.push(entry);
+        }
+    }
+    (ids, items)
+}
+
+/// What a thread's model trigger says for the model `id` of `caps`, empty for its own default: the
+/// model's own name, with its version (Z54), never `{assistant}'s default`. The assistant's name
+/// stands in only while it hasn't said which model its default is.
+pub fn model_name(caps: &super::provider::Caps, models: &super::ready::Models, id: &str) -> String {
+    let id = match id.is_empty() {
+        true => models.default_id.as_deref().unwrap_or_default(),
+        false => id,
+    };
+    (models.listed.iter().chain(&models.more))
+        .find(|(each, _)| each == id)
+        .map_or_else(|| caps.assistant.to_string(), |(_, name)| name.clone())
 }
 
 /// A CLI's Model menu, as its ids and items, with `chosen` checked: its own default first, as

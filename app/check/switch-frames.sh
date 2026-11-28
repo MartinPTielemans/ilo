@@ -1,5 +1,5 @@
 # check.sh runs this at 460.
-# Every Space switch, by ⌃1 and ⌃2 and by the switcher's dots, and every switch between a Space's
+# Every Space switch, by ⌃1 and ⌃2 and by the Space button's menu, and every switch between a Space's
 # tabs by a click on its row, shows a page in the page area at every frame: the one it leaves until
 # the one it shows has drawn, and never the empty page area between them, for 60 to 230 ms on
 # GitHub's hosted Mac (#1438). A burst of the window's pictures (tools/window-frames.sh) looks at
@@ -84,6 +84,18 @@ if ! grep -q '^capturing' "$frames"; then
   esac
   fail "the window's pictures didn't start: $why"
 fi
+# Shows the Space named $1, whose id is $2, from the Space button's menu, which lists it among the
+# Spaces before New Space…, and waits for the button's mark to settle, which a click on the button
+# waits for after any switch. The menu's choosing is the switch the pictures look at.
+button_switch() {
+  mark "$3"
+  post click "$(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)"
+  expect "^browser: menu shown \(.*, \)\{0,1\}$1\( (checked)\)\{0,1\}, \(.*, \)\{0,1\}$(cased 'New Space…')" \
+    "a click on the Space button didn't open its menu with $1 in it"
+  send choose "$1"
+  expect "^browser: space $2 in " "$1 in the Space button's menu didn't show Space $2"
+  expect '^browser: space button settled$' "the Space button's mark didn't settle after $1 was shown"
+}
 # A second of the page before any switch, which the pictures must see as one.
 sleep 1
 mark start
@@ -91,20 +103,18 @@ for i in 1 2 3 4; do
   mark "ctrl2 $i"
   send key 2 ctrl
   expect "^browser: space $second in " "⌃2 didn't show the second Space"
+  expect '^browser: space button settled$' "the Space button's mark didn't settle after ⌃2"
   sleep 0.7
   mark "ctrl1 $i"
   send key 1 ctrl
   expect "^browser: space $first in " "⌃1 didn't show the first Space"
+  expect '^browser: space button settled$' "the Space button's mark didn't settle after ⌃1"
   sleep 0.7
 done
 for i in 1 2; do
-  mark "dot2 $i"
-  send click "$(sed -n "s/^browser: switcher dot $second in window [0-9]* at //p" "$log" | tail -1)"
-  expect "^browser: space $second in " "the second dot didn't show the second Space"
+  button_switch frames "$second" "button2 $i"
   sleep 0.7
-  mark "dot1 $i"
-  send click "$(sed -n "s/^browser: switcher dot $first in window [0-9]* at //p" "$log" | tail -1)"
-  expect "^browser: space $first in " "the first dot didn't show the first Space"
+  button_switch 'Space 1' "$first" "button1 $i"
   sleep 0.7
 done
 for i in 1 2; do

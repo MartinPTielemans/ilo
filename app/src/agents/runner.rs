@@ -50,14 +50,14 @@ impl Cli {
         Cli::ALL.into_iter().find(|cli| cli.id() == id)
     }
 
-    /// The effort levels its own program takes when ilo starts it, under the names its help gives
-    /// them, in order; none where it takes no effort setting (#4140). Claude Code's `--effort`
-    /// lists these; Codex's help names no effort option.
+    /// What it says of itself, which the UI reads (provider.rs). Every CLI has its row there.
+    pub fn caps(self) -> &'static super::provider::Caps {
+        super::provider::caps(self.id()).expect("every CLI is a provider")
+    }
+
+    /// The effort levels its own program takes when ilo starts it (provider.rs).
     pub fn efforts(self) -> &'static [&'static str] {
-        match self {
-            Cli::Claude => &["low", "medium", "high", "xhigh", "max"],
-            Cli::Codex => &[],
-        }
+        self.caps().efforts
     }
 
     /// What the user calls it, in text only: agents have no maker's logo or colour.
@@ -65,6 +65,14 @@ impl Cli {
         match self {
             Cli::Claude => "Claude",
             Cli::Codex => "Codex",
+        }
+    }
+
+    /// What an assistant's row calls it: the one the user signs in to, its maker's plan.
+    pub fn account_name(self) -> &'static str {
+        match self {
+            Cli::Claude => "Claude",
+            Cli::Codex => "ChatGPT",
         }
     }
 
@@ -561,9 +569,10 @@ pub(crate) const CLAUDE_WALLED: [&str; 5] = [
     "DISABLE_TELEMETRY",
 ];
 /// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
-const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+pub(crate) const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 /// What a walled start names its listener with, for either assistant.
-const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+pub(crate) const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
 /// What a walled start clears of the browser's own environment.
 const PROXY_CLEARED: [&str; 5] = [
     "NO_PROXY",
@@ -579,7 +588,14 @@ const PROXY_CLEARED: [&str; 5] = [
 /// say so: `sets` answers from these alone, which a test holds.
 pub fn kept(cli: Cli) -> Vec<&'static str> {
     match cli {
-        Cli::Claude => [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &PROXY[..]].concat(),
+        // Where the user moved Claude Code's own files, which it's never set but read as the
+        // browser was started with it: the box's rules name the same folder (wall.rs `cli_home`).
+        Cli::Claude => [
+            &[PATH, CLAUDE_TMP, CLAUDE_CONFIG_DIR][..],
+            &CLAUDE_WALLED[..],
+            &PROXY[..],
+        ]
+        .concat(),
         Cli::Codex => [&[PATH, super::bridge::TOKEN][..], &PROXY[..]].concat(),
     }
 }

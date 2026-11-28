@@ -13,7 +13,7 @@ use gpui::{
 use super::Fold;
 
 use crate::agents::Status;
-use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, Reach};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, NotGiven};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Live, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -639,6 +639,221 @@ fn one_view_at_every_width(cx: &mut TestAppContext) {
         tiles[0].1.bottom() < reply.top(),
         "the row isn't over the reply field"
     );
+}
+
+/// The column is the reference's 832 at most (#4396), and beside the rail never under 520: the
+/// rail goes where the column at its least, its insets and the 300-wide rail at its edge don't
+/// all fit.
+#[test]
+fn the_rail_goes_where_the_column_at_its_least_wouldnt_fit() {
+    use crate::tokens::shell::conversation::{COLUMN, COLUMN_LEAST};
+    use crate::tokens::shell::task::{RAIL_BREAKPOINT, RAIL_EDGE, RAIL_WIDTH};
+    assert_eq!((COLUMN, COLUMN_LEAST, RAIL_WIDTH), (832., 520., 300.));
+    assert_eq!(
+        RAIL_BREAKPOINT,
+        COLUMN_LEAST + 2. * INSET + RAIL_WIDTH + RAIL_EDGE
+    );
+}
+
+/// The thread's area as drawn at `area` points across, with its pages or none: where its column
+/// and its reply field are, and the rail's tiles.
+fn stage_at(
+    area: f32,
+    pages: bool,
+    cx: &mut TestAppContext,
+) -> (
+    gpui::Bounds<gpui::Pixels>,
+    gpui::Bounds<gpui::Pixels>,
+    Vec<(u64, gpui::Bounds<gpui::Pixels>)>,
+) {
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.tabs = match pages {
+        true => vec![(30, "tickets.example".into()), (31, "seats.example".into())],
+        false => Vec::new(),
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    stage_drawn(area, &shell, &view, cx)
+}
+
+/// As `stage_at`, its window resized so the area is `area` across.
+fn stage_drawn(
+    area: f32,
+    shell: &Entity<Shell>,
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (
+    gpui::Bounds<gpui::Pixels>,
+    gpui::Bounds<gpui::Pixels>,
+    Vec<(u64, gpui::Bounds<gpui::Pixels>)>,
+) {
+    use gpui::size;
+    let drawn = |wide: f32, cx: &mut VisualTestContext| {
+        cx.simulate_resize(size(px(wide), px(900.)));
+        // The first frame learns the area's width; the second lays the rail out by it.
+        for _ in 0..2 {
+            redraw(shell, view, cx);
+        }
+        view.read_with(cx, |view, _| view.drawn_at.get())
+            .expect("no area")
+    };
+    // The window is the area and the sidebar beside it.
+    let beside = 2000. - f32::from(drawn(2000., cx).size.width);
+    let at = drawn(area + beside, cx);
+    assert_eq!(at.size.width, px(area), "the area");
+    let column = (view.read_with(cx, |view, _| view.composer_drawn.get())).expect("no column");
+    let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
+    (at, column, tiles)
+}
+
+/// At a narrow, a middle and a wide area, with the rail shut and open, the column is the room
+/// left of the rail less its insets, at most 832, in that room's middle; beside the rail it's never
+/// under 520, and the rail is 300 wide at its edge. Narrower than the rail allows, the pages fall
+/// to a row under the header and the column has the area.
+#[gpui::test]
+fn the_column_keeps_its_width_in_the_middle_of_the_room_left_of_the_rail(cx: &mut TestAppContext) {
+    use crate::tokens::shell::conversation::{COLUMN, COLUMN_LEAST};
+    use crate::tokens::shell::task::{RAIL_BREAKPOINT, RAIL_EDGE, RAIL_WIDTH};
+    // The owner's 1800-wide window less the sidebar, a middle one, the narrowest with the rail
+    // beside and one just under it, and a narrow one.
+    for area in [1572., 1100., RAIL_BREAKPOINT, RAIL_BREAKPOINT - 1., 700.] {
+        for pages in [false, true] {
+            let (at, column, tiles) = stage_at(area, pages, cx);
+            let beside = pages && area >= RAIL_BREAKPOINT;
+            let room = area - if beside { RAIL_WIDTH + RAIL_EDGE } else { 0. };
+            let wide = f32::from(column.size.width);
+            let case = format!("area {area}, pages {pages}: column {column:?}");
+            assert_eq!(wide, COLUMN.min(room - 2. * INSET), "{case}");
+            assert!(wide <= COLUMN, "{case}");
+            if beside {
+                assert!(wide >= COLUMN_LEAST, "{case}");
+            }
+            let middle = f32::from(column.left()) + wide / 2.;
+            let room_middle = f32::from(at.left()) + room / 2.;
+            assert!((middle - room_middle).abs() < 0.5, "{case}");
+            match (pages, beside) {
+                (false, _) => assert!(tiles.is_empty(), "{case}: {tiles:?}"),
+                (true, true) => {
+                    for (_, tile) in &tiles {
+                        assert_eq!(tile.size.width, px(RAIL_WIDTH), "{case}: {tiles:?}");
+                        assert_eq!(at.right() - tile.right(), px(RAIL_EDGE), "{case}");
+                    }
+                }
+                // Across, under the header, over the column.
+                (true, false) => assert!(
+                    tiles.iter().all(|(_, tile)| tile.bottom() < column.top()),
+                    "{case}: {tiles:?}"
+                ),
+            }
+        }
+    }
+}
+
+/// A resize moves the column and the rail at once, with no slide: only the thread's pages coming
+/// and going do (full screen is a resize of its own).
+#[gpui::test]
+fn a_resize_moves_the_column_with_no_slide(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task::RAIL_BREAKPOINT;
+    let (shell, _, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let mut talk = conversation(1);
+    talk.tabs = vec![(30, "tickets.example".into())];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    for area in [1572., RAIL_BREAKPOINT - 100., 1100., 1572.] {
+        stage_drawn(area, &shell, &view, cx);
+        let slide = view.read_with(cx, |view, _| view.rail_slide.get());
+        assert!(slide.is_none(), "a slide at {area}");
+    }
+}
+
+/// The thread's first page brings the rail in from the right as the column slides from the
+/// area's middle to the room left of it, on the sidebar's ease-out cubic over `rail` (Proposed);
+/// its last page closing takes it out again. Under Reduce Motion each is at once where it goes.
+#[gpui::test]
+fn the_column_slides_over_as_the_rail_comes_and_goes(cx: &mut TestAppContext) {
+    use super::rail_slid;
+    use crate::tokens::shell::task::motion::RAIL;
+    use crate::tokens::shell::task::{RAIL_EDGE, RAIL_WIDTH};
+    use std::time::{Duration, Instant};
+    let now = Instant::now();
+    let at =
+        |opening, part: f32| rail_slid(opening, now - Duration::from_secs_f32(RAIL * part), now);
+    assert_eq!(at(true, 0.), Some(0.));
+    let (quarter, half) = (at(true, 0.25).unwrap(), at(true, 0.5).unwrap());
+    assert!(
+        0. < quarter && quarter < half && half < 1.,
+        "{quarter} {half}"
+    );
+    // Out of a cubic: most of the way by halfway.
+    assert_eq!(half, 1. - 0.5f32.powi(3));
+    assert_eq!(at(false, 0.5), Some(0.5f32.powi(3)));
+    assert_eq!(at(true, 1.), None);
+
+    let (shell, _, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let mut talk = conversation(1);
+    talk.tabs = Vec::new();
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let (area, shut, _) = stage_drawn(1572., &shell, &view, cx);
+    let middle =
+        |column: gpui::Bounds<gpui::Pixels>| f32::from(column.left() + column.right()) / 2.;
+    let column = |cx: &mut VisualTestContext| {
+        redraw(&shell, &view, cx);
+        (view.read_with(cx, |view, _| view.composer_drawn.get())).expect("no column")
+    };
+    let pages = |tabs: Vec<(u64, gpui::SharedString)>, cx: &mut VisualTestContext| {
+        let mut talk = conversation(1);
+        talk.tabs = tabs;
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    };
+    pages(vec![(30, "tickets.example".into())], cx);
+    let came = column(cx);
+    assert!(
+        matches!(
+            view.read_with(cx, |view, _| view.rail_slide.get()),
+            Some((true, _))
+        ),
+        "the first page brought no slide"
+    );
+    // On its way, then where it goes once `rail` has gone by.
+    let room = f32::from(area.size.width) - RAIL_WIDTH - RAIL_EDGE;
+    let left_of_rail = f32::from(area.left()) + room / 2.;
+    assert!(
+        middle(came) <= middle(shut) && middle(came) >= left_of_rail,
+        "{came:?}"
+    );
+    let ago = Instant::now() - Duration::from_secs_f32(RAIL);
+    view.update(cx, |view, _| view.rail_slide.set(Some((true, ago))));
+    let there = column(cx);
+    assert_eq!(there.size.width, shut.size.width, "the column narrowed");
+    assert!((middle(there) - left_of_rail).abs() < 0.5, "{there:?}");
+    assert!(
+        view.read_with(cx, |view, _| view.rail_slide.get())
+            .is_none()
+    );
+
+    // The last page closing takes it out.
+    pages(Vec::new(), cx);
+    column(cx);
+    assert!(
+        matches!(
+            view.read_with(cx, |view, _| view.rail_slide.get()),
+            Some((false, _))
+        ),
+        "the last page took no slide"
+    );
+    // Under Reduce Motion, at once.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    pages(vec![(30, "tickets.example".into())], cx);
+    let at_once = column(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.rail_slide.get())
+            .is_none()
+    );
+    assert!((middle(at_once) - left_of_rail).abs() < 0.5, "{at_once:?}");
 }
 
 /// While its task works every page says Working, where each reads `page_mark`: the rail's tile and
@@ -1774,104 +1989,39 @@ fn the_focus_keys_press_hand_back_only_once_it_has_stood(cx: &mut TestAppContext
     assert_eq!(pressed(&host), ["task task-1 PagesBack"]);
 }
 
-/// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
-/// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
-/// as the user's own and nothing else of the line drawn as a name.
+/// The lines of what a task started without, and of what ilo ended that a run left running
+/// (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted as the
+/// user's own and nothing else of the line drawn as a name.
 #[gpui::test]
-fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
+fn a_line_of_what_a_task_went_without_says_what_ilo_did_and_why(_: &mut TestAppContext) {
     use super::words::{head, tail, with_name};
     let said = |kind: &IloKind| {
         let (own, name) = head(kind, "Claude");
         let own = format!("{PRODUCT} {own}");
         let Some(name) = name else {
-            assert_eq!(tail(kind, "Claude"), None);
+            assert_eq!(tail(kind), None);
             return (own, String::new());
         };
         let (mut said, at) = with_name(kind, &own, &name);
         let quoted = said[at].to_string();
-        said.extend(tail(kind, "Claude"));
+        said.extend(tail(kind));
         (said, quoted)
     };
-    let without = |left| IloKind::StartedWithout { left };
-    let stopped = |left| IloKind::NotRestarted { left };
-    let left = |reach| IloKind::LeftRunning { reach };
     let cases = [
         (
-            without(LeftOut::Folder("Trip".into())),
-            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't limit Claude to \
-             that folder",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            without(LeftOut::File("seats.pdf".into())),
-            "{p} started this thread without \u{201c}seats.pdf\u{201d}: {p} couldn't limit Claude \
-             to that file",
-            "\u{201c}seats.pdf\u{201d}",
-        ),
-        (
-            without(LeftOut::Files(3)),
-            "{p} started this thread without your 3 files: {p} couldn't limit Claude to them",
-            "",
-        ),
-        (
-            IloKind::KeptAt {
-                at: Tier::Work,
-                refused: Tier::Full,
+            IloKind::StartedWithout {
                 folder: "Trip".into(),
+                why: NotGiven::Gone,
             },
-            "{p} kept this thread at Work on pages: {p} couldn't limit Claude to \
-             \u{201c}Trip\u{201d} at Full access",
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't find it",
             "\u{201c}Trip\u{201d}",
         ),
         (
-            IloKind::SetBack {
-                at: Tier::Work,
-                refused: Tier::Full,
+            IloKind::StartedWithout {
                 folder: "Trip".into(),
+                why: NotGiven::Never,
             },
-            "{p} set this thread back to Work on pages: {p} couldn't limit Claude to \
-             \u{201c}Trip\u{201d} at Full access",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            stopped(LeftOut::Folder("Trip".into())),
-            "{p} stopped this thread: {p} couldn't restart Claude without \u{201c}Trip\u{201d}",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            stopped(LeftOut::File("seats.pdf".into())),
-            "{p} stopped this thread: {p} couldn't restart Claude without \
-             \u{201c}seats.pdf\u{201d}",
-            "\u{201c}seats.pdf\u{201d}",
-        ),
-        (
-            stopped(LeftOut::Files(3)),
-            "{p} stopped this thread: {p} couldn't restart Claude without your 3 files",
-            "",
-        ),
-        (
-            IloKind::NotRaised {
-                refused: Tier::Full,
-            },
-            "{p} stopped this thread: {p} couldn't restart Claude at Full access",
-            "",
-        ),
-        (
-            left(Reach::Folder("Trip".into())),
-            "{p} couldn't end everything Claude started: what's left can still reach \
-             \u{201c}Trip\u{201d}. Restarting this computer ends it.",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            left(Reach::Files),
-            "{p} couldn't end everything Claude started: what's left can still reach this \
-             thread's files. Restarting this computer ends it.",
-            "",
-        ),
-        (
-            left(Reach::Both("Trip".into())),
-            "{p} couldn't end everything Claude started: what's left can still reach \
-             \u{201c}Trip\u{201d} and this thread's files. Restarting this computer ends it.",
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} keeps it from threads",
             "\u{201c}Trip\u{201d}",
         ),
         (
@@ -1971,35 +2121,12 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::YouStopped { pages: 0 },
         IloKind::YouStopped { pages: 2 },
         IloKind::StartedWithout {
-            left: LeftOut::Folder("Trip".into()),
+            folder: "Trip".into(),
+            why: NotGiven::Gone,
         },
         IloKind::StartedWithout {
-            left: LeftOut::Files(3),
-        },
-        IloKind::KeptAt {
-            at: Tier::Work,
-            refused: Tier::Full,
             folder: "Trip".into(),
-        },
-        IloKind::SetBack {
-            at: Tier::Work,
-            refused: Tier::Full,
-            folder: "Trip".into(),
-        },
-        IloKind::NotRestarted {
-            left: LeftOut::Folder("Trip".into()),
-        },
-        IloKind::NotRestarted {
-            left: LeftOut::Files(3),
-        },
-        IloKind::NotRaised {
-            refused: Tier::Full,
-        },
-        IloKind::LeftRunning {
-            reach: Reach::Folder("Trip".into()),
-        },
-        IloKind::LeftRunning {
-            reach: Reach::Files,
+            why: NotGiven::Never,
         },
         IloKind::EndedLeft,
         IloKind::Revoked {
@@ -2049,11 +2176,6 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::TierChanged { .. }
             | IloKind::YouStopped { .. }
             | IloKind::StartedWithout { .. }
-            | IloKind::KeptAt { .. }
-            | IloKind::SetBack { .. }
-            | IloKind::NotRestarted { .. }
-            | IloKind::NotRaised { .. }
-            | IloKind::LeftRunning { .. }
             | IloKind::EndedLeft
             | IloKind::Revoked { .. }
             | IloKind::FolderGone { .. }
@@ -2879,7 +3001,7 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         let talk = Conversation {
             model: Some((
-                "icons/terminal.svg",
+                Some(crate::agents::runner::Cli::Claude.caps().mark),
                 "Claude Code \u{b7} Opus".into(),
                 "Opus".into(),
                 false,
@@ -3815,53 +3937,6 @@ fn a_task_without_a_folder_has_no_folder_chip(cx: &mut TestAppContext) {
     assert!(drawn.is_none(), "a folder chip for a task that holds none");
 }
 
-/// A conversation that closes leaves its card in Latest tasks the picture its page's tile ended
-/// on, from memory, and lets the rest go; the card has none while the rail holds it, and none
-/// once it pictures another page, or is gone.
-#[gpui::test]
-fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut TestAppContext) {
-    let card = Card {
-        last_tab: Some(30),
-        pages: vec![30],
-        ..card()
-    };
-    let (shell, host, cx) = shown_with(card.clone(), cx);
-    shell.update(cx, |shell, cx| {
-        shell.set_conversation(Some(conversation(1)), cx)
-    });
-    let plate = |shell: &Entity<Shell>, card: &Card, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
-    };
-    assert_eq!(plate(&shell, &card, cx), None, "a plate before any picture");
-    let request = picture_request(&shell, 30, cx);
-    let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
-    shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
-    assert_eq!(
-        plate(&shell, &card, cx),
-        None,
-        "the rail holds it, not the card"
-    );
-
-    shell.update(cx, |shell, cx| shell.close_task(cx));
-    assert_eq!(
-        plate(&shell, &card, cx),
-        Some((2., 2.)),
-        "the card has no picture"
-    );
-
-    // The task goes on to another page: its card no longer pictures this one.
-    let on = Card {
-        last_tab: Some(31),
-        pages: vec![30, 31],
-        ..card.clone()
-    };
-    shell.update(cx, |shell, cx| shell.set_task_cards(vec![on.clone()], cx));
-    assert_eq!(plate(&shell, &card, cx), None);
-    assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
-    let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
-    assert_eq!(held, 0, "a picture no card shows is still held");
-}
-
 /// Tab 30's page as the core reports it with `trouble`.
 fn page_in(trouble: Trouble) -> Page {
     Page {
@@ -4548,7 +4623,8 @@ fn what_came_of_a_step_sits_at_the_columns_right() {
 }
 
 /// The assistant's words said between steps are in the text's ink, as the answer's are, and read
-/// on the stage in either look: never the quiet ink a thought and a step's past are in.
+/// on the window's ground the column sits on (#4396) in either look: never the quiet ink a
+/// thought and a step's past are in.
 #[test]
 fn said_words_between_steps_are_in_the_texts_ink() {
     use crate::palette::{Palette, Tone, contrast, over};
@@ -4560,7 +4636,7 @@ fn said_words_between_steps_are_in_the_texts_ink() {
         assert_ne!(ink, palette.gray(quiet), "{tone:?}");
         let ground = gpui::Rgba {
             a: 1.,
-            ..super::stage_fill(&palette)
+            ..palette.underlay
         };
         let ink = gpui::Rgba::from(ink);
         let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
@@ -5258,28 +5334,6 @@ fn the_panels_speaker_is_there_while_the_page_plays_or_is_muted(cx: &mut TestApp
     assert!(speaker(cx).is_some(), "a muted page has no speaker");
 }
 
-/// After a quit, a kept card's plate in Latest tasks shows the picture its card read back; a card
-/// with none has no plate.
-#[gpui::test]
-fn a_kept_cards_plate_shows_the_picture_it_read_back(cx: &mut TestAppContext) {
-    let pixels = image::RgbaImage::from_pixel(3, 2, image::Rgba([40, 80, 120, 255]));
-    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
-    let plate = crate::agents::kept::cards::Plate {
-        image,
-        size: (3, 2),
-    };
-    let kept = Card {
-        kept_picture: Some(plate),
-        ..card()
-    };
-    let (shell, _, cx) = shown_with(kept.clone(), cx);
-    let size = |card: &Card, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
-    };
-    assert_eq!(size(&kept, cx), Some((3., 2.)));
-    assert_eq!(size(&card(), cx), None, "a plate with no picture");
-}
-
 /// A kept card's picture that came back goes to the pass that frees pictures from the window's
 /// atlas once no card holds it: when its task is replied to and runs again, or when the card is
 /// removed. Every window is given the cards, so every window that drew it lets it go.
@@ -5846,7 +5900,7 @@ fn the_panels_composer_row_fits_the_panel_with_its_plus(_: &mut TestAppContext) 
                     stoppable,
                     tier,
                     model: Some((
-                        "icons/terminal.svg",
+                        Some(crate::agents::runner::Cli::Claude.caps().mark),
                         said.clone().into(),
                         word.clone().into(),
                         true,
@@ -5943,7 +5997,7 @@ fn the_panels_model_trigger_draws_the_models_own_word(cx: &mut TestAppContext) {
     use crate::tokens::shell::conversation::panel::COMPOSER_LEVEL_X;
     let talk = Conversation {
         model: Some((
-            "icons/terminal.svg",
+            Some(crate::agents::runner::Cli::Claude.caps().mark),
             "Claude \u{b7} Sonnet".into(),
             "Sonnet".into(),
             false,
@@ -6005,6 +6059,7 @@ fn the_panels_row_cuts_the_model_only_where_it_hasnt_room(cx: &mut TestAppContex
                 .child(choices::row(choices::Row {
                     form: super::Composer::of(true).row,
                     inks: choices::Inks {
+                        light: false,
                         text: ink,
                         dim: ink,
                         plate: ink,

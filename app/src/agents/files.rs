@@ -286,23 +286,6 @@ impl Given {
     pub fn any(&self) -> bool {
         self.folder.is_some() || self.attached.is_some()
     }
-
-    /// Whether a task with these files is allowed the same at `from` and at `to`: a wall made
-    /// for one is then the wall for the other. True of a task with none, and of one whose files
-    /// are attached copies alone, which every level only reads.
-    pub fn same_rules(&self, from: Tier, to: Tier) -> bool {
-        // A wall holds no place outside the folders: the product's own tools reach there.
-        let has = |place| match place {
-            Place::Attached => self.attached.is_some(),
-            Place::Folder => self.folder.is_some(),
-            Place::Outside => false,
-        };
-        (Place::ALL.into_iter().filter(|&place| has(place))).all(|place| {
-            Op::ALL
-                .iter()
-                .all(|&op| allows(from, place, op) == allows(to, place, op))
-        })
-    }
 }
 
 /// What ilo never gives a task as its folder: the folders whose contents are the user's secrets,
@@ -328,8 +311,7 @@ pub struct Never {
 impl Never {
     /// For this user and this build, with the tasks' folder where there is one.
     pub fn here(task: Option<PathBuf>) -> Never {
-        let named = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-        let home = PathBuf::from(std::env::var_os(named).unwrap_or_default());
+        let home = home();
         let name = include_str!("../../branding/name").trim();
         let ilo = [
             PathBuf::from(crate::profile_dir()),
@@ -394,6 +376,7 @@ impl Never {
         let homes = self.home.parent().filter(|homes| *homes != Path::new("/"));
         (self.whole().into_iter())
             .filter(|whole| Some(whole.as_path()) != homes && whole != Path::new("/run"))
+            .chain(self.dot_entries())
             .collect()
     }
 
@@ -443,6 +426,9 @@ impl Never {
         if self.in_photos(path) {
             return true;
         }
+        if self.dotted(path) {
+            return true;
+        }
         let (path, home) = (&self.fold(path), &self.fold(&self.home));
         let on_a_volume = MOUNTS.iter().any(|(mounts, _)| path.starts_with(mounts));
         self.whole().iter().any(|whole| {
@@ -454,6 +440,31 @@ impl Never {
                 false => inside,
             }
         })
+    }
+
+    /// Whether `path` is a dot-entry directly in the home folder or inside one: where the user's
+    /// keys, sign-ins, shell histories, the assistants' own and, on Linux, every app's settings and
+    /// data are kept, whatever their names.
+    fn dotted(&self, path: &Path) -> bool {
+        let home = self.fold(&self.home);
+        let under = self.fold(path);
+        let first = under
+            .strip_prefix(&home)
+            .ok()
+            .and_then(|under| under.components().next());
+        first.is_some_and(|part| part.as_os_str().to_string_lossy().starts_with('.'))
+    }
+
+    /// The home's dot-entries there are now, which the path floor knows by identity, as the rule
+    /// in `dotted` names them by their place alone.
+    fn dot_entries(&self) -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(&self.home) else {
+            return Vec::new();
+        };
+        (entries.flatten())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with('.'))
+            .map(|entry| self.home.join(entry.file_name()))
+            .collect()
     }
 
     /// Whether `path` is a photo library under `~/Pictures` or inside one: a bundle the Photos app
@@ -500,9 +511,10 @@ impl Never {
     }
 
     /// Folders refused with all inside them, and any folder holding one: the system's, other users'
-    /// homes, the user's keys and sign-ins, the assistants' own, every browser's profiles, every
-    /// app's settings, ilo's and the task's own. `~/Library` isn't one, as a folder the user
-    /// picked inside it is reached; `at` keeps the rest of it out.
+    /// homes, the Mac's stores of sign-ins and every app's data, ilo's and the task's own. Each is
+    /// named by the system's own name for it, never an app's, and the home's dot-entries are
+    /// refused by their rule (`dotted`). `~/Library` isn't one, as a folder the user picked inside
+    /// it is reached; `at` keeps the rest of it out.
     fn whole(&self) -> Vec<PathBuf> {
         let home = &self.home;
         let mut folders: Vec<PathBuf> = [
@@ -539,26 +551,27 @@ impl Never {
         .to_vec();
         folders.extend(
             [
-                // The Mac's, inside `~/Library`, refused even in a folder the user picked there:
-                // keychains and sign-ins, the system's own stores, what runs at login, other
-                // apps' walled data, password managers', every browser's profiles and the
-                // assistants' own.
+                // The Mac's, inside `~/Library`, refused even in a folder the user picked there,
+                // by the system's own names for them: keychains and sign-ins, every app's data and
+                // settings (every browser's profiles, password managers' and the assistants' among
+                // them), other apps' walled data, the system's own stores and what runs at login.
                 "Library/Keychains",
-                "Library/Preferences",
+                "Library/Application Support",
+                "Library/Containers",
+                "Library/Group Containers",
                 "Library/Cookies",
                 "Library/HTTPStorages",
+                "Library/Preferences",
+                "Library/Safari",
                 "Library/Accounts",
                 "Library/Mail",
                 "Library/Messages",
-                "Library/Safari",
                 "Library/Calendars",
                 "Library/Suggestions",
                 "Library/Biome",
                 "Library/LaunchAgents",
-                "Library/Containers",
-                "Library/Group Containers",
-                // Each named as well, so each is refused by its own name and not only as part of
-                // other apps' walled data.
+                // macOS's own apps' stores inside those, each by its own name as well, so the path
+                // floor knows each by identity and a second name for one is refused as the first.
                 "Library/Containers/com.apple.Notes",
                 "Library/Group Containers/group.com.apple.notes",
                 "Library/Containers/com.apple.mail",
@@ -570,66 +583,10 @@ impl Never {
                 "Library/Application Support/CallHistoryDB",
                 "Library/Application Support/Knowledge",
                 "Library/Application Support/MobileSync",
-                "Library/Application Support/1Password",
-                "Library/Application Support/Bitwarden",
-                "Library/Application Support/Google",
-                "Library/Application Support/Chromium",
-                "Library/Application Support/Firefox",
-                "Library/Application Support/Arc",
-                "Library/Application Support/BraveSoftware",
-                "Library/Application Support/Microsoft Edge",
-                "Library/Application Support/Vivaldi",
-                "Library/Application Support/com.operasoftware.Opera",
-                "Library/Application Support/Claude",
-                // The user's own apps, which run outside any wall.
+                // The user's own apps, which run outside any wall, and Ubuntu's snaps' data, as
+                // Flatpak's is under `~/.var`.
                 "Applications",
-                // Keys and sign-ins.
-                ".ssh",
-                ".aws",
-                ".gnupg",
-                ".password-store",
-                ".local/share/keyrings",
-                ".pki",
-                ".netrc",
-                ".docker",
-                ".docker/config.json",
-                // Shells' and tools' histories, which hold what was typed, passwords among it.
-                ".zsh_history",
-                ".zhistory",
-                ".zsh_sessions",
-                ".bash_history",
-                ".bash_sessions",
-                ".sh_history",
-                ".history",
-                ".local/share/fish/fish_history",
-                ".python_history",
-                ".node_repl_history",
-                ".psql_history",
-                ".mysql_history",
-                ".sqlite_history",
-                ".lesshst",
-                ".irb_history",
-                ".kube",
-                ".config/gcloud",
-                ".azure",
-                ".config/gh",
-                // The assistants' own.
-                ".claude",
-                ".claude.json",
-                ".codex",
-                ".config/claude",
-                // Every app's settings and data on Linux, sign-ins among them.
-                ".config",
-                ".local/share",
-                // Browsers' profiles on Linux.
-                ".mozilla",
-                ".config/google-chrome",
-                ".config/chromium",
-                ".config/BraveSoftware",
-                ".config/microsoft-edge",
-                ".config/vivaldi",
-                ".config/opera",
-                ".var/app",
+                "snap",
             ]
             .map(|folder| home.join(folder)),
         );
@@ -715,22 +672,67 @@ pub fn never_grantable(folder: &Path, never: &Never) -> bool {
     {
         return true;
     }
-    let folder = &key(folder);
-    if never.themselves().iter().any(|own| key(own) == *folder) {
+    // Compared as the never list is, so another case of a refused folder is refused where the
+    // system's names are the same whatever their case.
+    let folder = &never.fold(folder);
+    if never
+        .themselves()
+        .iter()
+        .any(|own| never.fold(own) == *folder)
+    {
         return true;
     }
     // Each cloud drive the system keeps in its own folder has its root there.
-    let drives = key(&never.library().join("CloudStorage"));
+    let drives = never.fold(&never.library().join("CloudStorage"));
     if folder.parent() == Some(drives.as_path()) {
         return true;
     }
     // A volume's root, and the folder volumes are mounted in, are refused.
     let volume_root = MOUNTS.iter().any(|(mounts, depth)| {
-        (folder.strip_prefix(mounts)).is_ok_and(|under| under.components().count() <= *depth)
+        (folder.strip_prefix(never.fold(Path::new(mounts))))
+            .is_ok_and(|under| under.components().count() <= *depth)
     });
     volume_root
         || never.in_whole(folder)
-        || (never.whole().iter()).any(|whole| key(whole).starts_with(folder))
+        || (never.whole().iter()).any(|whole| never.fold(whole).starts_with(folder))
+}
+
+/// The folder `picked`, as the system's panel gave it or as Settings kept the user's pick, granted
+/// by its real path unless `never` refuses it or it's gone by now: the one road a folder is
+/// granted by (`Granted::picked`), for a thread's start and Settings › Agents › Folders alike.
+pub fn grant(picked: &Path, never: &Never) -> Option<Granted> {
+    let root = resolved(picked).filter(|root| !never_grantable(root, never))?;
+    Granted::picked(root).ok()
+}
+
+/// The user's home, as the floor knows it: the system's, and in the tests one of their own, so the
+/// folders they give a thread are outside every home dot-entry wherever the checkout is (a T3 Code
+/// worktree is in `~/.t3`). No rule changes with it: the app reads the system's alone.
+pub fn home() -> PathBuf {
+    #[cfg(test)]
+    return std::env::temp_dir().join("ilo-test-homes").join("sam");
+    #[cfg(not(test))]
+    {
+        let named = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        PathBuf::from(std::env::var_os(named).unwrap_or_default())
+    }
+}
+
+/// Where the tests make the folders they give a thread, so they pass on any checkout: the system's
+/// temporary folder, else, where the floor refuses that (the Mac's and Windows' are the system's
+/// own), beside the build, which is outside the tests' home (`home`) wherever the checkout is.
+#[cfg(test)]
+pub(crate) fn test_folders() -> PathBuf {
+    let never = Never::here(None);
+    let beside = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+    for base in [std::env::temp_dir(), beside] {
+        let folders = base.join("ilo-test-folders");
+        _ = std::fs::create_dir_all(&folders);
+        if let Some(real) = resolved(&folders).filter(|real| !never_grantable(real, &never)) {
+            return real;
+        }
+    }
+    panic!("no folder here the floor gives for the tests' folders")
 }
 
 /// The path the panel gave, its links resolved, as the folder is checked and granted by it.
@@ -1220,7 +1222,6 @@ mod tests {
         "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Trip",
         "/Users/sam/Library/CloudStorage/Dropbox/Trip",
         "/Users/sam/Library/Fonts",
-        "/Users/sam/.local/bin",
     ];
 
     #[cfg(windows)]
@@ -1370,25 +1371,6 @@ mod tests {
         assert_eq!(look, [Op::Read, Op::Search]);
         assert_eq!(work, [Op::Read, Op::Search, Op::Make, Op::Change]);
         assert_eq!(full, Op::ALL);
-    }
-
-    #[test]
-    fn a_level_changes_the_rules_only_of_a_task_with_a_folder() {
-        let folder = Given {
-            folder: Some(Granted::for_test()),
-            attached: Some(PathBuf::from("/nonexistent/attached")),
-        };
-        let attached = Given {
-            folder: None,
-            ..folder.clone()
-        };
-        for from in Tier::ALL {
-            for to in Tier::ALL {
-                assert!(Given::default().same_rules(from, to));
-                assert!(attached.same_rules(from, to));
-                assert_eq!(folder.same_rules(from, to), from == to, "{from:?} {to:?}");
-            }
-        }
     }
 
     const OPS: [Op; 7] = Op::ALL;
@@ -1655,9 +1637,8 @@ mod tests {
         let never = never();
         let roots = never.by_identity();
         for whole in [
-            "/Users/sam/.ssh",
-            "/Users/sam/.config",
             "/Users/sam/Library/Keychains",
+            "/Users/sam/Library/Application Support",
             "/Users/sam/Library/Application Support/ilo",
             "/srv/ilo/Tasks",
             "/System",
@@ -1913,8 +1894,15 @@ mod tests {
                 "{}",
                 path.display()
             );
+            // A dot-entry is refused by its place, and the path floor knows each the home holds by
+            // identity (the_identity_set_holds_the_homes_dot_entries_there_are).
             let root = Path::new("/Users/sam").join(by_name);
-            assert!(named.contains(&root), "{} listed by name", root.display());
+            let by_rule = by_name.starts_with('.') && never.dotted(&root);
+            assert!(
+                by_rule || named.contains(&root),
+                "{} listed by name",
+                root.display()
+            );
         }
         for library in [
             "Pictures/Photos Library.photoslibrary/database/Photos.sqlite",
@@ -1957,5 +1945,248 @@ mod tests {
         };
         let printed = format!("{given:?}");
         assert_eq!(printed, "Given { folder: true, attached: true }");
+    }
+
+    /// The floor names no app: every app's data under `~/Library` is refused by the system's name
+    /// for where it's kept, and the home's dot-entries by their place, a new one's too.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_floor_refuses_by_place_never_by_an_apps_name() {
+        let never = on_a_mac();
+        let home = [listed("/Users/sam", Row::Change)];
+        for path in [
+            "/Users/sam/Library/Application Support/Any Browser/Default/Cookies",
+            "/Users/sam/Library/Application Support/Any Vault/vault.db",
+            "/Users/sam/Library/Containers/com.example.notes/Data/notes.db",
+            "/Users/sam/Library/Group Containers/group.example/shared.db",
+            "/Users/sam/Library/Cookies/Cookies.binarycookies",
+            "/Users/sam/Library/HTTPStorages/com.example",
+            "/Users/sam/Library/Safari/History.db",
+            "/Users/sam/.ssh/id_ed25519",
+            "/Users/sam/.a-tool-from-next-year/token",
+            "/Users/sam/.zsh_history",
+            "/Users/sam/.config/any/settings.json",
+            "/Users/sam/.local/share/keyrings/login.keyring",
+            "/Users/sam/snap/any/common/profile",
+        ] {
+            assert_eq!(never.at(Path::new(path), &home, None), At::Never, "{path}");
+        }
+        // Only those directly in the home: a dot-entry inside a folder the user picked is theirs.
+        assert_eq!(
+            never.at(Path::new("/Users/sam/code/.git/config"), &home, None),
+            At::Folder(Row::Change)
+        );
+        for folder in [
+            "/Users/sam/.a-tool-from-next-year",
+            "/Users/sam/.ssh/keys",
+            "/Users/sam/.local/bin",
+        ] {
+            assert!(never_grantable(Path::new(folder), &never), "{folder}");
+        }
+    }
+
+    /// iCloud Drive and the cloud drives are reached in a folder the user picked there, at every
+    /// level that reaches a folder at all.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_folder_picked_in_icloud_drive_or_a_cloud_drive_is_reached() {
+        let never = on_a_mac();
+        for (picked, path) in [
+            (
+                "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Trip",
+                "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Trip/plan.md",
+            ),
+            (
+                "/Users/sam/Library/Mobile Documents/x",
+                "/Users/sam/Library/Mobile Documents/x/a.txt",
+            ),
+            (
+                "/Users/sam/Library/CloudStorage/Dropbox/Work",
+                "/Users/sam/Library/CloudStorage/Dropbox/Work/a.txt",
+            ),
+        ] {
+            assert!(!never_grantable(Path::new(picked), &never), "{picked}");
+            let folders = [listed(picked, Row::Change)];
+            let at = never.at(Path::new(path), &folders, None);
+            assert_eq!(at, At::Folder(Row::Change), "{path}");
+            for tier in Tier::ALL {
+                assert_eq!(
+                    decide(tier, at, Op::Read, false),
+                    Decision::Allow,
+                    "{tier:?}"
+                );
+            }
+        }
+    }
+
+    /// A pick inside the Mac's credential floor, or one holding it, is refused, and a path there
+    /// is never reached at any level, whatever folder is listed around it.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_libraries_credential_floor_is_refused_picked_or_listed_at_every_level() {
+        let never = on_a_mac();
+        for picked in [
+            "/Users/sam/Library",
+            "/Users/sam/Library/Application Support",
+            "/Users/sam/Library/Application Support/x",
+            "/Users/sam/Library/Keychains",
+            "/Users/sam/Library/Containers/com.example",
+            "/Users/sam/Library/Group Containers",
+            "/Users/sam/Library/Preferences",
+            "/Users/sam/Library/Safari",
+            "/Users/sam/Library/Application Support/ilo",
+        ] {
+            assert!(never_grantable(Path::new(picked), &never), "{picked}");
+        }
+        for (listed_at, path) in [
+            (
+                "/Users/sam/Library/Application Support/x",
+                "/Users/sam/Library/Application Support/x/a.txt",
+            ),
+            (
+                "/Users/sam/Library",
+                "/Users/sam/Library/Keychains/login.keychain-db",
+            ),
+        ] {
+            let folders = [listed(listed_at, Row::Change), listed(listed_at, Row::Read)];
+            let at = never.at(Path::new(path), &folders, None);
+            assert_eq!(at, At::Never, "{path}");
+            for tier in Tier::ALL {
+                for op in Op::ALL {
+                    assert_eq!(
+                        decide(tier, at, op, false),
+                        Decision::Refuse(Refused::Never),
+                        "{path} {tier:?} {op:?}"
+                    );
+                }
+            }
+        }
+        // The rest of `~/Library` is reached only inside a folder the user picked there.
+        assert_eq!(
+            never.at(Path::new("/Users/sam/Library/Fonts/a.ttf"), &[], None),
+            At::Never
+        );
+    }
+
+    /// The Mac's names are the same whatever their case, so another case of a refused path is
+    /// refused as the path is, picked or reached.
+    #[cfg(not(windows))]
+    #[test]
+    fn another_case_of_a_refused_path_is_refused() {
+        let never = on_a_mac();
+        let library = [listed("/Users/sam/Library", Row::Change)];
+        for path in [
+            "/Users/sam/library/keychains/login.keychain-db",
+            "/Users/sam/LIBRARY/Application Support/x/a.txt",
+            "/Users/sam/Library/application support/x/a.txt",
+            "/Users/sam/.SSH/id_ed25519",
+            "/USERS/SAM/.ssh/id_ed25519",
+        ] {
+            assert_eq!(
+                never.at(Path::new(path), &library, None),
+                At::Never,
+                "{path}"
+            );
+        }
+        for picked in ["/Users/sam/library/keychains", "/users/sam/library"] {
+            assert!(never_grantable(Path::new(picked), &never), "{picked}");
+        }
+    }
+
+    /// A path that climbs (`..`) is never reached nor granted: the path floor gives real paths, so
+    /// one that still climbs didn't come from it.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_climbing_path_is_never_reached_nor_granted() {
+        let never = on_a_mac();
+        let code = [listed("/Users/sam/code", Row::Change)];
+        for path in [
+            "/Users/sam/code/../.ssh/id_ed25519",
+            "/Users/sam/code/../code/a.md",
+        ] {
+            assert_eq!(never.at(Path::new(path), &code, None), At::Never, "{path}");
+        }
+        assert!(never_grantable(Path::new("/Users/sam/code/.."), &never));
+        assert!(never_grantable(
+            Path::new("/Users/sam/code/../code"),
+            &never
+        ));
+    }
+
+    /// The home itself holds the user's whole work and every dot-entry: never granted, and listed
+    /// it opens none of what the floor refuses.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_home_itself_is_never_granted() {
+        let never = on_a_mac();
+        for picked in ["/Users/sam", "/Users/sam/", "/users/SAM", "/Users", "/"] {
+            assert!(never_grantable(Path::new(picked), &never), "{picked}");
+        }
+        assert!(!never_grantable(Path::new("/Users/sam/code"), &never));
+    }
+
+    /// A mounted volume's root is refused and a folder inside it may be granted and reached.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_folder_in_a_volume_is_granted_and_the_volumes_root_is_not() {
+        let never = on_a_mac();
+        for (root, inside) in [
+            ("/Volumes/Disk", "/Volumes/Disk/Photos"),
+            ("/mnt/x", "/mnt/x/y"),
+            ("/media/sam/disk", "/media/sam/disk/a"),
+            ("/run/media/sam/disk", "/run/media/sam/disk/a"),
+        ] {
+            assert!(never_grantable(Path::new(root), &never), "{root}");
+            assert!(!never_grantable(Path::new(inside), &never), "{inside}");
+            let folders = [listed(inside, Row::Read)];
+            let file = Path::new(inside).join("a.jpg");
+            assert_eq!(
+                never.at(&file, &folders, None),
+                At::Folder(Row::Read),
+                "{inside}"
+            );
+        }
+        for mounts in ["/Volumes", "/mnt", "/media", "/run/media"] {
+            assert!(never_grantable(Path::new(mounts), &never), "{mounts}");
+        }
+    }
+
+    /// /var, /tmp and /etc are the Mac's links into /private, which the path floor resolves: the
+    /// real path is refused, and so is each by its short name.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_systems_private_folders_are_refused_by_either_name() {
+        let never = on_a_mac();
+        let everything = [listed("/private", Row::Change), listed("/var", Row::Change)];
+        for path in [
+            "/private/var/db/a",
+            "/private/tmp/a",
+            "/private/etc/hosts",
+            "/var/db/a",
+            "/etc/hosts",
+        ] {
+            assert_eq!(
+                never.at(Path::new(path), &everything, None),
+                At::Never,
+                "{path}"
+            );
+            assert!(never_grantable(Path::new(path), &never), "{path}");
+        }
+    }
+
+    /// The path floor knows the home's dot-entries there are by identity, whatever their names.
+    #[cfg(unix)]
+    #[test]
+    fn the_identity_set_holds_the_homes_dot_entries_there_are() {
+        let home = std::env::temp_dir().join(format!("ilo-dots-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&home);
+        for each in [".ssh", ".a-new-tool", "code"] {
+            std::fs::create_dir_all(home.join(each)).unwrap();
+        }
+        let roots = Never::of(home.clone(), Vec::new(), None).by_identity();
+        assert!(roots.contains(&home.join(".ssh")));
+        assert!(roots.contains(&home.join(".a-new-tool")));
+        assert!(!roots.contains(&home.join("code")));
+        _ = std::fs::remove_dir_all(&home);
     }
 }

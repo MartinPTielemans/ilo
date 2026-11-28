@@ -7,16 +7,6 @@ use std::{fs, path::Path};
 /// The literals that stay in the code: the file, a piece of the line, and why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
-        "agents/wall/links.rs",
-        "0x2FC1_2FC1",
-        "ZFS's filesystem number, not a colour",
-    ),
-    (
-        "agents/wall/links.rs",
-        "0xCA45_1A4E",
-        "bcachefs's filesystem number, not a colour",
-    ),
-    (
         "theme.rs",
         "0x9e37_79b9",
         "the grain's random seed, not a colour",
@@ -109,6 +99,8 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // The three buttons' corner (#4401), between a control's and a row's.
+    "button.radius",
     // Stop's square in a thread's composer's round button, which rounds a glyph, not a corner.
     "shell.conversation.composer-square-radius",
     "icon-picker.arrow-tip-radius",
@@ -127,6 +119,9 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.library.download-button-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
+    // The hidden sidebar's edge knot as the lead drew it (Paper 1b, 26 Nov), between a row's and a
+    // panel's.
+    "shell.edge-knot.radius",
     // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
     "menu.row-radius",
@@ -153,8 +148,6 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
-    // A resting card's page inside the card (#4140).
-    "shell.composer.page-radius",
     // A thread's stage, at the drawing's values (spec-thread-stage.md): the rail's tiles, and the
     // user's message, rounder than a row as the drawing's bubble is.
     "shell.task.tile-radius",
@@ -231,10 +224,6 @@ fn a_corner_inside_another_is_concentric() {
         hover_card::RECENT_ROW_RADIUS + hover_card::PADDING
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
-    assert_eq!(
-        shell::composer::CARD_RADIUS,
-        shell::composer::PAGE_RADIUS + shell::composer::PAGE_INSET
-    );
     assert_eq!(
         hover_card::RADIUS,
         hover_card::BUTTON_RADIUS + hover_card::BUTTON_INSET
@@ -602,10 +591,13 @@ fn type_is_on_the_scale() {
             super::shell::trouble::WORDS_SIZE,
         ),
         (
-            "site_controls::HEADING_SIZE",
-            super::site_controls::HEADING_SIZE,
+            "site_controls::LABEL_SIZE",
+            super::site_controls::LABEL_SIZE,
         ),
-        ("site_controls::LINK_SIZE", super::site_controls::LINK_SIZE),
+        (
+            "site_controls::CONNECTION_SIZE",
+            super::site_controls::CONNECTION_SIZE,
+        ),
         ("site_controls::NAME_SIZE", super::site_controls::NAME_SIZE),
         ("toast::TEXT_SIZE", super::toast::TEXT_SIZE),
         ("tooltip::TEXT_SIZE", super::tooltip::TEXT_SIZE),
@@ -617,4 +609,172 @@ fn type_is_on_the_scale() {
             "{name} is {size}, off the scale {scale:?}"
         );
     }
+}
+
+/// The chrome has one grey, neutral, and one colour of its own, amber (#4401): none of the warm
+/// blacks and creams it had, no site's colour on the command bar's rows, and no green for an agent
+/// at work. The Board's page keeps its own.
+#[test]
+fn the_chrome_has_no_warm_grey_and_no_colour_but_amber() {
+    let toml = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("design/tokens.toml"))
+        .unwrap();
+    let warm = ["f3f0e8", "1f1d17", "2a2720", "fbf9f4", "e7e5df"];
+    let (mut table, mut found) = ("", Vec::new());
+    for line in toml.lines().map(str::trim) {
+        if line.starts_with('[') {
+            table = line;
+            assert_ne!(
+                table, "[command-bar.site-colors]",
+                "the site colours are back"
+            );
+        } else if table != "[board]" && !line.starts_with('#') {
+            // A value's digits, without the underscores that group them, as `0xf3f0_e8eb`.
+            let lower = line.to_ascii_lowercase().replace('_', "");
+            if warm.iter().any(|grey| lower.contains(grey)) || line.starts_with("status-agent") {
+                found.push(format!("{table} {line}"));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "warm greys or retired colours:\n{}",
+        found.join("\n")
+    );
+}
+
+/// The surfaces on the one look (#4402) take every colour and shadow from the tokens: none names
+/// white or black, fades a colour by a number of its own, or gives a shadow helper a number but
+/// nought. `look_literal` already finds hex colours and literal shadows across `app/src`.
+const ONE_LOOK: &[&str] = &[
+    "command_bar.rs",
+    "command_bar/choices.rs",
+    "tab_switcher.rs",
+    "settings.rs",
+    "settings_card.rs",
+    "settings_column.rs",
+    "settings_overview.rs",
+    "settings_pictures.rs",
+    "settings_rows.rs",
+    "settings_search.rs",
+    "settings_shortcuts.rs",
+    "menu.rs",
+    "tooltip.rs",
+    "hover_card.rs",
+    "site_controls.rs",
+    "toast.rs",
+    "zoom_hud.rs",
+    "find_bar.rs",
+    "link_preview.rs",
+    "shell.rs",
+    "shell/rows.rs",
+    "shell/sidebar.rs",
+    "shell/task_cards/card.rs",
+    "shell/task_cards/glyph.rs",
+    "dialog.rs",
+    "shell/conversation.rs",
+    "shell/themes.rs",
+    "theme_picker.rs",
+];
+
+#[test]
+fn the_one_looks_surfaces_name_no_colour_or_shadow_but_the_tokens() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for file in ONE_LOOK {
+        let text = fs::read_to_string(src.join(file)).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (n, line) in lines.iter().enumerate() {
+            if line.starts_with("#[cfg(test)]")
+                && lines
+                    .get(n + 1)
+                    .is_some_and(|l| l.starts_with("mod tests {"))
+            {
+                break;
+            }
+            let code = match line.trim_start().starts_with("//") {
+                true => "",
+                false => line.split(" //").next().unwrap(),
+            };
+            if let Some(literal) = surface_literal(code) {
+                found.push(format!("{file}:{}: {literal}", n + 1));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "these belong in design/tokens.toml:\n{}",
+        found.join("\n")
+    );
+}
+
+#[test]
+fn finds_white_black_a_numbers_fade_and_a_shadows_number() {
+    for code in [
+        ".text_color(gpui::white())",
+        "knob: white().into(),",
+        ".bg(Hsla::black())",
+        "accent.opacity(0.2),",
+        ".shadow(vec![shadow(ledge, 2., 0., 0.)])",
+        ".shadow(drop_shadow(HANDLE_SHADOW, 3., 10.))",
+    ] {
+        assert!(surface_literal(code).is_some(), "missed {code}");
+    }
+    for code in [
+        ".bg(palette.white)",
+        "panel.opacity(0.)",
+        "page.opacity(1.)",
+        "fill.opacity(PLATE)",
+        "unpainted.opacity(1. - pose.page)",
+        ".shadow(shadow(ledge, LEDGE_Y, 0., 0.))",
+        "fn shadow(color: Hsla, y: f32, blur: f32) -> BoxShadow {",
+    ] {
+        assert_eq!(surface_literal(code), None, "{code} names no colour");
+    }
+}
+
+/// The first white or black, fade by a number other than nought or one, or call of a shadow helper
+/// with a number other than nought in `code`.
+fn surface_literal(code: &str) -> Option<&str> {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let starts = |at: usize| !code[..at].ends_with(|c: char| word(c));
+    for name in ["white()", "black()"] {
+        if let Some((at, _)) = code.match_indices(name).find(|(at, _)| starts(*at)) {
+            return Some(&code[at..at + name.len()]);
+        }
+    }
+    let number = |arg: &str| {
+        let arg = arg.trim();
+        !arg.is_empty() && arg.chars().all(|c| c.is_ascii_digit() || "._".contains(c))
+    };
+    let call = |at: usize, open: usize| {
+        let close = open + code[open..].find(')').unwrap_or(code.len() - open);
+        (
+            &code[at..(close + 1).min(code.len())],
+            &code[open + 1..close],
+        )
+    };
+    for (at, _) in code.match_indices(".opacity(") {
+        let (whole, arg) = call(at + 1, at + ".opacity".len());
+        if number(arg)
+            && arg.trim_end_matches(['.', '0']) != ""
+            && arg.trim() != "1."
+            && arg.trim() != "1"
+        {
+            return Some(whole);
+        }
+    }
+    for (at, _) in code
+        .match_indices("shadow(")
+        .filter(|(at, _)| !code[..*at].ends_with("fn "))
+    {
+        let begin = code[..at].rfind(|c: char| !word(c)).map_or(0, |b| b + 1);
+        let (whole, args) = call(begin, at + "shadow".len());
+        if args
+            .split(',')
+            .any(|arg| number(arg) && arg.contains(|c: char| ('1'..='9').contains(&c)))
+        {
+            return Some(whole);
+        }
+    }
+    None
 }

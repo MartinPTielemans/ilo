@@ -30,28 +30,24 @@ fn line(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Bounds<Pixe
     })
 }
 
-/// The outline was drawn round `card` as a page's is: outside it by the line's width on its top,
-/// right and bottom, none on its left, in `tone`'s own ink.
+/// The outline was drawn round `card` as a page's is beside the thread's column, which is the
+/// window's: outside it by the line's width on all four sides (#4396), in `tone`'s own ink.
 fn outlined(shell: &Entity<Shell>, card: Bounds<Pixels>, tone: Tone, cx: &mut VisualTestContext) {
     let width = px(PAGE_OUTLINE_WIDTH);
     assert_eq!(line(shell, cx), Some(card), "{tone:?}: no outline round it");
     let mut line = shell.read_with(cx, |shell, _| shell.watched_outline(card));
     let style = line.style();
-    // Outside the card by its own width where it has a line, and at the card's edge on the left.
+    // Outside the card by its own width on every side.
     let at = |edge: Pixels| Some(gpui::Length::from(edge));
     assert!(
-        style.inset.left == at(card.left())
+        style.inset.left == at(card.left() - width)
             && style.inset.top == at(card.top() - width)
-            && style.size.width == at(card.size.width + width)
+            && style.size.width == at(card.size.width + 2. * width)
             && style.size.height == at(card.size.height + 2. * width),
-        "{tone:?}: not outside the card on its top, right and bottom alone"
+        "{tone:?}: not outside the card on all four sides"
     );
     let sides = &style.border_widths;
-    assert!(
-        sides.left == Some(px(0.).into()),
-        "{tone:?}: a line on the left"
-    );
-    for side in [sides.top, sides.right, sides.bottom] {
+    for side in [sides.left, sides.top, sides.right, sides.bottom] {
         assert!(side == Some(width.into()), "{tone:?}: a side with no line");
     }
     let ink = match tone {
@@ -61,8 +57,8 @@ fn outlined(shell: &Entity<Shell>, card: Bounds<Pixels>, tone: Tone, cx: &mut Vi
     assert_eq!(style.border_color, Some(Hsla::from(rgba(ink))), "{tone:?}");
 }
 
-/// A page a thread shows has the page's own outline at rest, in Dark and in Light: on its top,
-/// right and bottom and none on its left.
+/// A page a thread shows has the page's own outline at rest, in Dark and in Light, on all four
+/// sides.
 #[gpui::test]
 fn a_watched_page_has_the_pages_own_outline_in_both_tones(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);

@@ -50,7 +50,9 @@
 # discards it. While a page's own alert is up in its tab, a call there answers at once and close_tab
 # closes the tab. A site's sign-in that the browser asks for hands its tab to the user, as hand_off
 # does, and shows over its page once they watch it; the call that met it waits until Hand Back, and
-# the password they type never reaches the agent, the log or the profile. Its download at Work on pages, where each
+# the password they type never reaches the agent, the log or the profile. A hand-off with the
+# sidebar hidden leaves it hidden (#1080), the tab at the window's edge its sign, captured light
+# and dark on the Mac. Its download at Work on pages, where each
 # task starts, answers with the file, which the answer names. Its upload hands the field's step to
 # the user by the field's name, in a subdomain's frame, an object's or another site's, ilo opening
 # no dialog: Hand Back on ilo's line gives the tab back and Not Now leaves it the user's. Before any
@@ -61,7 +63,7 @@
 # whose override says GET too. A change without the agent's sentence of what it does is refused
 # for that first (#3548). Settings › Other apps opens each request to the agent's sentence, where it
 # went and what it sent, or that the refused one wasn't, and names each by the method sent. Paying,
-# an order, a message as the user and a bank's site are stopped at Work on pages too, nothing
+# an order, a message as the user and a sensitive site are stopped at Work on pages too, nothing
 # asked (#4086): each is ilo's line in the conversation with Give Full access, which the keys
 # press, and at Full access each goes through, with no answer kept for Settings › Other apps to
 # list.
@@ -107,7 +109,9 @@ forget_login
 trap 'cleanup; forget_login' EXIT
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
+# bank.localhost is a sensitive site the way the user makes one (#4369): marked in the profile, where
+# the Agents' file keeps each profile's marks. No host's name says a site is sensitive.
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}],"sensitive":{"Default":["bank.localhost"]}}' "$token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
 # page, as a password manager puts its own in pages. The frame tells the page it's there. In the
@@ -422,7 +426,7 @@ await_log '^browser: made space [1-9][0-9]* for agent mcp-client$' "list_tabs di
 agent=$(grep '^browser: made space' "$log" | tail -1 | cut -d' ' -f4)
 # Its Space is the agent's alone, which no window lists (#1080), and list_tabs alone starts no card.
 await_log "^browser: task space $agent Another app\$" "the window didn't keep the agent's Space apart"
-grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the switcher"
+grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the Space button's menu"
 grep -q '^browser: session ' "$log" && fail "list_tabs alone started the client's card"
 case "$listed" in
   "You have no tabs yet."*) ;;
@@ -987,6 +991,48 @@ hand_back_pressed() {
       grep -e '^browser: \[keys\]' -e '^browser: tab dialog' -e '^browser: drive' | tail -6 |
       tr '\n' ' ')"
 }
+# The tab at the window's edge is a child window of the browser window's, which the layout lists
+# as it shows; nothing logs whether it shows (#4091). Its window is the tab and the shadow's room
+# round it but on the edge's side. edge_side <left|right> <what> finds the child flush with that
+# edge, the tab's height or a shadow's room more, and sets knot_x and knot_y to the tab's middle
+# and content_w to the window's width, or fails saying what the layout had.
+knot_w=$(token shell.edge-knot width)
+knot_h=$(token shell.edge-knot height)
+edge_side() {
+  send layout
+  laid=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout')
+  content_w=$(printf '%s\n' "$laid" | sed -n 's/^browser: layout content \([0-9]*\)x.*/\1/p' | head -1)
+  set -- "$1" "$2" $(printf '%s\n' "$laid" |
+    sed -n 's/^browser: layout child \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p' |
+    awk -v side="$1" -v width="$content_w" -v tall="$knot_h" '
+      (side == "left" ? $1 == 0 : $1 + $3 == width) && $4 >= tall && $4 <= 3 * tall {
+        print; exit
+      }')
+  [ $# = 6 ] ||
+    fail "$2, the window has no child window flush with its $1 edge for the tab there: $(printf '%s\n' "$laid" | tr '\n' ';')"
+  case $1 in
+    left) knot_x=$((knot_w / 2)) ;;
+    right) knot_x=$((content_w - knot_w / 2)) ;;
+  esac
+  knot_y=$(($4 + $6 / 2))
+}
+# edge_gone <what>: the layout lists no child window of the tab's size flush with either edge.
+edge_gone() {
+  send layout
+  laid=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout')
+  content_w=$(printf '%s\n' "$laid" | sed -n 's/^browser: layout content \([0-9]*\)x.*/\1/p' | head -1)
+  ! printf '%s\n' "$laid" |
+    sed -n 's/^browser: layout child \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p' |
+    awk -v width="$content_w" -v tall="$knot_h" '
+      ($1 == 0 || $1 + $3 == width) && $4 >= tall && $4 <= 3 * tall { found = 1 }
+      END { exit !found }' ||
+    fail "$1, the tab at the window's edge still showed: $(printf '%s\n' "$laid" | tr '\n' ';')"
+}
+# The keyboard's holder in the layout edge_side or edge_gone read last: "none" for ilo's own UI, or
+# the page's frame.
+keyboard_laid() {
+  printf '%s\n' "$laid" | sed -n 's/^browser: layout keyboard //p' | head -1
+}
 # Focus Agent Question's key (#3869).
 if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
 # Presses the button named $1 on ilo's newest line that offers any, with the keys, as the user does
@@ -1383,6 +1429,31 @@ if [ "$driven" = 1 ]; then
   since "$agent_clicks" | grep -q -e "^browser: agent mcp-client taken over in $split_a\$" \
     -e "^browser: agent mcp-client taken over in $split_c\$" &&
     fail "the agent's own click in its watched split view took its tab over"
+  # The tab at the window's edge over a split view (#4091): the client hands the split's left page to
+  # the user, which turns its thread to wait, and with the split watched and the sidebar hidden the
+  # tab shows at the window's edge. ⌘↩ on the handed page hands it back, as the user would.
+  waits=$(grep -c "^browser: task card $session Waiting " "$log" || true)
+  request hand_off "{\"tab\":$split_a,\"reason\":\"Sign in over the split\"}" >&4
+  await_log "^browser: agent mcp-client hands off $split_a: Sign in over the split\$" \
+    "hand_off didn't hand the split view's left page to the user"
+  await_more "^browser: task card $session Waiting " "$waits" ||
+    fail "handing off the split view's page didn't turn the client's card to wait: $(grep "^browser: task card $session " "$log" | tail -1)"
+  send key s cmd
+  expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar over the split view"
+  edge_side left "with the sidebar hidden over the client's split view, its thread waiting"
+  ../tools/window-screenshot.sh "$pid" "$out/edge-knot-split.png" all || fail "no window to capture"
+  send key s cmd
+  expect '^browser: sidebar shown$' "⌘S didn't show the sidebar again over the split view"
+  handed=$(grep -c "^browser: agent mcp-client handed back $split_a\$" "$log" || true)
+  send key return cmd
+  await_more "^browser: agent mcp-client handed back $split_a\$" "$handed" ||
+    fail "⌘↩ didn't hand back the split view's page"
+  split_handed=$(next_answer) || fail "the browser didn't answer the split view's hand_off"
+  split_handed=$(printf '%s\n' "$split_handed" | answered hand_off)
+  case "$split_handed" in
+    "The user handed tab $split_a back."*) ;;
+    *) fail "the split view's hand_off answered: $split_handed" ;;
+  esac
   to_pages "the split view"
   # An agent's page is the user's size from the start, so watching it lays nothing out again
   # (#4355). The page counts its resizes, and the agent's press sends its size and the count in
@@ -3571,10 +3642,89 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   opened_watched="^browser: task page $opened_tab watched\$"
   opens=$(grep -c "$opened_watched" "$log" || true)
   placed=$(grep -c "^browser: task page $opened_tab in place\$" "$log" || true)
+  # With the sidebar hidden, the thread turning to wait leaves it hidden: nothing slides over the
+  # page unasked, and the tab at the window's edge is the sign instead (#1080).
+  send key s cmd
+  hidden_at=$step
+  expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar before the hand-off" "$hidden_at"
+  waits=$(grep -c "^browser: task card $session Waiting " "$log" || true)
   request hand_off "{\"tab\":$opened_tab,\"reason\":\"Sign in for the check\"}" >&4
   await_log "^browser: agent mcp-client hands off $opened_tab: Sign in for the check\$" \
     "hand_off didn't hand the tab to the user"
+  await_more "^browser: task card $session Waiting " "$waits" ||
+    fail "the hand-off didn't turn the client's card to wait for the user: $(grep "^browser: task card $session " "$log" | tail -1)"
   send state
+  none_since '^browser: reveal shown$' "$hidden_at" ||
+    fail "a thread turning to wait brought the hidden sidebar out"
+  edge_side left "with the sidebar hidden and the client's thread waiting"
+  ../tools/window-screenshot.sh "$pid" "$out/edge-knot.png" all || fail "no window to capture"
+  # Light and dark, for its look.
+  if [ "$(uname)" = Darwin ]; then
+    for scheme in light dark; do
+      item=Light
+      [ $scheme = light ] || item=Dark
+      send menu "Appearance › $item"
+      expect "^browser: appearance $scheme\$" "View › Appearance › $item didn't change the appearance"
+      edge_side left "in the $scheme appearance"
+      ../tools/window-screenshot.sh "$pid" "$out/edge-knot-$scheme.png" all || fail "no window to capture"
+    done
+    send menu "Appearance › Automatic"
+    expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't give back the system's appearance"
+  fi
+  # With Settings' switch for the window's edge off it still shows, and a press on it still brings
+  # the sidebar out, which goes as the pointer leaves it, and the tab with it, back after (#4091).
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings with the sidebar hidden"
+  settings_drew
+  send clickkey $(drawn "toolbar Tabs & Spaces")
+  settings_drew "Tabs & Spaces"
+  in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+  send clickkey $at
+  expect '^browser: edge reveals sidebar off$' "a click on the edge's switch didn't turn it off"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  edge_side left "with the edge's switch off"
+  ../tools/window-screenshot.sh "$pid" "$out/edge-knot-edge-off.png" all || fail "no window to capture"
+  send click $knot_x $knot_y
+  expect '^browser: reveal shown$' "a click on the tab with the edge's switch off didn't bring the sidebar out"
+  ../tools/window-screenshot.sh "$pid" "$out/edge-knot-pressed.png" all || fail "no window to capture"
+  send move $((content_w / 2)) 300
+  expect '^browser: reveal hidden$' "the pointer leaving the sidebar the tab brought out didn't send it away"
+  edge_side left "after the sidebar the tab brought out went"
+  # With the sidebar on the right the tab is at the window's right edge.
+  send menu Settings…
+  expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't show Tabs & Spaces again"
+  settings_drew "Tabs & Spaces"
+  in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+  send clickkey $at
+  expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
+  send clickkey $(drawn "toolbar Window")
+  expect '^browser: settings tab Window$' "a click on Window didn't show its section"
+  settings_drew Window
+  in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
+  send clickkey $at
+  expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  edge_side right "with the sidebar on the right"
+  ../tools/window-screenshot.sh "$pid" "$out/edge-knot-right.png" all || fail "no window to capture"
+  send menu Settings…
+  expect '^browser: settings shown Window$' "Settings… didn't show Window again"
+  settings_drew Window
+  in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
+  send clickkey $at
+  expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  edge_side left "with the sidebar back on the left"
+  # ⌘S with the page focused brings the sidebar back for good, and the tab goes with it.
+  send click $((content_w / 2)) 300
+  edge_side left "after a click in the handed page"
+  [ "$(keyboard_laid)" != none ] ||
+    fail "a click in the handed page with the sidebar hidden didn't give the page the keyboard: $(printf '%s\n' "$laid" | tr '\n' ';')"
+  send key s cmd
+  expect '^browser: sidebar shown$' "⌘S with the handed page focused didn't show the sidebar again after the hand-off"
+  edge_gone "with the sidebar shown by ⌘S from the page"
   [ "$(grep -c "$opened_watched" "$log" || true)" = "$opens" ] ||
     fail "the page handed to the user took the place of the page they watched"
   # Back in the conversation, the page handed to the user says so under its picture (#1080), and
@@ -3587,6 +3737,17 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   await_more "$opened_watched" "$opens" || fail "the page handed to the user didn't open by itself"
   await_more "^browser: task page $opened_tab in place\$" "$placed" ||
     fail "the page handed to the user didn't come to rest in place"
+  # The tab shows over the thread's own conversation too, with the sidebar hidden (#4091).
+  send key s cmd
+  expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar over the conversation"
+  edge_side left "with the sidebar hidden over the client's waiting conversation"
+  ../tools/window-screenshot.sh "$pid" "$out/edge-knot-conversation.png" all || fail "no window to capture"
+  # ⌘S with ilo's own UI focused, the conversation's, brings the sidebar back too, the tab gone.
+  [ "$(keyboard_laid)" = none ] ||
+    fail "over the conversation a page had the keyboard, not ilo's UI: $(printf '%s\n' "$laid" | tr '\n' ';')"
+  send key s cmd
+  expect '^browser: sidebar shown$' "⌘S with the conversation focused didn't show the sidebar again"
+  edge_gone "with the sidebar shown by ⌘S from the conversation"
   ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
   # The keyboard stayed the window's as ilo opened the page, so Escape steps back from it, and the
   # step's line stands in the conversation with its buttons.
@@ -3931,7 +4092,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
   [ -n "$notes_tab" ] && [ -n "$notes_ref" ] ||
     fail "the agent's tab of the site it downloads from didn't open with its link: $saved_page"
 
-  # Paying, placing an order, sending a message as the user and a bank's site aren't part of Work
+  # Paying, placing an order, sending a message as the user and a sensitive site aren't part of Work
   # on pages, where every task starts: ilo refuses each at once, asking nothing (#4086), the agent
   # hears that only the user changes a task's access, the stop is logged, and nothing is done on the
   # page. Each refusal is ilo's line in the conversation, with the step up that would allow it, and
@@ -4080,29 +4241,30 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     does_at click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}" butik.localhost "$said_tab" \
       'click “Betal”' Order Betalt
   }
-  # A bank's site isn't opened at Work on pages, and at Full access it is, where its Overfør moves
-  # money as any order there goes through. Its charset said, as the site's server says none and
+  # A site the user marked sensitive isn't opened at Work on pages, and at Full access it is, where
+  # its Overfør moves money as any order there goes through; bank.localhost is marked in the Agents'
+  # file above. Its charset said, as the site's server says none and
   # the page would read as Latin-1.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
   printf '%s' "<meta charset=utf-8><title>Konto</title>
 <button onclick=\"document.title = 'Overført'\">Overfør</button>" > "$out/site/move.html"
   bank_steps() {
-    stop='^browser: agent mcp-client stopped Bank at Work on pages: bank\.localhost$'
+    stop='^browser: agent mcp-client stopped Sensitive at Work on pages: bank\.localhost$'
     before=$(grep -c "$stop" "$log" || true)
     allowed=$(call open_tab "$bank")
     case "$level" in
       "Work on pages")
         case "$allowed" in
           "error: $product stopped this: open bank.localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product."*) ;;
-          *) fail "a bank's site at Work on pages answered: $allowed" ;;
+          *) fail "a sensitive site at Work on pages answered: $allowed" ;;
         esac
         await_more "$stop" "$before" ||
-          fail "the bank's site refused at Work on pages wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
-        await_log '^browser: agent logged mcp-client open_tab bank\.localhost refused: Using a bank site isn.t part of Work on pages\.$' \
-          "the bank's site refused at Work on pages isn't in the activity log in ilo's sentence: $(grep '^browser: agent logged mcp-client .* bank\.localhost' "$log" | tail -1)"
+          fail "the sensitive site refused at Work on pages wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
+        await_log '^browser: agent logged mcp-client open_tab bank\.localhost refused: Using a sensitive site isn.t part of Work on pages\.$' \
+          "the sensitive site refused at Work on pages isn't in the activity log in ilo's sentence: $(grep '^browser: agent logged mcp-client .* bank\.localhost' "$log" | tail -1)"
         ;;
       *)
-        case "$allowed" in "Opened tab "*) ;; *) fail "a bank's site at $level answered: $allowed" ;; esac
+        case "$allowed" in "Opened tab "*) ;; *) fail "a sensitive site at $level answered: $allowed" ;; esac
         saying move.html bank Overfør button
         does_at click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}" bank.localhost "$said_tab" \
           'click “Overfør”' Order Overført
@@ -4131,7 +4293,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     sleep 0.1
   done
   [ "${newest:-0}" -gt "${lined:-0}" ] ||
-    fail "the bank's refusal drew no line of ilo's with Give Full access: $(grep '^browser: ilo line ' "$log" | tail -2 | tr '\n' ' ')"
+    fail "the sensitive site's refusal drew no line of ilo's with Give Full access: $(grep '^browser: ilo line ' "$log" | tail -2 | tr '\n' ' ')"
   ../tools/window-screenshot.sh "$pid" "$out/agent-stops.png" || fail "no window to capture"
   follows_log "$out/agent-stops-before.png" "$out/agent-stops.png" \
     "$(sed -n "s/^browser: ilo line $newest Give Full access at //p" "$log" | tail -1)" \
@@ -5022,7 +5184,7 @@ if [ "$driven" = 1 ]; then
     "a Send off the messaging sites is stopped once its page holds a message," \
     "a forum's Comment and a chat's Send in no form," \
     "and not with its field empty," \
-    "a Danish Betal and a bank's site are stopped," \
+    "a Danish Betal and a sensitive site are stopped," \
     "each stop ilo's line with Give Full access on screen as the log draws it ($follows% of its place changed)," \
     "which the keys press," \
     "and each goes through at Full access," \

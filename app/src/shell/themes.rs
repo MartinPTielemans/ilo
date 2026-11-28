@@ -11,15 +11,14 @@ use super::{
     undo::{Prop, Value},
 };
 use crate::{
-    glow,
     palette::{self, Palette, Tone},
     text_input::Colors,
     theme::{Appearance, GRAIN_TILE, INACTIVE_TEXTURE, Texture, Theme},
     theme_picker::{self, Changed},
 };
 
-/// What the window's reckoning was last logged from: its tint, its glows, its size and its side.
-type Reckoned = (Rgba, Rgba, Rgba, f32, f32, bool);
+/// What the window's reckoning was last logged from: its tint, its Space's and its size.
+type Reckoned = (Rgba, Rgba, f32, f32);
 
 thread_local! {
     /// Compared each frame, so the reckoning is made and logged only when it changes.
@@ -357,16 +356,6 @@ impl Shell {
         }
     }
 
-    /// Where the sidebar's middle is across the window, 0 to 1, where the window's colour is taken
-    /// for what covers it.
-    pub(super) fn sidebar_x(&self) -> f32 {
-        let x = self.width() / 2. / f32::from(self.viewport.width).max(1.);
-        match self.right() {
-            true => 1. - x,
-            false => x,
-        }
-    }
-
     /// What the window's palette makes of the empty sidebar 60 points in and 450 down, where
     /// check/window.sh reads it over a grey backdrop: the window over black, grey 128 and white on
     /// a black desktop, and over black as much lighter as a desktop picture can make it, as grey
@@ -378,51 +367,26 @@ impl Shell {
             f32::from(self.viewport.height),
         );
         let palette = &self.palette;
-        let key = (
-            palette.tint,
-            palette.glow,
-            palette.far_glow,
-            width,
-            height,
-            self.right(),
-        );
+        let key = (palette.tint, palette.space_tint, width, height);
         if width <= 0. || height <= 0. || RECKONED.get() == Some(key) {
             return;
         }
         RECKONED.set(Some(key));
-        let (foot, far) = glow::strengths(60., 450., width, height, self.right());
         let level = |at: Rgba| ((at.r + at.g + at.b) / 3. * 255.).round() as u8;
-        let [black, grey, white] = palette.window_over_greys(foot, far, 0.).map(level);
-        let [lifted, ..] = palette.window_over_greys(foot, far, 1.).map(level);
+        let [black, grey, white] = palette.window_over_greys(0.).map(level);
+        let [lifted, ..] = palette.window_over_greys(1.).map(level);
         log!(
             "browser: window reckons {black} {grey} {white} lifted {lifted} at 60,450 in \
              {width:.0}x{height:.0}"
         );
     }
 
-    /// The window's colour behind everything: the Space's glows from the sidebar's foot and the
-    /// window's far corner, one Space's fading into the other's as the sidebar pages between them,
-    /// or a private window's shade; and each one's texture over them, fainter while the window
-    /// isn't active. The glows are pictures made once for each colour (glow.rs), so a frame that
-    /// changes nothing makes nothing.
+    /// The window's colour behind everything: the Space's tint, flat, one Space's fading into the
+    /// other's as the sidebar pages between them, or a private window's shade; and each one's
+    /// texture over them, fainter while the window isn't active.
     pub(super) fn window_background(&self) -> gpui::Div {
-        let space = self.colored_pages().0;
         let pages = self.paged_weights();
-        let right = self.right();
-        let background = div().absolute().size_full();
-        let background = match self.private {
-            true => background.bg(self.space_color_at(space, 0., 0.)),
-            false => background.children(pages.iter().flat_map(|&(space, weight)| {
-                let palette = self.palette_of(space);
-                [
-                    (glow::Corner::Foot, palette.glow),
-                    (glow::Corner::Far, palette.far_glow),
-                ]
-                .into_iter()
-                .filter(move |(_, color)| color.a > 0. && weight > 0.)
-                .map(move |(corner, color)| glow::glow(corner, right, color, color.a * weight))
-            })),
-        };
+        let background = div().absolute().size_full().bg(self.space_color());
         let dimmed = if self.window_active {
             1.
         } else {
@@ -439,7 +403,7 @@ impl Shell {
 }
 
 /// `texture` over the whole window at `opacity`, in tiles at one device pixel to a pixel.
-fn texture_layer(texture: Texture, opacity: f32) -> impl IntoElement {
+pub(super) fn texture_layer(texture: Texture, opacity: f32) -> impl IntoElement + use<> {
     div().absolute().size_full().opacity(opacity).child(
         canvas(
             |_, _, _| {},

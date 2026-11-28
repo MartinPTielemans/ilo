@@ -3,7 +3,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use gpui::{App, SharedString};
+use gpui::App;
 
 use crate::command_bar::{self, TaskAgent, TaskAgents};
 use crate::elevation::Level;
@@ -138,14 +138,10 @@ impl command_bar::Host for RestingBar {
     fn asking(&self, shown: bool, _: &mut App) {
         self.ask(format!("asking {shown}"));
     }
-    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
-        None
-    }
     fn run_task(
         &self,
         agent: &str,
         text: &str,
-        _: Option<(SharedString, SharedString)>,
         _: crate::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,

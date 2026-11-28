@@ -54,13 +54,17 @@ pub const INSTRUCTIONS: &str = concat!(
      When your task is finished, call done: the user's card says it's done. Closing your last \
      page ends your task too, unless you call again within 60 seconds."
 );
-/// What a task's CLI is told, after its own system prompt (Agent task).
+/// What a task's CLI is told, after its own system prompt (Agent task), with the user's tabs on
+/// (`YOUR_TABS_TOLD`).
 pub const TASK_INSTRUCTIONS: &str = concat!(
     "You do a task the user asked in ",
     env!("PRODUCT_NAME"),
     ", their web browser, signed in wherever they are. You work only through its tools, in \
-     tabs of your own, which the user can watch on your task's card in their sidebar; you can \
-     only see and use your own tabs. Open pages, read them and act in them. You have no shell or \
+     tabs of your own, which the user can watch on your task's card in their sidebar. You can \
+     see the titles and sites of the user's open tabs with your_tabs and open your own copy of \
+     one with open_your_tab, but you never use the user's tabs themselves unless they hand one \
+     to you. You never see passwords, cookies or autofill. Open pages, read them and act in \
+     them. You have no shell or \
      files, so find everything with the browser, and search the web with search.\n\n\
      First call title with a name for the task in two to four words and at most 24 characters, as \
      a tab's title reads, such as “Lisbon museum hours”.\n\n\
@@ -111,12 +115,26 @@ pub const BINDING_AT_FULL: &str = "Never pay, place an order, book, send a messa
 /// hand_off as a thread of the browser's own has it: it returns at once (#4363).
 const TASK_HAND_OFF: &str = "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this returns at once: you're told when they hand the tab back. Until then the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.";
 
+/// What a thread is told of the user's tabs while it may see them (YT9, #4403), the sentence of
+/// `TASK_INSTRUCTIONS` after it's told it works in tabs of its own.
+pub const YOUR_TABS_TOLD: &str = "You can see the titles and sites of the user's open tabs with \
+                                  your_tabs and open your own copy of one with open_your_tab, but \
+                                  you never use the user's tabs themselves unless they hand one \
+                                  to you. You never see passwords, cookies or autofill.";
+/// What a thread is told of them with the switch off: an outside client's sentence.
+pub const OWN_TABS_ONLY: &str = "You can only see and use your own tabs, never the user's, and never passwords, cookies or \
+     autofill.";
+
 /// What a task's CLI is told at `tier`: `TASK_INSTRUCTIONS`, with Full access's own words for the
-/// steps that bind the user there.
-pub fn task_instructions(tier: super::tier::Tier) -> String {
-    match tier {
+/// steps that bind the user there, and with `your_tabs` off the outside clients' sentence on tabs.
+pub fn task_instructions(tier: super::tier::Tier, your_tabs: bool) -> String {
+    let told = match tier {
         super::tier::Tier::Full => TASK_INSTRUCTIONS.replace(BINDING, BINDING_AT_FULL),
         _ => TASK_INSTRUCTIONS.to_string(),
+    };
+    match your_tabs {
+        true => told,
+        false => told.replace(YOUR_TABS_TOLD, OWN_TABS_ONLY),
     }
 }
 /// What a strand's CLI is told, after its own system prompt: a helper's part of its thread's task,
@@ -133,8 +151,22 @@ pub const STRAND_INSTRUCTIONS: &str = concat!(
 pub const STRAND: &str = "strand";
 /// A thread's own tools, which no strand of it has: its name, its questions, its end, a tab handed
 /// to the user or asked back, and a strand of its own. Each speaks to the user as the thread.
-pub const THE_THREADS_OWN: [&str; 6] =
-    ["title", "ask", "finish", "hand_off", "ask_for_tab", STRAND];
+/// The user's own tabs are a thread's alone too: a helper works in what its thread gives it.
+pub const THE_THREADS_OWN: [&str; 8] = [
+    "title",
+    "ask",
+    "finish",
+    "hand_off",
+    "ask_for_tab",
+    STRAND,
+    YOUR_TABS[0],
+    YOUR_TABS[1],
+];
+/// The tools that see the user's open tabs and copy one, which Settings can switch off (#4403).
+pub const YOUR_TABS: [&str; 2] = ["your_tabs", "open_your_tab"];
+/// The target of open_tab's step and entry for a copy of one of the user's tabs, which no call
+/// gives, as open_tab's target is its own to set.
+pub const FROM_YOUR_TABS: &str = "your tabs";
 
 /// The characters an answer holds at most, whatever the tool: an agent uses little of a long one,
 /// which fills its context (#3657). Each tool's own cut comes first, where it can say how to get
@@ -239,7 +271,16 @@ pub fn capped_after(text: String, before: usize) -> String {
     }
 }
 
-/// The tools `agent` may call, for tools/list: a task's own too.
+/// The tools `agent` may call, for tools/list, with the user's tabs while `your_tabs` is on.
+pub fn listed(agent: &str, your_tabs: bool) -> Value {
+    let mut tools = list(agent);
+    if let (false, Some(tools)) = (your_tabs, tools.as_array_mut()) {
+        tools.retain(|tool| !YOUR_TABS.iter().any(|name| tool["name"] == *name));
+    }
+    tools
+}
+
+/// The tools `agent` may call with every switch on: a task's own too.
 pub fn list(agent: &str) -> Value {
     let mut tools = shared();
     if let Some(tools) = tools.as_array_mut() {
@@ -279,11 +320,14 @@ pub fn names(agent: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `agent` has a tool of this name: one of those tools/list gives it. Each list is made
-/// once and kept for the process's life, which is right only while a list depends on the kind of
-/// agent alone, a thread's, a strand's or an outside agent's. The day one varies by a setting,
-/// the kept list goes, or a tool switched on is refused here and one switched off is run.
-pub fn has(agent: &str, tool: &str) -> bool {
+/// Whether `agent` has a tool of this name: one of those tools/list gives it, `your_tabs` saying
+/// whether the user's tabs are switched on. Each kind's list, a thread's, a strand's or an
+/// outside agent's, is made once with every switch on and kept for the process's life, so a
+/// switch off is read here on each call, or a tool switched off is run.
+pub fn has(agent: &str, tool: &str, your_tabs: bool) -> bool {
+    if !your_tabs && YOUR_TABS.contains(&tool) {
+        return false;
+    }
     static NAMES: [std::sync::OnceLock<Vec<String>>; 3] = [
         std::sync::OnceLock::new(),
         std::sync::OnceLock::new(),
@@ -429,6 +473,28 @@ fn task_tools() -> Vec<Value> {
         title_tool(),
         search_tool(),
         strand_tool(),
+        json!({
+            "name": "your_tabs",
+            // TODO-WORDS: the title alone; batch 18 has no row for it.
+            "title": "See the user's open tabs",
+            "description": "Lists the user's open tabs in this profile: an id, a title and a site for each, never what's on the page. Call your_tabs only when the request may be about something the user has open. Private windows, sensitive sites and sites on the user's Off limits list are left out.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false },
+        }),
+        json!({
+            "name": "open_your_tab",
+            // TODO-WORDS: the title alone; batch 18 has no row for it.
+            "title": "Open a copy of the user's tab",
+            "description": "Opens one of the user's tabs, by its id from your_tabs, as a new tab of your own at the same address, signed in the same way. The user's tab is never moved or changed. If you need the tab as it is, such as a half-filled form, ask the user to hand it to you.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "n": { "type": "integer", "description": "The tab's id from your_tabs." },
+                },
+                "required": ["n"],
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true },
+        }),
         json!({
             "name": "ask",
             "title": "Ask the user",
@@ -1316,6 +1382,15 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     };
     // Each step's verb in its three tenses, and what it acts on.
     let (now, done, failed, on) = match did.tool.as_str() {
+        // A copy of one of the user's tabs, by its own words in the trace and the log (YT2a, YT4).
+        "open_tab" if did.target == FROM_YOUR_TABS => {
+            let page = site("a page");
+            return match tense {
+                Tense::Now => format!("Opening {page} from your tabs"),
+                Tense::Done => format!("Opened {page} from your tabs"),
+                Tense::Failed => format!("Couldn't open {page} from your tabs"),
+            };
+        }
         "open_tab" | "navigate" => ("Opening", "Opened", "Couldn't open", site("a page")),
         "back" => (
             "Going back on",
@@ -1434,6 +1509,20 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't look at",
             "your profiles".to_string(),
         ),
+        // A look's log entry counts what it listed, which its step in the trace doesn't (YT2, YT3).
+        "your_tabs" => {
+            let count = match did.target.as_str() {
+                "" => String::new(),
+                "0" => " · none".to_string(),
+                "1" => " · 1 tab".to_string(),
+                count => format!(" · {count} tabs"),
+            };
+            return match tense {
+                Tense::Now => format!("Looking at your open tabs{count}"),
+                Tense::Done => format!("Looked at your open tabs{count}"),
+                Tense::Failed => format!("Couldn't look at your open tabs{count}"),
+            };
+        }
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
         "pin_tab" => ("Pinning", "Pinned", "Couldn't pin", site("a tab")),
         "unpin_tab" => ("Unpinning", "Unpinned", "Couldn't unpin", site("a tab")),
@@ -1518,7 +1607,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 _ => "Searched the web".into(),
             };
         }
-        MOVED_ON => return format!("Went on when {} moved past your step", site(NO_SITE)),
+        MOVED_ON => return format!("Took {} back when the page moved on", site(NO_SITE)),
         PROGRAM_SEARCHED => return "Searched the web".into(),
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
         PAGES_BACK if !did.target.is_empty() => {
@@ -1569,8 +1658,8 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "request" => "icons/arrow-left-right.svg",
         "wait" => "icons/clock.svg",
         "check" => "icons/text-search.svg",
-        "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
-        | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
+        "list_tabs" | "your_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab"
+        | "split_tabs" | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
             "icons/app-window.svg"
         }
         "list_profiles" => "icons/users.svg",
@@ -1646,11 +1735,12 @@ pub fn tabs_named(arguments: &Value) -> Vec<u64> {
 }
 
 /// The tools that never act on the tab their connection used last.
-pub const NO_TAB_OF_ITS_OWN: [&str; 8] = [
+pub const NO_TAB_OF_ITS_OWN: [&str; 9] = [
     "open_tab",
     SEARCHED,
     "list_tabs",
     "list_profiles",
+    "your_tabs",
     "title",
     "done",
     "sort_tabs_by_site",
@@ -1691,6 +1781,7 @@ pub fn describe(action: &str) -> &'static str {
         NOT_SECURE_ACTION => NOT_SECURE,
         "list_tabs" => "Listed its tabs",
         "list_profiles" => "Looked at your profiles",
+        "your_tabs" => "Looked at your open tabs",
         "read_page" => "Read the page",
         CONSOLE => "Read the console",
         PAGE_LOG_FAILED => "Read failed requests",
@@ -1794,9 +1885,9 @@ mod note_tests {
             TASK_INSTRUCTIONS.contains(BINDING),
             "the instructions lost BINDING"
         );
-        assert_eq!(task_instructions(Tier::Look), TASK_INSTRUCTIONS);
-        assert_eq!(task_instructions(Tier::Work), TASK_INSTRUCTIONS);
-        let full = task_instructions(Tier::Full);
+        assert_eq!(task_instructions(Tier::Look, true), TASK_INSTRUCTIONS);
+        assert_eq!(task_instructions(Tier::Work, true), TASK_INSTRUCTIONS);
+        let full = task_instructions(Tier::Full, true);
         assert_ne!(full, TASK_INSTRUCTIONS);
         assert!(full.contains(BINDING_AT_FULL) && !full.contains(BINDING));
         assert!(
@@ -1808,7 +1899,30 @@ mod note_tests {
                      unless the user asked you to: being asked to fill something in isn't being \
                      asked to send it.";
         for tier in Tier::ALL {
-            assert!(task_instructions(tier).contains(never), "{tier:?}");
+            assert!(task_instructions(tier, true).contains(never), "{tier:?}");
+        }
+    }
+
+    /// A thread is told it sees the user's open tabs while it may (#4403), and with the switch off
+    /// what an outside client is, at every level.
+    #[test]
+    fn what_a_thread_is_told_of_the_users_tabs_follows_the_switch() {
+        use crate::agents::tier::Tier;
+        assert!(INSTRUCTIONS.contains(OWN_TABS_ONLY));
+        assert!(!INSTRUCTIONS.contains(YOUR_TABS_TOLD));
+        for tier in Tier::ALL {
+            let (on, off) = (
+                task_instructions(tier, true),
+                task_instructions(tier, false),
+            );
+            assert!(
+                on.contains(YOUR_TABS_TOLD) && !on.contains(OWN_TABS_ONLY),
+                "{tier:?}"
+            );
+            assert!(
+                off.contains(OWN_TABS_ONLY) && !off.contains("your_tabs"),
+                "{tier:?}"
+            );
         }
     }
 

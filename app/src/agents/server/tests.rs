@@ -49,6 +49,7 @@ fn on() -> Switches {
     Switches {
         threads: Arc::new(AtomicBool::new(true)),
         others: Arc::new(AtomicBool::new(true)),
+        your_tabs: Arc::new(AtomicBool::new(true)),
     }
 }
 

@@ -5,7 +5,6 @@
 
 use gpui::Context;
 
-use super::task::rewall::Change;
 use super::tier::{self, Stop, Tier, Why};
 use super::{
     Act, Agents, CHANGES_ASK, DOWNLOADS, FENCED, Refused, UNSAVED, act_of, page, site, tools,
@@ -22,10 +21,14 @@ pub(super) const ACTS: [&str; 4] = ["click", "type", "select_option", "press_key
 /// request's changes by their own row, and a close of a tab of the user's gives it back as it is.
 /// Any other is refused there below Full access (`stopped_in_use`), so one made later is refused
 /// on such a page until it's placed here.
-pub(super) const IN_USE_ANSWERS: [&str; 29] = [
+pub(super) const IN_USE_ANSWERS: [&str; 31] = [
     // A file a thread reads is no page's: the page is left as it is.
     "read_file",
     "list_tabs",
+    // The user's tabs by title and site, which reads no page of theirs, and a copy of one, which
+    // is open_tab's open (#4403).
+    "your_tabs",
+    "open_your_tab",
     "list_profiles",
     "list_split",
     "open_tab",
@@ -270,10 +273,10 @@ impl Agents {
     }
 
     /// The user changes the task `key`'s access to `tier`: from its line or its chip, never from
-    /// an agent. Its refusals are settled, the log keeps the change, and a task ilo runs is told.
-    /// One with files goes up only if its wall of the new level does, and starts again inside
-    /// the wall of whichever level it's set to (rewall.rs). On a task that has ended nothing
-    /// starts: the level is the one its next reply starts at, walled then (`pick_up`).
+    /// an agent. Its refusals are settled, the log keeps the change, and a task ilo runs is told,
+    /// at once for a raise: its run goes on, in a box that's the same at every level (wall.rs).
+    /// On a task that has ended nothing starts: the level is the one its next reply starts at
+    /// (`pick_up`).
     pub fn set_tier(&mut self, key: &str, tier: Tier, cx: &mut Context<Self>) {
         let Some(task) = self.task(key) else {
             return;
@@ -282,13 +285,6 @@ impl Agents {
         if from == tier {
             return;
         }
-        let raised = match ended {
-            true => None,
-            false => match self.wall_to_raise(key, from, tier) {
-                Ok(raised) => raised,
-                Err(()) => return cx.notify(),
-            },
-        };
         let Some(task) = self.task_mut(key) else {
             return;
         };
@@ -319,8 +315,7 @@ impl Agents {
         let changed = tier::changed_logged(from, tier);
         self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
         if runs && !ended {
-            let change = Change::Level { from, raised };
-            self.rewall(key, change, tier::changed_turn(from, tier), cx);
+            self.tell_task(key, tier::changed_turn(from, tier), tier > from, cx);
         }
         cx.notify();
     }

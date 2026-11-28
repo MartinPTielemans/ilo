@@ -566,6 +566,21 @@ impl Browser for Core {
             })
     }
 
+    fn user_spaces(&self, profile: &str) -> Vec<u64> {
+        (ids(bc::bc_spaces).into_iter())
+            .filter(|&space| {
+                name(bc::bc_space_agent, space).is_empty()
+                    && profile_folder(unsafe { bc::bc_space_profile(space) }) == profile
+                    && !self.private_space(space)
+            })
+            .collect()
+    }
+
+    /// The core doesn't say yet how a tab's page was reached, so its address is all there is.
+    fn posted(&self, _: u64, _: &App) -> bool {
+        false
+    }
+
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
         let headers: String = (sent.headers.iter())
             .map(|(name, value)| format!("{name}: {value}\n"))

@@ -14,13 +14,9 @@ fn on_plan(cli: crate::agents::runner::Cli) -> String {
     format!("On your {} plan", assistant_name(cli))
 }
 
-/// What an assistant's row calls it: the one the user signs in to.
+/// What an assistant's row calls it: the one the user signs in to, as its provider names it.
 pub fn assistant_name(cli: crate::agents::runner::Cli) -> &'static str {
-    use crate::agents::runner::Cli;
-    match cli {
-        Cli::Claude => "Claude",
-        Cli::Codex => "ChatGPT",
-    }
+    cli.account_name()
 }
 
 /// The ring that turns while a sign-in is under way: the product's one sign of work, a turn a
@@ -192,8 +188,9 @@ fn more(
 
 /// First run's form of an assistant's row (v9 §4): its line as `shown` words it, then Sign In,
 /// the ring and Cancel while it waits, the ring alone while a look or a sign-out is under way, or,
-/// signed in, `done` (the card's check disc) and the ⋯. The mark stays Settings › Models' alone,
-/// as the card draws none.
+/// signed in, `done` (the card's check disc) alone: no ⋯, as signing out on the step just signed
+/// in on is nothing first run needs, and nothing in first run opens Settings (#4448). Its name
+/// and glyph are the provider's.
 pub fn first_run_row(
     look: &Look,
     cli: crate::agents::runner::Cli,
@@ -232,10 +229,7 @@ pub fn first_run_row(
                 Act::Cancel,
             ),
         ],
-        Offer::SignedIn => vec![
-            done.into_any_element(),
-            more(look, cli, a11y, div(), act.clone()).into_any_element(),
-        ],
+        Offer::SignedIn => vec![done.into_any_element()],
     };
     // One line in every state (FR19), so the row is never taller in one than another: each
     // state's words are written to fit the card's column, and one that doesn't is cut where it's
@@ -253,7 +247,7 @@ pub fn first_run_row(
     wrapping(
         look,
         cli.glyph(),
-        named(assistant_name(cli), Some(line)),
+        named(cli.account_name(), Some(line)),
         controls,
     )
 }

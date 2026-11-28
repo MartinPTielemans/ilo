@@ -1,7 +1,7 @@
 //! The one way the browser starts a program of its own (#1676).
 
 use std::ffi::OsStr;
-use std::process::Command;
+use std::process::{Child, Command};
 
 /// A command for `program`, as `Command::new` makes one, but that on Windows opens no console
 /// window: the windowed browser has no console, so each console program it starts, and the
@@ -16,6 +16,28 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
         command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     }
     command
+}
+
+/// Starts `command` at a low priority, as a chore the browser does in the background: `nice` 10
+/// on Mac and Linux, below normal on Windows, which what it starts in turn takes too. Lowered on
+/// Mac and Linux once it's running, as a hook before then would start it by a fork of the whole
+/// browser rather than a spawn.
+pub fn spawn_low(command: &mut Command) -> std::io::Result<Child> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{
+            BELOW_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW,
+        };
+        command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
+    }
+    let child = command.spawn()?;
+    // One that ended already has no priority to set, and one that can't be lowered still runs.
+    #[cfg(unix)]
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, child.id(), 10)
+    };
+    Ok(child)
 }
 
 #[cfg(test)]

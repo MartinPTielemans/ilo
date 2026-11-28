@@ -1323,7 +1323,7 @@ expect_lists() {
   expect "^browser: pinned $1\$" "$3: the pinned tabs are \"$(pinned)\", not \"$1\""
   expect "^browser: today $2\$" "$3: Today is \"$(today)\", not \"$2\""
 }
-# What the footer's + menu ends with to add from the desktop: one item where the system's open
+# What the Space button's menu ends with to add from the desktop: one item where the system's open
 # panel picks files and folders together, the Mac's, else one for each.
 plus_adds() {
   if [ "$(uname)" = Darwin ]; then
@@ -1390,7 +1390,8 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
     fail "the profile kept Safari's engine's sites through the forget: $(engine_sites)"
 }
 
-# Starts the app on the page $1 with the profile $2 and the arguments after $3, and check/cdp.py
+# Starts the app on the page $1, or with $1 empty on none, as a relaunch that brings the Spaces back
+# opens no tab of its own, with the profile $2 and the arguments after $3, and check/cdp.py
 # attached to the page whose address ends in $3, or with $3 empty to none until its attach command,
 # logging to $log and $cdp_log, with the driver on fd 3 and cdp.py's commands on fd 5, through fifos
 # in $scratch. Sets $pid and $helper.
@@ -1401,12 +1402,14 @@ start_with_cdp() {
   # or the first await's grep says it's missing (#3276).
   : > "$log"
   mkfifo "$scratch/cdp"
+  # env, as an assignment in front of the command can't be left out when there's no page. No array:
+  # check.sh parses this file with dash first.
   if windows; then
     # Chrome on Windows takes its DevTools pipe as handles, which Git Bash can't give it, so
     # DevTools listens on a loopback port instead, which the browser says on its standard error. A
     # native program can't read Git Bash's fifo, so cat passes cdp.py its commands, and the page is
     # named without its slash, which Git Bash would make a path of Git's own.
-    BROWSER_DRIVE=1 BROWSER_URL="$cdp_url" BROWSER_PROFILE_DIR="$cdp_profile" \
+    env BROWSER_DRIVE=1 BROWSER_PROFILE_DIR="$cdp_profile" ${cdp_url:+"BROWSER_URL=$cdp_url"} \
       "$browser" --remote-debugging-port=0 "$@" < "$out/drive" > "$log" 2>&1 &
     pid=$!
     exec 3> "$out/drive"
@@ -1420,7 +1423,7 @@ start_with_cdp() {
     mkfifo "$scratch/to-browser" "$scratch/from-browser"
     # Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
     # DevTools pipe, then cdp.py's input.
-    BROWSER_DRIVE=1 BROWSER_URL="$cdp_url" BROWSER_PROFILE_DIR="$cdp_profile" \
+    env BROWSER_DRIVE=1 BROWSER_PROFILE_DIR="$cdp_profile" ${cdp_url:+"BROWSER_URL=$cdp_url"} \
       "$browser" --remote-debugging-pipe "$@" < "$out/drive" 3< "$scratch/to-browser" \
       4> "$scratch/from-browser" > "$log" 2>&1 &
     pid=$!

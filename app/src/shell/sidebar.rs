@@ -7,12 +7,11 @@ use std::{rc::Rc, time::Duration};
 
 use gpui::{
     App, Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Hsla, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, Window, canvas, div,
-    linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, Window, canvas, div, point,
+    prelude::*, px, size,
 };
 
 use super::access::Accessible as _;
-use crate::glow;
 use crate::tokens::shell::{SHOWN_MARKER, SHOWN_MARKER_HIT};
 
 use super::{
@@ -67,6 +66,17 @@ pub(super) fn from_side(right: bool, width: f32, x: f32) -> f32 {
     }
 }
 
+/// Whether `x`, across a window `width` wide, is in the edge strip on the sidebar's side: its
+/// points from the window's edge in, as the core counts them (`InPageEdgeStrip`), so a point the
+/// core leaves the UI over a page is one the UI takes. Mirrored, `from_side` would take the right
+/// edge's point past the window and not its first one in (#4484).
+pub(super) fn at_edge(right: bool, width: f32, x: f32) -> bool {
+    match right {
+        true => (width - EDGE_STRIP..width).contains(&x),
+        false => (0. ..EDGE_STRIP).contains(&x),
+    }
+}
+
 /// `frame` in a window `width` wide, mirrored when the sidebar is on the right.
 pub(super) fn mirrored(right: bool, width: Pixels, frame: Bounds<Pixels>) -> Bounds<Pixels> {
     match right {
@@ -88,6 +98,11 @@ impl Shell {
     /// `x` across the window from the sidebar's side (`from_side`).
     pub(super) fn from_side(&self, x: f32) -> f32 {
         from_side(self.right, f32::from(self.viewport.width), x)
+    }
+
+    /// Whether `x` across the window is in the edge strip on the sidebar's side (`at_edge`).
+    pub(super) fn at_edge(&self, x: f32) -> bool {
+        at_edge(self.right, f32::from(self.viewport.width), x)
     }
 
     /// Where the docked sidebar's column starts across the window: 0, or its width in from the
@@ -341,12 +356,13 @@ impl Shell {
         if self.page_fullscreen {
             return;
         }
-        // Ours: the sidebar comes back from the Library as it was.
-        if self.library_open {
-            return self.set_library(false, cx);
-        }
         if self.dock(cx) {
             return;
+        }
+        // ⌘S hides the sidebar whatever it shows (#4414): the Library goes back in as it goes, and
+        // the sidebar comes back without it. Its glyph opens it again.
+        if !self.sidebar_hidden {
+            self.set_library(false, cx);
         }
         let from = self.card_left();
         self.sidebar_hidden = !self.sidebar_hidden;
@@ -628,17 +644,15 @@ impl Shell {
         (space, Some((beside, t)))
     }
 
-    /// The Space's colour where the sidebar's middle is, `y` from the window's top (0) to its
-    /// bottom (1): its glows there. While the sidebar pages between two Spaces, it cross-fades from
-    /// one's to the other's as the pages move.
-    pub(super) fn gradient_color(&self, y: f32) -> Hsla {
-        let x = self.sidebar_x();
+    /// The Space's colour, its tint to lay over the window's ground: while the sidebar pages
+    /// between two Spaces, it cross-fades from one's to the other's as the pages move.
+    pub(super) fn space_color(&self) -> Hsla {
         let (space, beside) = self.colored_pages();
-        let from = self.space_color_at(space, x, y);
+        let from = self.space_color_of(space);
         let Some((beside, t)) = beside else {
             return from.into();
         };
-        let to = self.space_color_at(beside, x, y);
+        let to = self.space_color_of(beside);
         let mix = |from: f32, to: f32| from + (to - from) * t;
         let (r, g, b) = (mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b));
         Rgba {
@@ -650,9 +664,9 @@ impl Shell {
         .into()
     }
 
-    /// `space`'s colour `x` of the way across the window and `y` of the way down: its glows there,
-    /// to lay over the window's ground; a private window's shade; nothing without a colour.
-    pub(super) fn space_color_at(&self, space: u64, x: f32, y: f32) -> Rgba {
+    /// `space`'s colour, to lay flat over the window's ground: its tint, a private window's shade,
+    /// or nothing without a colour.
+    pub(super) fn space_color_of(&self, space: u64) -> Rgba {
         if self.private {
             return Rgba {
                 r: 0.,
@@ -661,54 +675,28 @@ impl Shell {
                 a: PRIVATE_SHADE,
             };
         }
-        let (width, height) = (
-            f32::from(self.viewport.width),
-            f32::from(self.viewport.height),
-        );
-        let (foot, far) = glow::strengths(x * width, y * height, width, height, self.right());
-        self.palette_of(space).glow_at(foot, far)
+        self.palette_of(space).space_tint
     }
 
-    /// `space`'s glow at the foot of an opaque copy of its sidebar `width` by `height` with corners
-    /// of `radius`, such as the panel the hidden sidebar comes out in and its card in the Library:
-    /// the glow down the column's middle, as GPUI draws no radial gradient in a rounded box.
-    pub(super) fn foot_glow(&self, space: u64, width: f32, height: f32, radius: f32) -> gpui::Div {
-        let (_, reach) = glow::Corner::Foot.extent();
-        let reach = reach.min(height);
-        let palette = self.palette_of(space);
-        let at = |up: f32| {
-            let (foot, _) = glow::strengths(width / 2., height - up, width, height, false);
-            Hsla::from(palette.glow_at(foot, 0.))
-        };
+    /// `space`'s tint over an opaque copy of its sidebar with corners of `radius`, such as the
+    /// panel the hidden sidebar comes out in and its card in the Library.
+    pub(super) fn space_tint_layer(&self, space: u64, radius: f32) -> gpui::Div {
         div()
             .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .h(px(reach))
-            .rounded_b(px(radius))
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(at(reach), 0.),
-                linear_color_stop(at(0.), 1.),
-            ))
+            .size_full()
+            .rounded(px(radius))
+            .bg(self.palette_of(space).space_tint)
     }
 
-    /// The window's look, opaque, halfway down: what covers the rows it passes over, and the find
-    /// bar's colour.
+    /// The window's look, opaque: what covers the rows it passes over, and the find bar's colour.
     pub fn window_fill(&self) -> Hsla {
-        self.window_fill_at(0.5)
+        Hsla::from(self.palette.underlay).blend(self.space_color())
     }
 
     /// The colours the chrome draws with over the Space shown, for what floats over the page in
     /// the window's colour: a toast, the zoom HUD, a password offer.
     pub fn palette(&self) -> crate::palette::Palette {
         self.palette
-    }
-
-    /// The window's look, opaque, `y` of the way down.
-    pub(super) fn window_fill_at(&self, y: f32) -> Hsla {
-        Hsla::from(self.palette.underlay).blend(self.gradient_color(y))
     }
 
     /// The strip at the hidden sidebar's side of the window, over the card: the card reaches the
@@ -757,7 +745,7 @@ impl Shell {
             let now = cx.background_executor().now();
             back = left.is_some_and(|left| now.duration_since(left) <= REVEAL_BACK);
         }
-        let in_strip = (0. ..EDGE_STRIP).contains(&side) && y >= 0.;
+        let in_strip = self.at_edge(x) && y >= 0.;
         self.reveal_strip = in_strip.then(|| match self.reveal_strip {
             Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
             None => (y, back),
@@ -814,6 +802,7 @@ impl Shell {
         if !self.can_reveal() {
             return;
         }
+        let at_edge = self.at_edge(x);
         // From the sidebar's side, gone staying gone.
         let x = match x < f32::MAX {
             true => self.from_side(x),
@@ -829,7 +818,7 @@ impl Shell {
         // The edge is the strip a page reaching the window's side leaves to the UI, the resize
         // edge's width (core/page_edge_strips.h). Past it, out of the window, the pointer has gone
         // to another window or display.
-        if !(0. ..EDGE_STRIP).contains(&x) {
+        if !at_edge {
             self.reveal_wait = None;
             self.reveal_strip = None;
             // A question or a chooser keeps it out until it's answered, the Cast card and its
@@ -2118,8 +2107,8 @@ mod tests {
         );
     }
 
-    /// The header's buttons and the footer's + keep their plates: beside reload the edge is the 10
-    /// past it, and beside the + what's past its plate.
+    /// The header's buttons and the footer's Space button keep their plates: beside reload the edge
+    /// is the 10 past it, and beside the Space button what's past its plate.
     #[gpui::test]
     fn the_edge_leaves_the_buttons_their_plates(cx: &mut TestAppContext) {
         let (shell, _, cx) = edge_window(cx);

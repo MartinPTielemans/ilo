@@ -4,6 +4,12 @@ and THIRD-PARTY.txt, the Rust crates built into the app and their licenses (tool
 and Settings › About opens each. Chromium's own, for the engine and what it's built from, are in the
 browser, at chrome://credits.
 
+OpenAI's Blossom and Anthropic's Claude Spark are their makers' trademarks, not under ilo's
+license. app/assets/makers/ holds each as its maker publishes it, unaltered, and the model menu
+draws each only beside its own maker's models, to name them; neither maker endorses ilo. The
+Blossom is OAI_OpenAI-Blossom_Black.svg from https://openai.com/brand/, and the Spark is
+"Claude Spark - Clay.svg" from https://www.anthropic.com/press-kit.
+
 Ardia (https://github.com/mantrakp04/ardia), Apache License 2.0
 Used in docs/ux-spec.md, docs/ux-parity/, core/browser_window_stand_in.{h,cc},
 engine/patches/ours/chromium-core-browser-window.patch,

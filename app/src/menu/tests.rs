@@ -639,6 +639,7 @@ fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Closed>>> {
             area: area(),
             look: Look::dark(),
             chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
         };
         super::show(request, cx);
     });
@@ -1000,6 +1001,7 @@ fn holding_option_shows_and_picks_an_items_alternate(cx: &mut TestAppContext) {
                 area: area(),
                 look: Look::dark(),
                 chosen: Box::new(move |closed: Closed, _| answer.set(Some(closed.chosen()))),
+                reorder: None,
             };
             super::show(request, cx);
         });
@@ -1553,6 +1555,7 @@ fn show_items(items: Vec<MenuEntry>, cx: &mut VisualTestContext) -> Rc<Cell<Opti
             area: area(),
             look: Look::dark(),
             chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
         };
         super::show(request, cx);
     });
@@ -1876,6 +1879,7 @@ fn what_a_row_that_stays_does_may_close_the_menu_or_show_another(cx: &mut TestAp
             area: area(),
             look: Look::dark(),
             chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
         };
         super::show(request, cx);
         true
@@ -1963,4 +1967,325 @@ fn a_row_that_stays_moves_no_other_row() {
     let before = (lay(&tabs), described(&tabs), super::height(&tabs));
     tabs[7] = tabs[7].clone().stays(|_| true);
     assert_eq!((lay(&tabs), described(&tabs), super::height(&tabs)), before);
+}
+
+/// The Space button's menu with `spaces` Spaces, the `shown`th checked, a line and two items.
+fn spaces_menu(spaces: usize, shown: usize) -> Vec<MenuEntry> {
+    let space = |at: usize| MenuEntry {
+        scrolls: true,
+        checked: at == shown,
+        ..item(&format!("Space {at}"))
+    };
+    (0..spaces)
+        .map(space)
+        .chain([MenuEntry::line(), item("New Space…"), item("New Folder…")])
+        .collect()
+}
+
+/// Past `SCROLL_ROWS` Spaces, the menu shows that many and keeps New Space… right under them;
+/// as many or fewer, it shows them all, and its height says so to the control it hangs from.
+#[test]
+fn past_the_scroll_rows_the_spaces_scroll_and_the_rest_stays_under_them() {
+    let rows = super::SCROLL_ROWS as usize;
+    let few = opened(spaces_menu(rows, 0), 100., 100.);
+    assert!(few.layout.levels[0].scroll.is_none());
+    let many = opened(spaces_menu(rows + 4, 0), 100., 100.);
+    let root = &many.layout.levels[0];
+    let scroll = root.scroll.expect("the Spaces scroll");
+    assert_eq!((scroll.first, scroll.last), (0, rows + 3));
+    assert_eq!(root.bounds.size, few.layout.levels[0].bounds.size);
+    assert_eq!(
+        f32::from(root.bounds.size.height),
+        super::height(&spaces_menu(rows + 4, 0))
+    );
+    // New Space… stands where it does under eight Spaces.
+    assert_eq!(row_of(&many, rows + 5), row_of(&few, rows + 1));
+}
+
+/// A Space scrolled out of sight takes no pointer; a scroll brings it in, never past the run's
+/// ends, and highlights what comes under the pointer; the arrows keep the highlight in sight.
+#[test]
+fn a_scroll_and_the_arrows_bring_the_hidden_spaces_in() {
+    let rows = super::SCROLL_ROWS as usize;
+    let mut menu = opened(spaces_menu(rows + 4, 0), 100., 100.);
+    let last = rows + 3;
+    let hidden = row_of(&menu, last);
+    menu.point_at(hidden);
+    assert_ne!(
+        menu.open[0].highlight,
+        Some(last),
+        "a hidden Space took the pointer"
+    );
+    let first = row_of(&menu, 0);
+    menu.scrolled(first, 1000.);
+    let scroll = menu.layout.levels[0].scroll.unwrap();
+    assert_eq!(scroll.by, scroll.whole - scroll.shown);
+    let under = menu.open[0].highlight.unwrap();
+    assert_eq!(
+        row_of(&menu, under),
+        first,
+        "the row under the pointer isn't highlighted"
+    );
+    menu.scrolled(first, -1000.);
+    assert_eq!(menu.layout.levels[0].scroll.unwrap().by, 0.);
+    // From the first Space, lit under the pointer, ↓ goes down the run and on past its line.
+    assert_eq!(menu.open[0].highlight, Some(0));
+    for _ in 0..=last {
+        menu.key(Key::Down, Instant::now());
+    }
+    assert_eq!(
+        menu.open[0].highlight,
+        Some(rows + 5),
+        "↓ didn't reach past the Spaces"
+    );
+    menu.key(Key::Up, Instant::now());
+    assert_eq!(menu.open[0].highlight, Some(last));
+    menu.point_at(row_of(&menu, last));
+    assert_eq!(
+        menu.open[0].highlight,
+        Some(last),
+        "↑ left the last Space out of sight"
+    );
+}
+
+/// The menu opens with the Space shown in sight, wherever it is in the run.
+#[test]
+fn the_menu_opens_with_the_space_shown_in_sight() {
+    let rows = super::SCROLL_ROWS as usize;
+    let menu = opened(spaces_menu(rows + 4, rows + 2), 100., 100.);
+    let root = &menu.layout.levels[0];
+    let scroll = root.scroll.unwrap();
+    let row = root.row_bounds(rows + 2, &menu.entries);
+    let top = root.bounds.origin.y + px(scroll.top);
+    assert!(row.top() >= top && row.bottom() <= top + px(scroll.shown));
+}
+
+/// A menu a tab's drag opened is led by it: the pointer's moves and presses stay the browser
+/// window's, which hands the drag's place on, so the row under the tab is the one it would go
+/// to, and the drag's end closes the menu choosing nothing, as the window did what the drop asked.
+#[gpui::test]
+fn a_menu_led_by_a_drag_highlights_the_row_under_it_and_closes_with_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let chosen = Rc::new(Cell::new(None));
+    let answer = chosen.clone();
+    cx.cx.update(|cx: &mut App| {
+        super::lead_by_drag(cx);
+        let request = Request {
+            items: spaces_menu(3, 0),
+            at: at(100., 100.),
+            area: area(),
+            look: Look::dark(),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
+        };
+        super::show(request, cx);
+    });
+    cx.run_until_parked();
+    let second = point(
+        px(120.),
+        row_of(&opened(spaces_menu(3, 0), 100., 100.), 1).y,
+    );
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    cx.cx.update(|cx: &mut App| {
+        assert!(
+            !super::pointer(Pointer::Moved, second - menu_at, cx),
+            "the menu took a move from the drag leading it"
+        );
+        assert!(!super::pointer(Pointer::Released, second - menu_at, cx));
+        assert_eq!(
+            super::drag_target(cx),
+            None,
+            "a row lit before the drag came over it"
+        );
+        super::dragged_over(second, cx);
+        assert_eq!(super::drag_target(cx), Some(1), "the drag's row isn't lit");
+        super::dragged_over(at(20., 20.), cx);
+        assert_eq!(
+            super::drag_target(cx),
+            None,
+            "a row stayed lit with the drag off the menu"
+        );
+        super::dragged_over(second, cx);
+        super::drag_ended(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(chosen.get(), Some(Closed::Left));
+    assert!(
+        !cx.cx
+            .update(|cx: &mut App| cx.has_global::<super::LedByDrag>())
+    );
+}
+
+/// The Space button's menu with four Spaces that reorder, as the shell opens it.
+fn sortable_menu() -> Tracking {
+    let spaces = (0..4)
+        .map(|at| MenuEntry {
+            scrolls: true,
+            reorders: true,
+            ..item(&format!("Space {at}"))
+        })
+        .chain([MenuEntry::line(), item("New Space…")])
+        .collect();
+    let mut menu = opened(spaces, 100., 100.);
+    menu.sorting.on = true;
+    menu
+}
+
+fn order(menu: &Tracking) -> Vec<usize> {
+    menu.layout.levels[0].items[..4].to_vec()
+}
+
+/// A Space's row dragged past the next one's middle lets go in its slot: the menu stays open, the
+/// rows are in the new order, and it says which row it followed; ⌘Z puts them back.
+#[test]
+fn a_row_dragged_past_the_next_lands_in_its_slot_and_the_menu_stays_open() {
+    let mut menu = sortable_menu();
+    let (from, over) = (row_of(&menu, 0), row_of(&menu, 1));
+    assert!(menu.pressed(from));
+    let to = over + point(px(0.), px(8.));
+    menu.moved(to, Instant::now());
+    assert!(menu.is_held(0));
+    assert_eq!(
+        menu.sorting.sent.to.get(&1),
+        Some(&-24.),
+        "the row passed makes room"
+    );
+    assert_eq!(menu.sorting.sent.to.get(&2), None, "and only that one");
+    assert_eq!(menu.released(to), Outcome::Moved(0, Some(1)));
+    assert_eq!(order(&menu), [1, 0, 2, 3]);
+    assert!(!menu.is_held(0));
+    assert!(menu.can_undo());
+    assert!(menu.undo_move());
+    assert_eq!(order(&menu), [0, 1, 2, 3]);
+    assert!(!menu.can_undo());
+}
+
+/// Esc puts a row held back, and the release moves nothing; a drag back where it started moves
+/// nothing either, and a press let go on its row is a pick as before.
+#[test]
+fn escape_and_a_drag_back_move_nothing_and_a_click_still_picks() {
+    let mut menu = sortable_menu();
+    let (from, over) = (row_of(&menu, 0), row_of(&menu, 2));
+    menu.pressed(from);
+    menu.moved(over, Instant::now());
+    assert_eq!(menu.sorting.sent.to.get(&1), Some(&-24.));
+    menu.key(Key::Escape, Instant::now());
+    assert!(!menu.is_held(0));
+    assert!(menu.sorting.sent.to.is_empty(), "the rows spring back");
+    assert_eq!(menu.released(over), Outcome::Stay);
+    assert_eq!(order(&menu), [0, 1, 2, 3]);
+    assert!(!menu.can_undo());
+
+    menu.pressed(from);
+    menu.moved(over, Instant::now());
+    menu.moved(from + point(px(0.), px(2.)), Instant::now());
+    assert!(matches!(menu.released(from), Outcome::Stay));
+    assert_eq!(order(&menu), [0, 1, 2, 3]);
+
+    menu.pressed(from);
+    assert_eq!(menu.released(from), Outcome::Pick(0));
+}
+
+/// A menu a tab's drag opened (`led`), or any that isn't asked to reorder, takes no row for a drag.
+#[test]
+fn a_menu_not_asked_to_reorder_holds_no_row() {
+    let mut menu = sortable_menu();
+    menu.sorting.on = false;
+    let (from, over) = (row_of(&menu, 0), row_of(&menu, 2));
+    menu.pressed(from);
+    menu.moved(over, Instant::now());
+    assert!(!menu.is_held(0));
+    assert_eq!(menu.released(over), Outcome::Pick(2));
+}
+
+/// ⌘Z in the open menu, through its key handler: after a reorder it undoes that, before the
+/// shortcut closes the menu, which stays open; with nothing left to undo it closes it as every
+/// other shortcut does, and undoes nothing more.
+#[gpui::test]
+fn command_z_undoes_the_last_reorder_before_it_closes_the_menu(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let moved = Rc::new(RefCell::new(Vec::new()));
+    let undone = Rc::new(Cell::new(0));
+    let chosen = Rc::new(Cell::new(None));
+    let (said, undid, answer) = (moved.clone(), undone.clone(), chosen.clone());
+    let items: Vec<MenuEntry> = (0..4)
+        .map(|at| MenuEntry {
+            scrolls: true,
+            reorders: true,
+            ..item(&format!("Space {at}"))
+        })
+        .chain([MenuEntry::line(), item("New Space…")])
+        .collect();
+    let rows = opened(items.clone(), 100., 100.);
+    cx.cx.update(|cx: &mut App| {
+        let reorder = super::Reorder {
+            moved: Rc::new(move |item, after, _| said.borrow_mut().push((item, after))),
+            undo: Rc::new(move |_| undid.set(undid.get() + 1)),
+        };
+        let request = Request {
+            items,
+            at: at(100., 100.),
+            area: area(),
+            look: Look::dark(),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: Some(reorder),
+        };
+        super::show(request, cx);
+    });
+    cx.run_until_parked();
+    let origin = host.shown.borrow()[0].0.origin;
+    let (from, over) = (
+        row_of(&rows, 0) - origin,
+        row_of(&rows, 1) - origin + point(px(0.), px(8.)),
+    );
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(from + point(px(0.), px(6.)), None, Modifiers::none());
+    cx.simulate_mouse_move(over, None, Modifiers::none());
+    cx.simulate_mouse_up(over, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(*moved.borrow(), [(0, Some(1))]);
+    assert_eq!(chosen.get(), None, "a drop leaves the menu open");
+
+    // The Mac's host hears ⌘Z first and asks the menu, which undoes the reorder, once.
+    let host_took = |cx: &mut VisualTestContext| cx.cx.update(super::undo_reorder);
+    assert!(host_took(cx), "the host's ⌘Z undid the reorder");
+    assert_eq!(undone.get(), 1);
+    assert!(!host_took(cx), "and has nothing to undo after");
+    assert_eq!(chosen.get(), None, "the menu stayed open");
+    cx.run_until_parked();
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(from + point(px(0.), px(6.)), None, Modifiers::none());
+    cx.simulate_mouse_move(over, None, Modifiers::none());
+    cx.simulate_mouse_up(over, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    undone.set(0);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(undone.get(), 1, "⌘Z undid the reorder");
+    assert_eq!(chosen.get(), None, "and the menu stayed open");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(undone.get(), 1, "nothing left to undo");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise), "so it closed");
+}
+
+/// A menu's row under the keys or the pointer is the flat plate the command bar and the tab
+/// switcher light (#4402), at its strength in each look, in the menu's own ink.
+#[test]
+fn a_menus_row_is_the_flat_plate_in_both_looks() {
+    for tone in [crate::palette::Tone::Dark, crate::palette::Tone::Light] {
+        let palette = crate::palette::Palette::of(None, tone);
+        let row = super::Highlight::plate(tone == crate::palette::Tone::Light);
+        assert_eq!(row.fill.a, palette.flat_plate().a, "{tone:?}");
+        assert!(
+            row.pressed.a > row.fill.a,
+            "{tone:?}: pressed is no stronger"
+        );
+    }
 }

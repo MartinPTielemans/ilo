@@ -1659,6 +1659,9 @@ struct Reveal {
   void (*pointer_moved)(void*, double) = nullptr;
 };
 std::map<void*, Reveal> g_reveals;
+// Each browser window's edge knot (host_add_edge_knot), and the room round its tab for its shadow.
+std::map<void*, Floating> g_edge_knots;
+double g_edge_knot_margin = 0;
 
 // The browser windows whose sidebar is on the right, with the window's buttons and the reveal
 // there too (host_set_sidebar_right).
@@ -3939,6 +3942,10 @@ void host_forget_window(void* ui_view) {
     Forget(it->second.floating);
     g_reveals.erase(it);
   }
+  if (auto it = g_edge_knots.find(ui_view); it != g_edge_knots.end()) {
+    Forget(it->second);
+    g_edge_knots.erase(it);
+  }
   if (g_foot_bar_over == ui_view) {
     host_hide_foot_bar();
   }
@@ -5384,6 +5391,41 @@ void host_hide_reveal(void* ui_view) {
   MaybeStopWatchingPointer();
 }
 
+void host_add_edge_knot(void* ui_view, void* edge_knot_view, double margin) {
+  Floating& knot = g_edge_knots[ui_view];
+  Adopt(knot, edge_knot_view, "edge knot", false, nullptr);
+  g_edge_knot_margin = margin;
+  // A click on it brings the sidebar out, and the keyboard stays where it was, as the mini bar's.
+  SetWindowLongPtrW(knot.hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(knot.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+}
+
+void host_show_edge_knot(void* ui_view, double top, double width, double height) {
+  auto it = g_edge_knots.find(ui_view);
+  HWND root = Root(ui_view);
+  if (it == g_edge_knots.end() || !root) {
+    return;
+  }
+  // Only the tab takes clicks; the margin round it, where its shadow falls, lets them through to
+  // the page. The UI shows it again as the window's content changes size, so on the right it
+  // keeps there.
+  const double margin = g_edge_knot_margin;
+  const bool right = SidebarRight().count(root);
+  const double left = right ? margin : 0;
+  const double scale = Scale(root);
+  it->second.plate = RECT{std::lround(left * scale), std::lround(margin * scale),
+                          std::lround((left + width) * scale),
+                          std::lround((margin + height) * scale)};
+  Show(it->second, ui_view, RevealLeft(ui_view, width + margin), top - margin, width + margin,
+       height + 2 * margin, false);
+}
+
+void host_hide_edge_knot(void* ui_view) {
+  if (auto it = g_edge_knots.find(ui_view); it != g_edge_knots.end()) {
+    Hide(it->second);
+  }
+}
+
 namespace {
 void ShowOverlay();  // Below, with the count.
 }  // namespace
@@ -5465,7 +5507,7 @@ void host_show_first_run(void) {
 }
 
 // Not yet: the window keeps Windows' own frame round the card.
-void host_set_first_run_frame(double width, double height, double radius) {}
+void host_set_first_run_frame(double width, double height, double radius, uint64_t frame) {}
 
 void host_close_first_run(void) {
   if (g_first_run) {

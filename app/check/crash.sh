@@ -112,13 +112,13 @@ first_launch() {
   pid=$!
   exec 3> "$out/drive"
   await '^browser: onboarding started$' || fail "the first launch didn't play the onboarding"
-  walk_steps 7 "the first launch: "
+  walk_steps 6 "the first launch: "
   expect '^browser: onboarding help-improve at ' "the last step didn't draw Help improve's switch"
 }
 # Leaves the last step with Return, Start Browsing, which ends the onboarding.
 start_browsing() {
   send key return
-  expect '^browser: onboarding left 7$' "Return didn't leave the last step"
+  expect '^browser: onboarding left 6$' "Return didn't leave the last step"
   expect '^browser: onboarding done$' "Return at the last step didn't end the onboarding"
 }
 

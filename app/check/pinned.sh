@@ -17,7 +17,8 @@
 # a folder drags as a row, a click closes and opens it, and closed, it previews its tab, which the
 # keyboard shows. Launched again, the app brings it back closed and a double-click renames it. In
 # its menu, Copy All Links is Copy All Links as Markdown with ⌥ held and Change Icon… gives it an
-# emoji. Settings' Export… writes it and its tab as Markdown links, and Delete Folder in its menu
+# emoji, in a skin tone once the picker's hand sets one, and the picker's trash takes it away.
+# Settings' Export… writes it and its tab as Markdown links, and Delete Folder in its menu
 # leaves its tab where it was. Links and files dragged onto the list from the page or another app open as
 # tabs where the pointer lets go, and dragged text that isn't a link opens a search for it there,
 # but a link that isn't a web link doesn't open. A split made with a pinned tab is pinned, by ⌥-click
@@ -33,7 +34,7 @@
 # move past the collapsed rows and return shows, and a key in the page or escape ends it; ⇧F10
 # opens the ringed row's menu and ⌘W closes the ringed row, not the tab shown. A folder
 # from the desktop dropped on the list becomes a folder of its files' tabs, none shown, a file's
-# row dragged onto the page hands the file to the system's drag, and the +'s Add File or Folder…
+# row dragged onto the page hands the file to the system's drag, and the Space button's Add File or Folder…
 # opens a file at the top of Today.
 
 # Pinned tabs, from the served page, whose favicon fades once its tab is unloaded.
@@ -815,6 +816,55 @@ send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 ../tools/window-screenshot.sh "$pid" "$out/folder-icon.png" || fail "no window to capture"
+# For a folder with an emoji, Change Icon… opens the picker on its emoji again. The hand at the
+# search's right end puts out the six tones along the search, and the fifth, medium-dark, shows each
+# emoji that has tones in it: "thumbs" then finds 👍🏾 first, which ↩ makes the folder's icon. The
+# default tone, the first, puts them back. Each is clicked where the picker logged it drawn.
+# Clicks the icon picker's control $1 where the picker drew it, which it logs as it's shown and as
+# its tones come out or go in ("browser: icon picker $1 at x y").
+picker_click() {
+  expect "^browser: icon picker $1 at " "the icon picker didn't draw its $1"
+  send clickkey $(sed -n "s/^browser: icon picker $1 at //p" "$log" | tail -1)
+}
+post rightclick $(pinned_row 0)
+expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Remove Icon, Duplicate'), " \
+  "the folder with an icon didn't offer Remove Icon in its menu"
+send choose "$(cased 'Change Icon…')"
+expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the picker on its emoji for a folder with an emoji"
+expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the folder"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
+../tools/window-screenshot.sh "$pid" "$out/folder-emoji-grid.png" all || fail "no window to capture"
+picker_click tones
+picker_click 'tone 4'
+send insert thumbs
+../tools/window-screenshot.sh "$pid" "$out/emoji-tone.png" all || fail "no window to capture"
+send key return
+expect "^browser: iconed folder $f 👍🏾\$" \
+  "the medium-dark tone didn't make thumbs' first match 👍🏾: $(grep '^browser: iconed folder' "$log" | tail -1)"
+expect '^browser: icon picker hidden$' "the emoji picked in its tone didn't close the icon picker"
+# The trash after Emoji takes the icon away.
+post rightclick $(pinned_row 0)
+expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Remove Icon, ')" \
+  "the folder with an icon didn't offer Remove Icon in its menu"
+send choose "$(cased 'Change Icon…')"
+expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the picker on its emoji again"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
+picker_click tones
+picker_click 'tone 0'
+picker_click trash
+expect "^browser: iconed folder $f none\$" "the icon picker's trash didn't take the folder's icon away"
+expect '^browser: icon picker hidden$' "the icon picker's trash didn't close it"
+# The menu then offers no Remove Icon, and its Change Icon… gives the folder its star back.
+post rightclick $(pinned_row 0)
+expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate'), " \
+  "the folder's menu offered Remove Icon after the trash"
+send choose "$(cased 'Change Icon…')"
+expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the icon picker for the folder"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
+send insert glowing star
+send key return
+expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon again"
+expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 # Export… in Settings › Sync & Import, under its Export heading, writes the Space's pinned
 # tabs as Markdown links, the folder a list of what it holds.
 send key , cmd
@@ -1014,7 +1064,7 @@ exited
 # Launched again, the pinned rows come back collapsed, with the chevron, which expands them.
 log="$out/pinned-collapsed.log"
 step=0
-# It names the file the +'s Add File or Folder… adds, as it can't drive the system's open panel.
+# It names the file the Space button's Add File or Folder… adds, as it can't drive the system's open panel.
 notes="$(cd "$out" && pwd)/Notes"
 BROWSER_ADD_PATHS="$notes/A.txt" BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -1077,22 +1127,19 @@ case "$(outline)" in
   "$n+["*"] $e $c") ;;
   *) fail "the file's row didn't go back to its place: $(outline)" ;;
 esac
-# The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
+# The Space button's menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
 # panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
 # read here, as the drag before may have dropped its file on the page, which opens it as a tab,
 # and so whether the page shown offers New Boost… (boosts.sh checks that).
 was=$(today)
-send layout
-height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
-  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
-post click 204 $((height - 25))
+post click $(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)
 add=$(plus_adds | cut -d, -f1)
 plus="New Space…, New Folder…, New Split View, New Board, New Note, \\(New Boost…, \\)\\{0,1\\}$(plus_adds)"
-expect "^browser: menu shown $(cased "$plus")\$" \
-  "the +'s menu didn't end with $(plus_adds)"
-../tools/window-screenshot.sh "$pid" "$out/plus-add.png" || fail "no window to capture"
+expect "^browser: menu shown \(.*, \)\{0,1\}$(cased "$plus")\$" \
+  "the Space button's menu didn't end with $(plus_adds)"
+../tools/window-screenshot.sh "$pid" "$out/space-button-add.png" || fail "no window to capture"
 send choose "$(cased "$add")"
-expect "^browser: footer $add\$" "$add in the +'s menu didn't run"
+expect "^browser: footer $add\$" "$add in the Space button's menu didn't run"
 expect '^browser: added 1 files 0 folders$' "$add didn't add the file named"
 expect "^browser: today [0-9][0-9]* $was\$" "the added file didn't open at the top of Today"
 added=$(today | cut -d' ' -f1)
@@ -1100,4 +1147,4 @@ expect "^browser: selected $added\$" "the added file's tab didn't show"
 expect "^browser: loaded $added file:///.*/Notes/A.txt\$" "the added file didn't load in its tab"
 exec 3>&-
 quit
-echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, offering Undo in a toast, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. A tab shown two closed folders down is listed one under the outer one, whose glyph has dots, and stays listed as another shows until a click on the outer one closes it for good. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. A press on the Space's name row, lit under the pointer with its chevron and •••, collapses the pinned rows, the chevron turning, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-removed.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-nested.png, $out/folder-kept.png, $out/folder-closed-for-good.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-peek-motion.mp4, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"
+echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, offering Undo in a toast, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. A tab shown two closed folders down is listed one under the outer one, whose glyph has dots, and stays listed as another shows until a click on the outer one closes it for good. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, the picker's skin tones turn "thumbs" to 👍🏾 and its trash takes the icon away, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. A press on the Space's name row, lit under the pointer with its chevron and •••, collapses the pinned rows, the chevron turning, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the Space button's Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-removed.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-nested.png, $out/folder-kept.png, $out/folder-closed-for-good.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-peek-motion.mp4, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-emoji-grid.png, $out/emoji-tone.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/space-button-add.png"

@@ -1,6 +1,5 @@
-//! A Space's dot dragged along the sidebar's switcher, or its card dragged by its handle along the
-//! Library's, moves the Space, ⌘Z puts it back, and the dots and cards glide to their places once
-//! the core reports the new order (#1580).
+//! A Space's card dragged by its handle along the Library's moves the Space, ⌘Z puts it back, and
+//! the cards glide to their places once the core reports the new order (#1580).
 
 use std::rc::Rc;
 
@@ -8,10 +7,7 @@ use gpui::{
     Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext, VisualTestContext, point, px,
 };
 
-use crate::shell::{
-    Command, FOOTER_HEIGHT, SWITCHER_INSET, Section, Shell, SpaceEntry, recorder::Recorder,
-    space_order::Along,
-};
+use crate::shell::{Command, Section, Shell, SpaceEntry, recorder::Recorder};
 use crate::tokens::shell::library::{
     CARD_GAP, CARD_MORE_X, CARD_MORE_Y, CARD_WIDTH, COLUMN_WIDTH, SPACES_INSET,
 };
@@ -42,8 +38,8 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc
     (shell, cx, host)
 }
 
-/// The core reports the Spaces in `order`, as it does a moment after a move, and the dots and
-/// cards glide there.
+/// The core reports the Spaces in `order`, as it does a moment after a move, and the cards
+/// glide there.
 fn report_gliding(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u64]) {
     let spaces = order.iter().map(|&id| entry(id)).collect();
     shell.update(cx, |shell, cx| shell.set_spaces(spaces, cx));
@@ -55,27 +51,20 @@ fn report_gliding(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u6
 fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u64]) {
     report_gliding(shell, cx, order);
     shell.update(cx, |shell, cx| {
-        shell.space_slides.clear();
+        shell.space_sent.slides.clear();
         cx.notify();
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-/// How far right of its place `space`'s dot or card started its glide, or 0 if it has none.
-fn glide_from(shell: &Entity<Shell>, cx: &mut VisualTestContext, along: Along, space: u64) -> f32 {
+/// How far right of its place `space`'s card started its glide, or 0 if it has none.
+fn glide_from(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> f32 {
     shell.read_with(cx, |shell, _| {
         shell
-            .space_slides
-            .get(&(along, space))
+            .space_sent
+            .slides
+            .get(&space)
             .map_or(0., |&(from, _)| from)
-    })
-}
-
-/// The middle of `space`'s dot in the window, as drawn now.
-fn dot(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Point<Pixels> {
-    shell.read_with(cx, |shell, _| {
-        let x = SWITCHER_INSET + shell.space_places()[&(Along::Switcher, space)];
-        point(px(x), shell.viewport.height - px(FOOTER_HEIGHT / 2.))
     })
 }
 
@@ -96,124 +85,6 @@ fn let_go(cx: &mut VisualTestContext, at: Point<Pixels>) {
     cx.run_until_parked();
 }
 
-/// The third Space's dot let go left of the first's moves it first, which ⌘Z undoes and ⇧⌘Z does
-/// again. The drag isn't a click: it shows no Space.
-#[gpui::test]
-fn a_dot_dragged_before_the_first_moves_its_space_first(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window(cx);
-    let to = dot(&shell, cx, 1) - point(px(12.), px(0.));
-    let from = dot(&shell, cx, 3);
-    hold(cx, from, to);
-    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(3)));
-    let_go(cx, to);
-    assert_eq!(host.take_edits(), ["move space 3 after 0"]);
-    assert!(
-        host.shown.take().is_empty(),
-        "the drag was a click on the dot"
-    );
-    assert!(!shell.read_with(cx, |shell, _| shell.space_dragged(3)));
-
-    report(&shell, cx, &[3, 1, 2]);
-    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
-    assert_eq!(host.take_edits(), ["move space 3 after 2"]);
-    report(&shell, cx, &[1, 2, 3]);
-    assert!(shell.update(cx, |shell, cx| shell.redo(cx)));
-    assert_eq!(host.take_edits(), ["move space 3 after 0"]);
-}
-
-/// Let go between two dots, it goes after the left one; let go on its own place, off the footer,
-/// or after Esc, it moves nothing.
-#[gpui::test]
-fn a_dot_goes_into_the_gap_it_was_let_go_over_and_nowhere_else(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window(cx);
-    let (two, three) = (dot(&shell, cx, 2), dot(&shell, cx, 3));
-    let between = point((two.x + three.x) / 2., two.y);
-    let from = dot(&shell, cx, 1);
-    hold(cx, from, between);
-    let_go(cx, between);
-    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
-    report(&shell, cx, &[2, 1, 3]);
-
-    let own = dot(&shell, cx, 1) + point(px(4.), px(0.));
-    let from = dot(&shell, cx, 1);
-    hold(cx, from, own);
-    let_go(cx, own);
-    let above = dot(&shell, cx, 3) - point(px(0.), px(FOOTER_HEIGHT));
-    let from = dot(&shell, cx, 1);
-    hold(cx, from, above);
-    let_go(cx, above);
-    let last = dot(&shell, cx, 3) + point(px(20.), px(0.));
-    let from = dot(&shell, cx, 1);
-    hold(cx, from, last);
-    assert!(
-        shell.read_with(cx, |shell, _| shell.space_dragged(1)),
-        "the dot didn't drag"
-    );
-    shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
-    let_go(cx, last);
-    assert!(host.take_edits().is_empty());
-    assert!(host.shown.take().is_empty());
-}
-
-/// Once the core reports the order, the dot let go glides from where its copy was, and the dot it
-/// passed from its old place. The copy is held where the pointer was as the drag began, 6 past
-/// the press, so it was let go 18 left of the first place.
-#[gpui::test]
-fn the_dots_glide_to_their_new_places(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window(cx);
-    let (first, second) = (dot(&shell, cx, 1), dot(&shell, cx, 2));
-    let to = first - point(px(12.), px(0.));
-    hold(cx, second, to);
-    let_go(cx, to);
-    report_gliding(&shell, cx, &[2, 1, 3]);
-    let slides = (
-        glide_from(&shell, cx, Along::Switcher, 2),
-        glide_from(&shell, cx, Along::Switcher, 1),
-    );
-    let pitch = f32::from(second.x - first.x);
-    assert!(
-        (slides.0 + 18.).abs() < 1.,
-        "the dot let go starts at its copy: {slides:?}"
-    );
-    assert!(
-        (slides.1 + pitch).abs() < 1.,
-        "the dot passed starts at its old place: {slides:?}"
-    );
-}
-
-/// Under Reduce Motion the dots don't glide: once the core reports the order, each is drawn in
-/// its new place.
-#[gpui::test]
-fn under_reduce_motion_the_dots_are_in_their_places_at_once(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window(cx);
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    let (first, second) = (dot(&shell, cx, 1), dot(&shell, cx, 2));
-    let to = first - point(px(12.), px(0.));
-    hold(cx, second, to);
-    let_go(cx, to);
-    report_gliding(&shell, cx, &[2, 1, 3]);
-    let drawn = shell.read_with(cx, |shell, _| {
-        [2, 1].map(|space| shell.space_slide(Along::Switcher, space))
-    });
-    assert_eq!(drawn, [0., 0.], "a dot glided under Reduce Motion");
-}
-
-/// A press, one move and the release, as the check's driver sends a drag: the move starts the
-/// drag, so none says where it is, and the release finds the gap itself.
-#[gpui::test]
-fn a_flick_with_one_move_still_moves_the_space(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window(cx);
-    let (from, to) = (
-        dot(&shell, cx, 1),
-        dot(&shell, cx, 3) + point(px(20.), px(0.)),
-    );
-    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(host.take_edits(), ["move space 1 after 3"]);
-}
-
 /// The window with the Library open on its Spaces, at rest.
 fn library(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let (shell, cx, host) = window(cx);
@@ -232,7 +103,7 @@ fn library(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, R
 /// The middle of the handle on `space`'s card, at its foot 22 in from its left, as drawn now.
 fn handle(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Point<Pixels> {
     shell.read_with(cx, |shell, _| {
-        let middle = shell.space_places()[&(Along::Cards, space)] - shell.cards_at();
+        let middle = shell.space_places()[&space] - shell.cards_at();
         let x = COLUMN_WIDTH + middle - CARD_WIDTH / 2. + CARD_MORE_X;
         point(
             px(x),
@@ -242,88 +113,219 @@ fn handle(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Poin
 }
 
 /// Draws a frame, as the screen would while the pointer holds a card, so its copy is drawn whole.
+#[allow(dead_code)]
 fn frame(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-/// The third Space's card dragged by its handle and let go over the first card's left half moves
-/// it first, with the Library left open and no Space shown; ⌘Z moves it back.
+/// One cell of the row: a card and its gap.
+const PITCH: f32 = CARD_WIDTH + CARD_GAP;
+
+/// Where the pointer holds `space`'s handle after the card's middle has gone `cells` cells right
+/// and `extra` more.
+fn moved(
+    shell: &Entity<Shell>,
+    cx: &mut VisualTestContext,
+    space: u64,
+    cells: f32,
+    extra: f32,
+) -> Point<Pixels> {
+    handle(shell, cx, space) + point(px(cells * PITCH + extra), px(0.))
+}
+
+/// The cards sent aside, by Space, as the drag has them.
+fn aside(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<(u64, f32)> {
+    let mut aside: Vec<_> = shell.read_with(cx, |shell, _| {
+        shell
+            .space_sent
+            .to
+            .iter()
+            .map(|(&id, &by)| (id, by))
+            .collect()
+    });
+    aside.sort_by(|a, b| a.0.cmp(&b.0));
+    aside
+}
+
+/// The first Space's card dragged by its handle past the second's middle moves only the second,
+/// one cell left, and the card follows the pointer along x.
 #[gpui::test]
-fn a_card_dragged_by_its_handle_moves_its_space(cx: &mut TestAppContext) {
+fn a_card_passing_one_neighbour_moves_only_that_one(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
-    let (from, to) = (handle(&shell, cx, 3), handle(&shell, cx, 1));
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 1., 20.);
     hold(cx, from, to);
-    frame(cx);
-    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(3)));
+    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(1)));
+    assert_eq!(aside(&shell, cx), [(2, -PITCH)]);
+    let at = shell.read_with(cx, |shell, _| shell.space_shift(1));
+    assert!(
+        (at - (PITCH + 20.)).abs() < 1.,
+        "the card follows the pointer: {at}"
+    );
+    assert!(
+        host.take_edits().is_empty(),
+        "nothing reaches the core mid-drag"
+    );
+}
+
+/// Past two middles, two cards move.
+#[gpui::test]
+fn a_card_passing_two_neighbours_moves_two(cx: &mut TestAppContext) {
+    let (shell, cx, _) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 2., 20.);
+    hold(cx, from, to);
+    assert_eq!(aside(&shell, cx), [(2, -PITCH), (3, -PITCH)]);
+}
+
+/// Holds every spring at its start, which the wall clock would otherwise carry on: what comes
+/// next goes on from where each card was drawn then.
+fn freeze(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, _| {
+        let later = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+        for (_, start) in shell.space_sent.slides.values_mut() {
+            *start = later;
+        }
+    });
+}
+
+/// Let go, the card lands in the slot the others left open, tells the core once, and ⌘Z puts it
+/// back; the others are already where the order puts them.
+#[gpui::test]
+fn the_release_lands_in_the_open_slot(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 1., 20.);
+    hold(cx, from, to);
+    freeze(&shell, cx);
     let_go(cx, to);
-    assert_eq!(host.take_edits(), ["move space 3 after 0"]);
+    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
+    assert!(!shell.read_with(cx, |shell, _| shell.space_dragged(1)));
+    assert_eq!(aside(&shell, cx), [(1, PITCH), (2, -PITCH)]);
     assert!(
         host.shown.take().is_empty(),
         "the drag was a click on the card"
     );
-    assert!(shell.read_with(cx, |shell, _| shell.library_open && !shell.space_dragged(3)));
 
-    report(&shell, cx, &[3, 1, 2]);
+    freeze(&shell, cx);
+    report_gliding(&shell, cx, &[2, 1, 3]);
+    let from = glide_from(&shell, cx, 2);
+    assert!(
+        (from - PITCH).abs() < 1.,
+        "the card passed starts where it was drawn: {from}"
+    );
+    assert!(aside(&shell, cx).is_empty());
     assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
-    assert_eq!(host.take_edits(), ["move space 3 after 2"]);
+    assert_eq!(host.take_edits(), ["move space 1 after 0"]);
 }
 
-/// Let go between two cards, it goes after the left one; a click on the handle, or a card let go
-/// on its own place, over the Library's column, or after Esc, moves nothing and shows nothing.
+/// Esc sends everything back, with no word to the core, and the release after it moves nothing.
 #[gpui::test]
-fn a_card_goes_into_the_gap_it_was_let_go_over_and_nowhere_else(cx: &mut TestAppContext) {
+fn escape_puts_every_card_back(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
-    let between = handle(&shell, cx, 3) - point(px(CARD_MORE_X + CARD_GAP / 2.), px(0.));
     let from = handle(&shell, cx, 1);
-    hold(cx, from, between);
-    let_go(cx, between);
-    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
-    report(&shell, cx, &[2, 1, 3]);
-
-    let at = handle(&shell, cx, 3);
-    cx.simulate_click(at, Modifiers::none());
-    cx.run_until_parked();
-    let own = handle(&shell, cx, 1) + point(px(40.), px(0.));
-    let from = handle(&shell, cx, 1);
-    hold(cx, from, own);
-    let_go(cx, own);
-    let column = point(px(COLUMN_WIDTH / 2.), from.y);
-    hold(cx, from, column);
-    let_go(cx, column);
-    let last = handle(&shell, cx, 3) + point(px(CARD_WIDTH), px(0.));
-    hold(cx, from, last);
-    assert!(
-        shell.read_with(cx, |shell, _| shell.space_dragged(1)),
-        "the handle didn't drag"
-    );
+    let to = moved(&shell, cx, 1, 1., 20.);
+    hold(cx, from, to);
+    freeze(&shell, cx);
+    let before = shell.read_with(cx, |shell, _| shell.space_shift(2));
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
-    let_go(cx, last);
+    assert!(aside(&shell, cx).is_empty());
+    let after = shell.read_with(cx, |shell, _| shell.space_shift(2));
+    assert!(
+        (after - before).abs() < 1.,
+        "the card passed springs back from where it is drawn: {before} {after}"
+    );
+    assert!(glide_from(&shell, cx, 1) > 0., "the card springs home");
+    let_go(cx, to);
     assert!(host.take_edits().is_empty());
     assert!(host.shown.take().is_empty());
     assert!(shell.read_with(cx, |shell, _| shell.library_open));
 }
 
-/// Once the core reports the order, the card let go glides from where its copy was, held as
-/// the drag began 6 past the press on its handle, and the card it passed from its old place.
+/// A card taken across and back to its start leaves no gap open, and its release says nothing; so
+/// does one let go over the Library's column, or only clicked.
 #[gpui::test]
-fn the_cards_glide_to_their_new_places(cx: &mut TestAppContext) {
+fn a_card_back_where_it_started_moves_nothing(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let out = moved(&shell, cx, 1, 1., 20.);
+    hold(cx, from, out);
+    assert_eq!(aside(&shell, cx).len(), 1);
+    cx.simulate_mouse_move(from, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(aside(&shell, cx).is_empty());
+    let_go(cx, from);
+    assert!(host.take_edits().is_empty());
+
+    let column = point(px(COLUMN_WIDTH / 2.), from.y);
+    hold(cx, from, out);
+    cx.simulate_mouse_move(column, MouseButton::Left, Modifiers::none());
+    let_go(cx, column);
+    assert!(host.take_edits().is_empty());
+    assert!(aside(&shell, cx).is_empty());
+
+    let third = handle(&shell, cx, 3);
+    cx.simulate_click(third, Modifiers::none());
+    cx.run_until_parked();
+    assert!(host.take_edits().is_empty());
+    assert!(shell.read_with(cx, |shell, _| shell.library_open));
+}
+
+/// A card held at the row's right end scrolls the row under it as long as it's there, and the
+/// cards beyond make room as it passes them (#4452); held in the middle, nothing scrolls.
+#[gpui::test]
+fn a_card_held_at_the_row_s_end_scrolls_the_row(cx: &mut TestAppContext) {
     let (shell, cx, _) = library(cx);
-    let (first, second) = (handle(&shell, cx, 1), handle(&shell, cx, 2));
-    let to = first - point(px(12.), px(0.));
-    hold(cx, second, to);
-    let_go(cx, to);
-    report_gliding(&shell, cx, &[2, 1, 3]);
-    let slides = (
-        glide_from(&shell, cx, Along::Cards, 2),
-        glide_from(&shell, cx, Along::Cards, 1),
+    let order: Vec<u64> = (1..=12).collect();
+    report(&shell, cx, &order);
+    let (from, width) = (
+        handle(&shell, cx, 1),
+        shell.read_with(cx, |shell, _| shell.library_width()),
     );
+    assert!(shell.read_with(cx, |shell, _| shell.cards_room()) > 0.);
+    let end = point(px(COLUMN_WIDTH + width - 10.), from.y);
+    hold(cx, from, end);
+    // The frames drawn while the card was held stepped by the wall clock, which the test sets
+    // aside: the scroll's time is only the one given it.
+    shell.update(cx, |shell, _| {
+        if let Some(drag) = shell.space_drag.as_mut() {
+            drag.last = None;
+        }
+    });
+    let base = std::time::Instant::now();
+    let step = |cx: &mut VisualTestContext, after: u64| {
+        let now = base + std::time::Duration::from_millis(after);
+        shell.update(cx, |shell, cx| shell.scroll_cards_under_drag(now, cx));
+    };
+    let before = shell.read_with(cx, |shell, _| shell.cards_at());
+    step(cx, 0);
+    step(cx, 50);
+    let after = shell.read_with(cx, |shell, _| shell.cards_at());
     assert!(
-        (slides.0 + 18.).abs() < 1.,
-        "the card let go starts at its copy: {slides:?}"
+        (after - before - 24.).abs() < 1.,
+        "50 ms at the end scrolls 24: {before} to {after}"
     );
-    let pitch = CARD_WIDTH + CARD_GAP;
-    assert!(
-        (slides.1 + pitch).abs() < 1.,
-        "the card passed starts at its old place: {slides:?}"
-    );
+    let now = shell.read_with(cx, |shell, _| shell.space_dragged(1));
+    assert!(now, "the drag goes on");
+
+    let middle = point(px(COLUMN_WIDTH + width / 2.), from.y);
+    cx.simulate_mouse_move(middle, MouseButton::Left, Modifiers::none());
+    step(cx, 100);
+    step(cx, 150);
+    let held = shell.read_with(cx, |shell, _| shell.cards_at());
+    assert_eq!(held, after, "in the middle it doesn't");
+}
+
+/// A flick, a press, one move and the release with no frame between, as the driver's drag is, is
+/// the same drag as one held: the card lands where the release was (#4452).
+#[gpui::test]
+fn a_flick_with_one_move_still_moves_the_space(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 1., 20.);
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
 }

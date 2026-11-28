@@ -461,6 +461,35 @@ fn a_dialog_waits_while_find_has_the_keyboard(cx: &mut TestAppContext) {
     assert_eq!(dialogs(&host), ["page dialog 10 1"]);
 }
 
+/// Closing the find bar gives the keyboard back to the page it searched, whether the page or the UI
+/// had it before ⌘F (#4489), and a dialog that waited on the bar goes up.
+#[gpui::test]
+fn closing_find_gives_the_page_the_keyboard(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    for before in [true, false] {
+        host.page_keys.set(Some(before));
+        shell.update(cx, |shell, cx| shell.find_closed(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.take(),
+            ["focus page"],
+            "the page had the keys: {before}"
+        );
+        assert_eq!(
+            host.page_keys.get(),
+            Some(true),
+            "the page had the keys: {before}"
+        );
+    }
+    host.find_typing.set(true);
+    ask(&shell, cx, 10, Some(prompt(1)));
+    assert!(dialogs(&host).is_empty(), "the dialog came over find");
+    host.find_typing.set(false);
+    shell.update(cx, |shell, cx| shell.find_closed(cx));
+    cx.run_until_parked();
+    assert_eq!(dialogs(&host), ["page dialog 10 1"]);
+}
+
 #[gpui::test]
 fn a_field_no_longer_drawn_doesnt_hold_a_dialog(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);

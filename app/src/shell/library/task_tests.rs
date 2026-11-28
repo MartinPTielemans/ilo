@@ -25,6 +25,7 @@ fn tab(id: u64, archived: f64, little: bool) -> Archived {
         title: format!("Tab {id}").into(),
         archived,
         little,
+        space: 0,
     }
 }
 
@@ -37,6 +38,7 @@ fn task(n: u64, ended: f64) -> ArchivedTask {
         about: format!("{PRODUCT} · Done").into(),
         ended,
         pages: "1 page".into(),
+        home: 0,
     }
 }
 

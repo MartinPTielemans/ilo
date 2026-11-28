@@ -358,9 +358,26 @@ impl RenderOnce for Picker {
     }
 }
 
+/// The drawn desktop behind a picture of ilo's window: orange to violet, then into teal.
+pub(crate) fn desktop() -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(linear_gradient(
+            DESKTOP_ANGLE,
+            linear_color_stop(rgb(DESKTOP_FROM), 0.),
+            linear_color_stop(rgb(DESKTOP_TO), DESKTOP_TO_STOP),
+        ))
+        .child(layer(transparent_black()).bg(linear_gradient(
+            DESKTOP_ANGLE,
+            linear_color_stop(rgb(DESKTOP_LAST).opacity(0.), DESKTOP_TO_STOP),
+            linear_color_stop(rgb(DESKTOP_LAST), 1.),
+        )))
+}
+
 /// The material behind ilo's window, drawn as the fill that gives the colour it was measured at
 /// over a white and over a black backdrop: what it lets through is the difference between them.
-fn material(dark: bool) -> Rgba {
+pub(crate) fn material(dark: bool) -> Rgba {
     let (white, black) = match dark {
         true => (rgb(MATERIAL_OVER_WHITE), rgb(MATERIAL_OVER_BLACK)),
         false => (
@@ -421,19 +438,7 @@ fn hairline(color: Rgba, inset: bool) -> BoxShadow {
 /// fill. `base` is the window's ink around the picture, for its hairline.
 fn picture(level: Transparency, dark: bool, base: Rgba) -> gpui::Div {
     let words = rgb(if dark { PAPER } else { INK });
-    let desktop = div()
-        .absolute()
-        .inset_0()
-        .bg(linear_gradient(
-            DESKTOP_ANGLE,
-            linear_color_stop(rgb(DESKTOP_FROM), 0.),
-            linear_color_stop(rgb(DESKTOP_TO), DESKTOP_TO_STOP),
-        ))
-        .child(layer(transparent_black()).bg(linear_gradient(
-            DESKTOP_ANGLE,
-            linear_color_stop(rgb(DESKTOP_LAST).opacity(0.), DESKTOP_TO_STOP),
-            linear_color_stop(rgb(DESKTOP_LAST), 1.),
-        )));
+    let desktop = desktop();
     let bright_lines = [BRIGHT_LINE_FIRST, BRIGHT_LINE, BRIGHT_LINE]
         .into_iter()
         .enumerate()

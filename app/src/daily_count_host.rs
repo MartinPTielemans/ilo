@@ -30,8 +30,10 @@ thread_local! {
 /// arguments already.
 pub(crate) fn prepare(given: &[String]) -> Option<String> {
     // Only the prod build names ilo's server (branding/daily-count), as only it reaches users. A
-    // fork names its own or none.
-    let named = cfg!(feature = "prod").then(|| include_str!("../branding/daily-count"));
+    // fork names its own or none. The rework's copy, on the owner's Mac beside their daily app,
+    // names none: it would count the owner twice.
+    let named = (cfg!(feature = "prod") && !cfg!(feature = "rework"))
+        .then(|| include_str!("../branding/daily-count"));
     let endpoint = daily_count::endpoint(given, named);
     let given_switch = given.iter().any(|arg| arg.starts_with(daily_count::SWITCH));
     let switch = (endpoint.as_ref())

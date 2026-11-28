@@ -22,6 +22,7 @@ pub mod command;
 pub mod fence;
 mod file_calls;
 pub mod files;
+pub mod folders;
 mod held;
 pub use held::HeldPage;
 mod helpers;
@@ -33,6 +34,7 @@ pub mod page;
 #[cfg(windows)]
 mod pipe;
 pub mod profiles;
+pub mod provider;
 pub mod ready;
 pub mod request;
 pub mod runner;
@@ -46,6 +48,7 @@ pub mod task;
 pub mod tier;
 pub mod tools;
 pub mod wall;
+mod your_tabs;
 
 pub use server::address;
 
@@ -67,15 +70,19 @@ use crate::sort_by_site;
 
 pub use clients::{Client, Clients, Entry, System};
 
-/// The name the clients list the server by: the product's, a dev build's apart.
+/// The name the clients list the server by: the command's, the product's but in the rework's
+/// copy (build.rs), a dev build's apart.
 pub fn server_name() -> String {
-    listed_as(PRODUCT)
+    listed_as(env!("COMMAND_NAME"))
 }
 
 /// The name the clients listed the server by before it took the product's, which Connect Again
-/// takes out of a client's config.
+/// takes out of a client's config. The rework's copy never had another.
 pub fn old_server_name() -> String {
-    listed_as(env!("APP_NAME"))
+    match cfg!(feature = "rework") {
+        true => server_name(),
+        false => listed_as(env!("APP_NAME")),
+    }
 }
 
 fn listed_as(name: &str) -> String {
@@ -389,6 +396,11 @@ pub trait Browser {
     /// Whether `space` is a private window's own Space. No task starts from one, as agents get
     /// no path into private windows.
     fn private_space(&self, space: u64) -> bool;
+    /// The user's Spaces in the profile whose folder is named `profile`, in the core's order:
+    /// none an agent's or a task's, and never a private window's.
+    fn user_spaces(&self, profile: &str) -> Vec<u64>;
+    /// Whether `tab`'s page was reached by sending a form, so its address alone doesn't give it.
+    fn posted(&self, tab: u64, cx: &App) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
@@ -1005,6 +1017,10 @@ pub struct Agents {
     notes_off: bool,
     /// When a task's notification is posted, from Settings › Agents › Notifications.
     notify: crate::needs_you::Notify,
+    /// Settings › Agents › Sound, the app's own: off until the user turns it on.
+    sound: bool,
+    /// Settings › Agents › Folders (folders.rs).
+    folders: folders::Folders,
     /// The log's last entry, by its id.
     logged: u64,
     /// The uploads waiting on the core's description of their file field, by request.
@@ -1255,6 +1271,8 @@ impl Agents {
             noted: notes::Given::default(),
             notes_off: false,
             notify: Default::default(),
+            sound: false,
+            folders: folders::Folders::default(),
             logged: 0,
             downloading: HashMap::new(),
             grants: HashMap::new(),
@@ -1398,6 +1416,9 @@ impl Agents {
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
+        self.sound = tasks.get("sound").and_then(Value::as_bool) == Some(true);
+        let never = files::Never::here(Some(self.tasks_dir()));
+        self.folders = folders::Folders::read(saved.get("folders"), &never);
         // Settings saved before the two switches had one for every agent, and under it one for
         // the command bar's tasks. Once, the inside switch is on only where both were, and other
         // apps' agents only where agents were and they weren't turned off, so nothing comes on
@@ -1411,6 +1432,10 @@ impl Agents {
         };
         self.switches.threads.store(threads_on, SeqCst);
         self.switches.others.store(others_on, SeqCst);
+        let your_tabs = saved.get("your_tabs").and_then(Value::as_bool);
+        self.switches
+            .your_tabs
+            .store(your_tabs != Some(false), SeqCst);
         self.scripts = saved
             .get("scripts")
             .and_then(Value::as_bool)
@@ -1503,12 +1528,49 @@ impl Agents {
         cx.notify();
     }
 
+    /// Settings › Agents › Sound.
+    pub fn sound(&self) -> bool {
+        self.sound
+    }
+
+    /// Settings › Agents › Sound.
+    pub fn set_sound(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on != self.sound {
+            self.sound = on;
+            self.save();
+            cx.notify();
+        }
+    }
+
     /// Settings › Agents' Site notes. Off, no answer carries a site's notes from then on.
     pub fn set_notes_on(&mut self, on: bool, cx: &mut Context<Self>) {
         if on != self.notes_off {
             return;
         }
         self.notes_off = !on;
+        self.save();
+        cx.notify();
+    }
+
+    /// Whether threads may list the user's open tabs and copy one: Threads' switch under the inside
+    /// one, on until the user turns it off (#4403).
+    pub fn your_tabs(&self) -> bool {
+        self.switches.your_tabs.load(SeqCst)
+    }
+
+    /// Sets whether threads may see the user's open tabs, the user's click alone. Off, a thread's
+    /// next tools/list has neither tool and a call to either is refused as one it doesn't have;
+    /// what a thread already looked at is forgotten, so nothing of it can be opened after.
+    pub fn set_your_tabs(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.your_tabs() {
+            return;
+        }
+        self.switches.your_tabs.store(on, SeqCst);
+        if !on {
+            for task in &mut self.tasks.tasks {
+                task.seen_tabs.clear();
+            }
+        }
         self.save();
         cx.notify();
     }
@@ -2248,7 +2310,8 @@ impl Agents {
         // an entry from its action. So one that names no tool of the agent's ends here, before
         // anything is run, shown or kept by that word: no call can leave an entry that reads as
         // the browser's own or the user's.
-        if !tools::has(&call.agent, &call.tool) {
+        let your_tabs = self.your_tabs();
+        if !tools::has(&call.agent, &call.tool, your_tabs) {
             let none = format!("There's no tool {}.", call.tool);
             _ = call.reply.send(ToolResult::error(none));
             // A strand that calls one of its thread's own stops the thread, as it isn't allowed.
@@ -2285,7 +2348,7 @@ impl Agents {
     }
 
     /// `call`, once it's known to be the agent's to make and in its thread's name if a strand's.
-    fn called(&mut self, call: Call, says: String, cx: &mut Context<Self>) {
+    fn called(&mut self, mut call: Call, says: String, cx: &mut Context<Self>) {
         // A task the user stopped keeps its connection for their next message, so its calls still
         // come: one that waited its turn in the server behind a slow page, or one its assistant
         // made as it was interrupted. Each is answered as stopped, and nothing of it is run,
@@ -2326,7 +2389,21 @@ impl Agents {
             _ = (call.reply).send(Refused::new(task::handed::RETURNED).into());
             return;
         }
+        // A copy of the user's tab is open_tab's open of the page it's at, by open_tab's checks,
+        // step and entry, in a tab of the thread's own (#4403). One it can't copy opens nothing.
+        let copy = call.tool == tools::YOUR_TABS[1];
+        if copy {
+            let Some(url) = self.your_tab_url(&call.agent, &call.arguments, cx) else {
+                _ = call.reply.send(ToolResult::error(your_tabs::STALE));
+                return;
+            };
+            call.tool = "open_tab".into();
+            call.arguments = json!({ "url": url });
+        }
         self.trace_call(&call, says, cx);
+        if copy {
+            self.mark_copy(&call.agent, call.id);
+        }
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
         self.live.insert(call.agent.clone());
@@ -2444,6 +2521,13 @@ impl Agents {
                 let profile = |tab: u64| self.tab_profile(tab, &profiles, cx);
                 let list = tools::tab_list_in(&tabs, current, &mine, profile);
                 _ = reply.send(ToolResult::text(list));
+            }
+            // Each look is in the log, with no title or site of the user's (#4403).
+            "your_tabs" => {
+                let (listed, count) = self.look_at_your_tabs(&agent, cx);
+                self.note_on(&agent, connection, "your_tabs", "", &count.to_string(), "");
+                cx.notify();
+                _ = reply.send(ToolResult::text(listed));
             }
             "read_page" => {
                 let Some(tab) = self.call_tab(&agent, connection, &arguments, &reply, cx) else {
@@ -2965,8 +3049,7 @@ impl Agents {
     }
 
     /// Whether the agent may call tools: a client the user connected, while other apps' agents are
-    /// on, or a thread not dropped, while threads are. A thread whose start waits on the sweep of
-    /// its run before has no run, so nothing calls for it.
+    /// on, or a thread not dropped, while threads are.
     fn may_call(&self, agent: &str) -> bool {
         match (server::side(agent), Client::from_id(agent)) {
             (Some(server::Side::Outside), Some(client)) => {
@@ -2978,9 +3061,7 @@ impl Agents {
                     self.threads()
                         && (self.task(thread)).is_some_and(|task| task.helpers.runs(agent))
                 }
-                None => {
-                    self.threads() && (self.task(agent)).is_some_and(|task| task.restart.is_none())
-                }
+                None => self.threads() && self.task(agent).is_some(),
             },
             _ => false,
         }
@@ -4829,7 +4910,12 @@ impl Agents {
                 _ = reply.send(ToolResult::error("The tab couldn't open."));
                 return;
             }
-            self.note(&agent, connection, action, &site, "");
+            // A copy of the user's tab says so in the log (YT4).
+            let from = match self.is_copy(&agent, call) {
+                true => tools::FROM_YOUR_TABS,
+                false => "",
+            };
+            self.note_on(&agent, connection, action, &site, from, "");
             cx.notify();
             self.current.insert((agent.clone(), connection), tab);
             self.opened(&agent, call, tab);
@@ -6423,6 +6509,7 @@ impl Agents {
             "last": last,
             "others_level": self.tasks.others_start.id(),
             "notify": self.notify.id(),
+            "sound": self.sound,
             "installed": (self.tasks.sign_ins.installed.iter())
                 .map(|cli| cli.id())
                 .collect::<Vec<_>>(),
@@ -6430,6 +6517,7 @@ impl Agents {
         let saved = json!({
             "threads": self.threads(),
             "other_apps": self.other_apps(),
+            "your_tabs": self.your_tabs(),
             "agents": agents,
             "grants": grants,
             "fenced": self.fenced,
@@ -6438,6 +6526,7 @@ impl Agents {
             "scripts": self.scripts,
             "notes": !self.notes_off,
             "profiles_off": self.profiles.saved(),
+            "folders": self.folders.saved(),
         });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");

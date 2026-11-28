@@ -1153,6 +1153,7 @@ fn archived(id: u64) -> Archived {
         title: "A".into(),
         archived: 0.,
         little: false,
+        space: 0,
     }
 }
 
@@ -1374,6 +1375,49 @@ fn a_folders_icon_goes_back_to_what_it_was(cx: &mut TestAppContext) {
     assert_eq!(titles(&shell, cx).0, Some("Change Icon"));
     undo(&shell, cx);
     assert_eq!(host.take_edits(), ["folder icon 5 📚"]);
+}
+
+/// A folder's icon taken away is logged as none, for the checks: a folder without one is left out
+/// of the core's report, not reported with an empty icon.
+#[gpui::test]
+fn a_folders_icon_taken_away_is_said_as_none(cx: &mut TestAppContext) {
+    let folders = |icons: HashMap<u64, gpui::SharedString>| Folders {
+        folders: HashMap::from([(5, ("Reading".into(), true))]),
+        parents: HashMap::from([(6, 5)]),
+        icons,
+        ..Default::default()
+    };
+    let iconed = folders(HashMap::from([(5, "📚".into())]));
+    let (shell, _) = window(cx, vec![4, 5, 6], Vec::new(), iconed, Vec::new());
+    crate::heard::listen();
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            1,
+            vec![4, 5, 6],
+            Vec::new(),
+            Vec::new(),
+            folders(HashMap::new()),
+            cx,
+        )
+    });
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            1,
+            vec![4, 5, 6],
+            Vec::new(),
+            Vec::new(),
+            folders(HashMap::new()),
+            cx,
+        )
+    });
+    let iconed: Vec<String> = (crate::heard::take().into_iter())
+        .filter(|line| line.starts_with("browser: iconed folder"))
+        .collect();
+    assert_eq!(
+        iconed,
+        ["browser: iconed folder 5 none"],
+        "said once, then not again"
+    );
 }
 
 /// The core reports the first Space's lists with one split view.

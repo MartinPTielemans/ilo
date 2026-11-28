@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, Corners, MouseButton, Pixels, SharedString, Size, Task,
-    Window, canvas, div, point, prelude::*, px, rgba, size,
+    Window, canvas, div, point, prelude::*, px, size,
 };
 
 use super::{
@@ -30,10 +30,8 @@ use super::{
 };
 use crate::agents::task::{Card, Dot};
 use crate::link_preview::{CLOSE, OPEN};
-use crate::palette::Tone;
 use crate::tokens::shell::conversation::ilo::ARM;
 use crate::tokens::shell::task_area::{BESIDE, BESIDE_GAP, BESIDE_LEAST, PAGE_LEAST};
-use crate::tokens::shell::{PAGE_OUTLINE, PAGE_OUTLINE_LIGHT};
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -1636,11 +1634,11 @@ impl Shell {
             return Some(layer.into_any_element());
         }
         if in_place {
-            layer = layer.child(self.watched_outline(place));
-        }
-        if in_place {
+            // A page that takes the window has no edge to keep (#4396).
+            let outline = (self.card_left() > 0.).then(|| self.watched_outline(place));
             // A page that died leaves its place to its card, as in the user's own Space.
             layer = layer
+                .children(outline)
                 .child(card(place, self.card_radius(), self.palette.page))
                 .children(self.crash_cards(place, cx));
         } else {
@@ -1650,17 +1648,16 @@ impl Shell {
     }
 
     /// The page's own outline round a watched page's card at `place`, as any page has it
-    /// (`Shell::cards`): outside it on its top, right and bottom in the tone's own ink, and none
-    /// on its left, where the conversation is beside it.
+    /// (`Shell::cards`), in the tone's own ink. The page is the one card: beside the
+    /// conversation's column, which is the window's, its line goes round all four sides (the
+    /// owner, 27 Nov, #4396).
     fn watched_outline(&self, place: Bounds<Pixels>) -> gpui::Div {
-        let ink = match self.palette.tone {
-            Tone::Dark => PAGE_OUTLINE,
-            Tone::Light => PAGE_OUTLINE_LIGHT,
-        };
         if let Some(area) = &self.task_area {
             area.outlined.set(Some(place));
         }
-        card_outline(place, self.card_radius(), Some(false), rgba(ink).into())
+        let open =
+            (!self.task_standing() && self.card_left() == self.width()).then_some(self.right);
+        card_outline(place, self.card_radius(), open, self.page_outline_ink())
     }
 
     /// What the area draws under a page watched in its tile, which the core draws over it: the

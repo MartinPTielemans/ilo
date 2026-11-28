@@ -323,3 +323,68 @@ fn a_link_out_of_a_granted_folder_is_judged_where_it_lands() {
     assert_eq!(at("home/code/site/notes"), At::Outside);
     assert_eq!(at("home/code/site/keys/id_ed25519"), At::Never);
 }
+
+/// A link in a listed folder that leads into `~/Library`'s credential floor, or into a dot-entry
+/// of the home's whatever its name, is never reached, at whichever row the folder is listed: the
+/// floor judges the path each access resolves to, never the one named. Not on the Mac, for the
+/// reason above.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_link_out_of_a_listed_folder_into_the_library_or_a_dot_entry_is_never_reached() {
+    use crate::agents::files::{At, Listed, Never, Row};
+    let tree = Tree::new("link-floor");
+    let home = tree.at("home");
+    tree.file("home/code/site/index.html", "site");
+    tree.file("home/Library/Keychains/login.keychain-db", "keys");
+    tree.file("home/Library/Application Support/x/Cookies", "cookies");
+    tree.file("home/.a-new-tool/token", "token");
+    tree.link("home/code/site/keys", tree.at("home/Library/Keychains"));
+    tree.link(
+        "home/code/site/cookies",
+        "../../Library/Application Support/x/Cookies",
+    );
+    tree.link("home/code/site/token", tree.at("home/.a-new-tool/token"));
+    let never = Never::of(home.clone(), Vec::new(), None);
+    let ids = NeverIds::of(&never.by_identity());
+    for row in [Row::Change, Row::Read] {
+        let site = [Listed::for_test(home.join("code/site"), row)];
+        let at = |path: &str| {
+            let resolved = resolve(&tree.at(path), For::Read, &ids).unwrap();
+            match resolved.never {
+                true => At::Never,
+                false => never.at(&resolved.real, &site, None),
+            }
+        };
+        assert_eq!(at("home/code/site/index.html"), At::Folder(row));
+        for path in [
+            "home/code/site/keys/login.keychain-db",
+            "home/code/site/cookies",
+            "home/code/site/token",
+        ] {
+            assert_eq!(at(path), At::Never, "{path} at {row:?}");
+        }
+    }
+}
+
+/// The Mac's /tmp, /var and /etc are links into /private: the floor resolves them to their real
+/// names, which the never list refuses.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macs_short_system_names_resolve_into_private_and_are_never_reached() {
+    use crate::agents::files::{At, Never};
+    let never = Never::here(None);
+    let ids = NeverIds::of(&never.by_identity());
+    for (path, real) in [
+        ("/etc/hosts", "/private/etc/hosts"),
+        ("/tmp", "/private/tmp"),
+        ("/var/db", "/private/var/db"),
+    ] {
+        let resolved = resolve(Path::new(path), For::Read, &ids).unwrap();
+        assert_eq!(resolved.real, Path::new(real), "{path}");
+        let at = match resolved.never {
+            true => At::Never,
+            false => never.at(&resolved.real, &[], None),
+        };
+        assert_eq!(at, At::Never, "{path}");
+    }
+}

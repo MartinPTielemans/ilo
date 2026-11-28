@@ -179,7 +179,7 @@ fn no_tool_reaches_developer_mode_or_its_list() {
             }
         }
         for wanted in ["developer_mode", "developer_mode_sites", "devtools"] {
-            assert!(!tools::has(agent, wanted), "{agent} has {wanted}");
+            assert!(!tools::has(agent, wanted, true), "{agent} has {wanted}");
         }
     }
 }

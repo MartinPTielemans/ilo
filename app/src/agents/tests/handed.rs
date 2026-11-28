@@ -1716,21 +1716,17 @@ fn a_reply_that_answers_a_question_hands_its_tabs(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_new_run_from_its_words_says_how_many_tabs_and_not_which(cx: &mut TestAppContext) {
     let run = run("handed-again", cx);
-    // A thread with a folder keeps nothing: a run that went starts again from the thread's words.
-    (run.agents).update(cx, |agents, _| {
-        agents.tasks.files = crate::agents::files::Given {
-            folder: Some(crate::agents::wall::Granted::for_test()),
-            attached: None,
-        };
-        agents.tasks.wall = Some(std::rc::Rc::new(|_: &crate::agents::wall::WallFor| {
-            Ok(crate::agents::wall::Wall::for_test(None))
-        }));
-    });
     let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
     run.ran(1);
     run.finish(&agent, cx);
     assert_eq!(space_of(&run, TRAINS.0), USERS);
     run.said(&agent, Out::Gone(String::new()), cx);
+    // Its assistant kept nothing it can go on with: a run starts again from the thread's words.
+    (run.agents).update(cx, |agents, _| {
+        if let Some(record) = agents.tasks.kept.of_mut(&agent) {
+            record.gone = true;
+        }
+    });
     reply(&run, &agent, "And then?", &[SEATS.0], cx);
     let (_, first) = run.ran(2);
     assert_eq!(
@@ -2639,7 +2635,8 @@ fn no_tool_or_typed_text_takes_a_waiting_reply_back(cx: &mut TestAppContext) {
 /// No tool gives a thread a tab of the user's, takes one back to them, or says anything of one
 /// that isn't the thread's: every tool a thread and an outside agent has is called naming the
 /// user's tab, and the core is asked for no give, the tab stays where it is, the log has no
-/// return by the user, and no answer has its title or its site.
+/// return by the user, and no answer has its title or its site but your_tabs' and open_your_tab's,
+/// which read the user's open tabs by title and site while Settings lets threads see them (#4403).
 #[gpui::test]
 fn no_tool_gives_returns_or_tells_of_a_tab_of_the_users(cx: &mut TestAppContext) {
     let run = run("handed-walk", cx);
@@ -2669,7 +2666,8 @@ fn no_tool_gives_returns_or_tells_of_a_tab_of_the_users(cx: &mut TestAppContext)
         for tool in names {
             let answer = call(&run.agents, who, &tool, arguments.clone(), cx);
             cx.run_until_parked();
-            if let Ok(answer) = answer.try_recv() {
+            let tells = tools::YOUR_TABS.contains(&tool.as_str());
+            if let Some(answer) = answer.try_recv().ok().filter(|_| !tells) {
                 for of_the_tab in [SEATS.1, "tickets.example", "/seats"] {
                     assert!(
                         !answer.text.contains(of_the_tab),

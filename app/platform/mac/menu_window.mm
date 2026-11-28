@@ -26,6 +26,7 @@ NSView* g_view;
 NSVisualEffectView* g_glass;
 bool (*g_pointer)(int, double, double);
 void (*g_dismissed)(void);
+bool (*g_undo)(void);
 bool (*g_choose)(const char*);
 bool g_shown;
 // Where the menu's window goes, on screen, which the pointer is measured from before it's there.
@@ -115,6 +116,12 @@ NSEvent* Track(NSEvent* event) {
     // was typed at the menu.
     const NSEventModifierFlags flags = event.modifierFlags;
     if (flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) {
+      // ⌘Z undoes the reorder the menu made, if it made one, and the menu stays.
+      const NSEventModifierFlags held = flags & NSEventModifierFlagDeviceIndependentFlagsMask;
+      if (held == NSEventModifierFlagCommand && [event.charactersIgnoringModifiers isEqual:@"z"] &&
+          g_undo && g_undo()) {
+        return nil;
+      }
       Dismiss(true);
       return nil;
     }
@@ -162,6 +169,10 @@ NSEvent* Track(NSEvent* event) {
 
 bool HostIsMenuWindow(NSWindow* window) {
   return window && window == g_window;
+}
+
+void host_menu_window_on_undo(bool (*undo)(void)) {
+  g_undo = undo;
 }
 
 void host_add_menu_window(void* view,

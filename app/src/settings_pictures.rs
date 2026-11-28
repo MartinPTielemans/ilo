@@ -24,9 +24,13 @@ use crate::palette::{INK, PAPER};
 use crate::settings_rows::{Look, drawn};
 use crate::shell::FavoritesScope;
 use crate::theme::Appearance;
-use crate::tokens::command_bar::site_colors::{
-    AMAZON, APPLE_MUSIC, ASANA, DROPBOX, FIGMA, GMAIL, GOOGLE_CALENDAR, GOOGLE_DRIVE, GOOGLE_MAPS,
-    LINKEDIN, REDDIT, SPOTIFY,
+use crate::tokens::settings::{
+    SHARE_DOTS, SHARE_MARK, SHARE_MARK_SQUARE, SHARE_PLATE, SHARE_PLATE_GAP, SHARE_PLATE_PADDING,
+    SHARE_PLATE_RADIUS, SHARE_PROFILES_GAP, SHARE_RING, SHARE_RINGS, SHARE_SPACE_GAP,
+    SHARE_SPACE_HEIGHT, SHARE_SPACE_PADDING, SHARE_SPACE_PADDING_X, SHARE_SPACE_RADIUS,
+    SHARE_SPACE_WIDTH, SHARE_SPACES, SHARE_SQUARES, SHARE_TAB_GAP, SHARE_TAB_HEIGHT, SHARE_TILE,
+    SHARE_TILE_GAP, SHARE_TILE_HEIGHT, SHARE_TILE_LIGHT, SHARE_TILE_RADIUS, SHARE_TILE_RIM,
+    SHARE_TILE_WIDTH, SHARE_TINT, SHARE_TINT_LIGHT,
 };
 use crate::tokens::settings::{
     SHARE_HEIGHT, SHARE_WIDTH, SIDE_BAR, SIDE_BAR_FIRST, SIDE_BAR_FIRST_LIGHT, SIDE_BAR_HEIGHT,
@@ -34,14 +38,6 @@ use crate::tokens::settings::{
     SIDE_PAGE, SIDE_PAGE_LIGHT, SIDE_PAGE_RADIUS, SIDE_PLATE, SIDE_PLATE_LIGHT, SIDE_RADIUS,
     SIDE_RING, SIDE_RING_GAP, SIDE_ROOM, SIDE_ROWS_GAP, SIDE_SIDEBAR, SIDE_SIDEBAR_PADDING,
     SIDE_WIDTH, SIDE_WINDOW, SIDE_WINDOW_LIGHT,
-};
-use crate::tokens::settings::{
-    SHARE_MARK, SHARE_MARK_SQUARE, SHARE_PLATE, SHARE_PLATE_GAP, SHARE_PLATE_PADDING,
-    SHARE_PLATE_RADIUS, SHARE_PROFILES_GAP, SHARE_RING, SHARE_SPACE_GAP, SHARE_SPACE_HEIGHT,
-    SHARE_SPACE_PADDING, SHARE_SPACE_PADDING_X, SHARE_SPACE_RADIUS, SHARE_SPACE_WIDTH,
-    SHARE_SPACES, SHARE_TAB_GAP, SHARE_TAB_HEIGHT, SHARE_TILE, SHARE_TILE_GAP, SHARE_TILE_HEIGHT,
-    SHARE_TILE_LIGHT, SHARE_TILE_RADIUS, SHARE_TILE_RIM, SHARE_TILE_WIDTH, SHARE_TINT,
-    SHARE_TINT_LIGHT,
 };
 use crate::tokens::text::SMALL;
 
@@ -343,11 +339,11 @@ enum Mark {
     Ring,
 }
 
-/// The three lists a drawing can show, each its sites' colours (the command bar's) and its shape.
+/// The three lists a drawing can show, each its favicons' colours and its shape.
 const LISTS: [([u32; 4], Mark); 3] = [
-    ([GMAIL, FIGMA, SPOTIFY, DROPBOX], Mark::Dot),
-    ([GOOGLE_DRIVE, AMAZON, LINKEDIN, APPLE_MUSIC], Mark::Square),
-    ([GOOGLE_MAPS, REDDIT, GOOGLE_CALENDAR, ASANA], Mark::Ring),
+    (SHARE_DOTS, Mark::Dot),
+    (SHARE_SQUARES, Mark::Square),
+    (SHARE_RINGS, Mark::Ring),
 ];
 
 /// Which list each of the three Spaces shows under `scope`: the first two are one profile's, the

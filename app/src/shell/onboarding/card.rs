@@ -4,11 +4,11 @@
 //! space, as the design gives it.
 
 use gpui::{
-    AnyElement, App, BoxShadow, Context, FontWeight, MouseButton, Rgba, SharedString, Stateful,
+    AnyElement, App, BoxShadow, FontWeight, MouseButton, Rgba, SharedString, Stateful,
     StyleRefinement, div, point, prelude::*, px, rgb, svg,
 };
 
-use super::{Shell, Step, with_alpha};
+use super::{Step, with_alpha};
 use crate::product::drawn_mark_path;
 use crate::tokens::shell::onboarding::card as t;
 
@@ -70,6 +70,16 @@ impl Inks {
     /// A group of rows' ground.
     pub(super) fn group(&self) -> Rgba {
         self.text(if self.light { t::LIGHT_GROUP } else { t::GROUP })
+    }
+
+    /// What's picked: the one look's flat plate of the ink, a step weaker in Light (#4401).
+    pub(super) fn selected(&self) -> Rgba {
+        use crate::tokens::selected::plate;
+        self.text(if self.light {
+            plate::LIGHT
+        } else {
+            plate::DARK
+        })
     }
 
     /// A field's fill, and the recovery words' plate.
@@ -354,7 +364,7 @@ pub(super) fn foot_span(step: Step) -> (f32, f32) {
 pub(super) fn column(step: Step) -> f32 {
     let [_, column] = t::COLUMN;
     match step {
-        Step::Assistant | Step::Tidy => column,
+        Step::Assistant => column,
         Step::Space => t::SPACE_FOOT,
         _ => t::CENTRED_COLUMN,
     }
@@ -452,7 +462,7 @@ pub(super) fn row(
 
 /// The check disc a row shows once what it offered is done.
 pub(super) fn check_disc(inks: Inks) -> gpui::Div {
-    let [_, _, size] = t::BROOM;
+    let size = t::CHECK_DISC;
     div()
         .flex_none()
         .size(px(size + 2.))
@@ -467,209 +477,4 @@ pub(super) fn check_disc(inks: Inks) -> gpui::Div {
                 .size(px(size - 2.))
                 .text_color(inks.on_main()),
         )
-}
-
-impl Shell {
-    /// Tidy tabs' card: "Put away after" and the time, over a bar of the build's times. A click or
-    /// a drag on the bar puts it at the stop nearest; the arrows move it a stop.
-    pub(super) fn tidy_card(&self, inks: Inks, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let tidy = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.tidy.clone())?;
-        let [top, height, inset] = t::TIDY;
-        let [width, bar_height, thumb] = t::TIDY_BAR;
-        let [tick, tick_alpha] = t::TIDY_TICK;
-        let [shadow_y, shadow_blur, shadow_alpha] = t::TIDY_THUMB_SHADOW;
-        let [_, column] = t::COLUMN;
-        let last = tidy.stops.len().saturating_sub(1).max(1);
-        // Each stop's centre along the bar, the thumb's half in from either end.
-        let x = move |at: usize| thumb / 2. + (width - thumb) * at as f32 / last as f32;
-        let thumb_at = x(tidy.at);
-        let words = tidy.stops[tidy.at].1;
-        let ticks = (0..tidy.stops.len()).map(move |each| {
-            at(x(each) - tick / 2., (bar_height - tick) / 2.)
-                .size(px(tick))
-                .rounded_full()
-                .bg(inks.text(tick_alpha))
-        });
-        // Where the bar is drawn, which a click's place along it is read against.
-        let drawn: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>> =
-            Default::default();
-        let stop_at = move |bounds: Option<gpui::Bounds<gpui::Pixels>>,
-                            pointer: gpui::Point<gpui::Pixels>| {
-            let along = bounds.map_or(0., |bounds| f32::from(pointer.x - bounds.origin.x));
-            let along = ((along - thumb / 2.) / (width - thumb)).clamp(0., 1.);
-            (along * last as f32).round() as usize
-        };
-        let (pressed, moved) = (drawn.clone(), drawn.clone());
-        let count = tidy.stops.len();
-        let bar = div()
-            .id("onboarding-tidy")
-            .relative()
-            .w(px(width))
-            .h(px(bar_height))
-            .tab_index(0)
-            .when_some(self.first_stop(Step::Tidy), |bar, stop| {
-                bar.track_focus(&stop)
-            })
-            .focus_from_keys_only()
-            .rounded_full()
-            .focus_visible(card_ring(inks))
-            .when(self.a11y, |bar| {
-                bar.role(gpui::accesskit::Role::Slider)
-                    .aria_label("Put away after")
-                    .aria_min_numeric_value(0.)
-                    .aria_max_numeric_value((count - 1) as f64)
-                    .aria_numeric_value_step(1.)
-                    .aria_numeric_value(tidy.at as f64)
-                    .on_a11y_action(gpui::accesskit::Action::Increment, {
-                        let shell = cx.weak_entity();
-                        move |_, _, cx| {
-                            shell
-                                .update(cx, |shell, cx| shell.onboarding_tidy_by(1, cx))
-                                .ok();
-                        }
-                    })
-                    .on_a11y_action(gpui::accesskit::Action::Decrement, {
-                        let shell = cx.weak_entity();
-                        move |_, _, cx| {
-                            shell
-                                .update(cx, |shell, cx| shell.onboarding_tidy_by(-1, cx))
-                                .ok();
-                        }
-                    })
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |shell, event: &gpui::MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    shell.onboarding_tidy(stop_at(pressed.get(), event.position), cx);
-                }),
-            )
-            .on_mouse_move(
-                cx.listener(move |shell, event: &gpui::MouseMoveEvent, _, cx| {
-                    if event.pressed_button == Some(MouseButton::Left) {
-                        shell.onboarding_tidy(stop_at(moved.get(), event.position), cx);
-                    }
-                }),
-            )
-            .child(
-                gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                    .absolute()
-                    .inset_0(),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded_full()
-                    .bg(inks.text(t::TIDY_TRACK))
-                    .child(
-                        div()
-                            .h_full()
-                            .w(px(thumb_at))
-                            .rounded_full()
-                            .bg(inks.text(t::TIDY_FILLED)),
-                    ),
-            )
-            .children(ticks)
-            .children(self.place(Step::Tidy, "tidy"))
-            .child(
-                at(thumb_at - thumb / 2., (bar_height - thumb) / 2.)
-                    .size(px(thumb))
-                    .rounded_full()
-                    .bg(rgb(t::TIDY_THUMB))
-                    .shadow(vec![BoxShadow {
-                        color: gpui::hsla(0., 0., 0., shadow_alpha),
-                        offset: point(px(0.), px(shadow_y)),
-                        blur_radius: px(shadow_blur),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }]),
-            );
-        let [name_size, name_line] = t::ROW_NAME;
-        Some(
-            div()
-                .w(px(column))
-                .h(px(height))
-                .mt(px(top - t::BODY_TOP))
-                .px(px(inset))
-                .flex()
-                .flex_col()
-                .justify_center()
-                .gap(px(inset / 2.))
-                .rounded(px(crate::tokens::radius::ROW))
-                .bg(inks.group())
-                .text_size(px(name_size))
-                .line_height(px(name_line))
-                .text_color(inks.text(1.))
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .child("Put away after")
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(words)),
-                )
-                .child(bar),
-        )
-    }
-
-    /// The broom's row, itself the control, where the window has a broom: only with threads on and
-    /// the broom there at all, which `Browser::broom` answers whatever today's tabs number.
-    pub(super) fn broom_row(&self, inks: Inks, cx: &App) -> Option<gpui::Div> {
-        if !self.broom_card(cx) {
-            return None;
-        }
-        let [top, height, glyph] = t::BROOM;
-        let [tidy_top, tidy_height, _] = t::TIDY;
-        let [_, column] = t::COLUMN;
-        let [name_size, name_line] = t::ROW_NAME;
-        let [words_size, words_line] = t::ROW_WORDS;
-        let [_, inset, gap] = t::ROW;
-        Some(
-            div()
-                .relative()
-                .w(px(column))
-                .h(px(height))
-                .mt(px(top - tidy_top - tidy_height))
-                .px(px(inset))
-                .flex()
-                .items_center()
-                .gap(px(gap))
-                .rounded(px(crate::tokens::radius::ROW))
-                .hover(move |row| row.bg(inks.group()))
-                .child(
-                    svg()
-                        .path("icons/broom.svg")
-                        .size(px(glyph))
-                        .flex_none()
-                        .text_color(inks.text(1.)),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_size(px(name_size))
-                                .line_height(px(name_line))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(inks.text(1.))
-                                .child("Or sweep them into folders"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(words_size))
-                                .line_height(px(words_line))
-                                .text_color(inks.text_2())
-                                .child("Click the broom above today's tabs."),
-                        ),
-                )
-                .children(self.place(Step::Tidy, "broom")),
-        )
-    }
-
-    /// Whether the window has a broom: only with an assistant, and only where the broom can be at
-    /// all.
-    pub(super) fn broom_card(&self, cx: &App) -> bool {
-        self.browser.threads(cx) == Some(true) && self.browser.broom().is_some()
-    }
 }

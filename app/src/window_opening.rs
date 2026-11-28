@@ -630,6 +630,7 @@ pub(crate) fn finish_opening(
         ),
         prompt.map(Into::into),
         reveal::open(shell.clone(), ui_view, cx),
+        edge_knot::open(shell.clone(), ui_view, cx),
     ]
     .into_iter()
     .flatten()
@@ -899,6 +900,12 @@ pub(crate) fn finish_opening(
             {
                 unsafe {
                     platform::host_add_menu_window(view, menu_pointer, menu_dismissed, menu_choose)
+                };
+                // The Mac's host takes a menu's shortcuts before its window does; elsewhere the
+                // window's own keys reach it (menu.rs key_down).
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    platform::host_menu_window_on_undo(crate::hosts::menu_undo)
                 };
             }
         },

@@ -82,7 +82,7 @@ use crate::tokens::shell::conversation::{
     TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
     TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
 };
-use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
+use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RAIL, RING_TURN};
 use crate::tokens::shell::task::{
     LIGHT_TILE_FILL, LIGHT_TILE_LINE, LIGHT_TILE_LINE_ON, RAIL_BREAKPOINT, RAIL_EDGE, RAIL_FAVICON,
     RAIL_GAP, RAIL_HEAD, RAIL_HEAD_GAP, RAIL_HEAD_X, RAIL_TITLE, RAIL_TITLE_LINE, RAIL_WIDTH,
@@ -108,8 +108,10 @@ fn said_ink(palette: &super::Palette) -> Hsla {
     palette.text(TITLE)
 }
 
-/// The stage's fill, the conversation's ground in the page area: also the fill of the shown
-/// thread's card, a shape of its own beside it (task_cards.rs).
+/// The page's plate, which the shown thread's card in the sidebar takes, a shape of its own
+/// (task_cards.rs), until the lifted pane takes its place (#4398). The conversation itself draws
+/// no plate: its column is the chrome the user steers from, on the window's glass as the sidebar
+/// is, and the page is the one card (the owner, 27 Nov, #4396).
 pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
     palette.page
 }
@@ -362,6 +364,10 @@ pub struct TalkView {
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether the view was last drawn as the panel beside a page, so `drawn_at` is the panel's.
     drawn_standing: Cell<bool>,
+    /// Whether the thread had pages when last drawn, and the rail's slide in or out since then
+    /// (`rail_open`).
+    drawn_pages: Cell<Option<bool>>,
+    rail_slide: Cell<Option<(bool, Instant)>>,
     /// Whether an assistive app reads the window, as the last frame found: its lines have roles
     /// and names only then, so with none running a frame costs what it did (#4244).
     a11y: bool,
@@ -469,32 +475,6 @@ impl Shell {
         }
     }
 
-    /// The composer's Latest tasks, at most `most`: the tasks the user talks to whose home is the
-    /// Space in front, the newest first, then those a run before left there, never another
-    /// Space's. A card's home is the browser's own record of where it was asked, and a run
-    /// before's is its profile's Space of the user's (`Agents::kept_cards`).
-    pub(super) fn latest_tasks(&self, most: usize) -> Vec<Card> {
-        let Some(here) = self.shown_space().map(|space| space.id) else {
-            return Vec::new();
-        };
-        (self.task_cards.iter())
-            .filter(|card| card.replies)
-            .chain(&self.kept_cards)
-            .filter(|card| card.home == here)
-            .take(most)
-            .cloned()
-            .collect()
-    }
-
-    /// A click on a card of Latest tasks: one a run before left comes back from the Archive with
-    /// its conversation open, as its row there brings it; any other shows its conversation.
-    pub(super) fn open_latest(&mut self, agent: SharedString, cx: &mut Context<Self>) {
-        match self.kept_cards.iter().any(|card| card.agent == agent) {
-            true => self.restore_archived_task(agent, cx),
-            false => self.show_task(agent, cx),
-        }
-    }
-
     pub fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         // A view set aside for a close's question is left for the one asked for now.
         self.forget_closing(cx);
@@ -514,12 +494,14 @@ impl Shell {
                 talk.view.update(cx, |view, _| {
                     view.scroll.scroll_to_bottom();
                     view.motion.reset();
+                    // Its rail is where its pages put it, with no slide for what came away.
+                    view.drawn_pages.set(None);
                 });
                 talk.view
             }
             old => {
                 if let Some(old) = old {
-                    self.talk_let_go(&old.agent, &old.view, cx);
+                    self.talk_let_go(&old.view, cx);
                 }
                 // The reply's placeholder follows the appearance, as the lines do (#1659).
                 let colors = Self::form_colors(cx);
@@ -583,14 +565,14 @@ impl Shell {
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                     drawn_standing: Cell::default(),
+                    drawn_pages: Cell::default(),
+                    rail_slide: Cell::default(),
                     a11y: false,
                     spoken: None,
                     answer_due: false,
                 })
             }
         };
-        // Its rail pictures its pages again, so its plate's goes.
-        self.drop_plate(&agent);
         // check.sh reads this line.
         log!("browser: task {agent} shown");
         self.talk = Some(Talk {
@@ -661,44 +643,18 @@ impl Shell {
     /// again.
     pub(super) fn talk_closed(&mut self, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
-        let (agent, view) = (talk.agent.clone(), talk.view.clone());
-        self.talk_let_go(&agent, &view, cx);
+        let view = talk.view.clone();
+        self.talk_let_go(&view, cx);
     }
 
-    /// `agent`'s conversation lets its pictures go, but for its card's page's, which its plate in
-    /// Latest tasks shows from then on.
-    fn talk_let_go(
-        &mut self,
-        agent: &SharedString,
-        view: &Entity<TalkView>,
-        cx: &mut Context<Self>,
-    ) {
-        let card = self.task_cards.iter().find(|card| card.agent == *agent);
-        let tab = card.and_then(|card| card.last_tab);
-        let (kept, stale) = view.update(cx, |view, _| {
-            let kept = tab.and_then(|tab| view.take_picture(tab));
-            (kept, view.let_go())
-        });
+    /// `agent`'s conversation lets its pictures go.
+    fn talk_let_go(&mut self, view: &Entity<TalkView>, cx: &mut Context<Self>) {
+        let stale = view.update(cx, |view, _| view.let_go());
         self.stale_pictures.extend(stale);
-        if let (Some(tab), Some(picture)) = (tab, kept) {
-            self.drop_plate(agent);
-            self.card_plates.push((agent.clone(), tab, picture));
-        }
     }
 
-    /// `agent`'s card's plate lets its picture go.
-    fn drop_plate(&mut self, agent: &SharedString) {
-        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
-            .into_iter()
-            .partition(|(each, ..)| each == agent);
-        self.card_plates = kept;
-        self.stale_pictures
-            .extend(gone.into_iter().map(|(.., picture)| picture.image()));
-    }
-
-    /// The plates' pictures of cards that no longer picture that page, or are gone, go; and so does
-    /// a kept card's picture, read back after a quit, that no card of `was`'s successors holds now
-    /// (Remove, Remove All, a reply), from this window's atlas if it drew it.
+    /// A kept card's picture, read back after a quit, that no card of `was`'s successors holds now
+    /// (Remove, Remove All, a reply) goes, from this window's atlas if it drew it.
     pub(super) fn keep_plates(&mut self, was: &[Card]) {
         let held = |plate: &&Plate| {
             (self.task_cards.iter()).any(|card| card.kept_picture.as_ref() == Some(*plate))
@@ -708,24 +664,6 @@ impl Shell {
             .map(|plate| plate.image.clone())
             .collect();
         self.stale_pictures.extend(gone);
-        let cards = &self.task_cards;
-        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
-            .into_iter()
-            .partition(|(agent, tab, _)| {
-                (cards.iter()).any(|card| card.agent == *agent && card.last_tab == Some(*tab))
-            });
-        self.card_plates = kept;
-        self.stale_pictures
-            .extend(gone.into_iter().map(|(.., picture)| picture.image()));
-    }
-
-    /// The picture a card of Latest tasks shows on its plate, if its conversation left one, or
-    /// after a quit, its kept card's.
-    pub(super) fn plate_of(&self, card: &Card) -> Option<PagePicture> {
-        (self.card_plates.iter())
-            .find(|(agent, tab, _)| *agent == card.agent && card.last_tab == Some(*tab))
-            .map(|(.., picture)| picture.clone())
-            .or_else(|| card.kept_picture.as_ref().map(PagePicture::kept))
     }
 
     /// A picture the conversation asked for came, or the core had none: whether it was one of its
@@ -1044,12 +982,6 @@ impl TalkView {
         Some((*tab, self.keeps_asked.contains(&request)))
     }
 
-    /// `tab`'s picture, which it no longer holds.
-    fn take_picture(&mut self, tab: u64) -> Option<PagePicture> {
-        let at = self.pictures.iter().position(|(each, ..)| *each == tab)?;
-        self.pictures.remove(at).2
-    }
-
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
         self.tiles.let_go();
@@ -1203,16 +1135,19 @@ impl TalkView {
         };
         let menu = menu.0.clone();
         let agent = self.agent.to_string();
-        let Some((ids, items)) =
-            crate::agents::global(cx).and_then(|agents| agents.read(cx).thread_model_menu(&agent))
-        else {
+        let Some(agents) = crate::agents::global(cx) else {
             return;
         };
+        let Some((ids, items)) = agents.read(cx).thread_model_menu(&agent) else {
+            return;
+        };
+        agents.update(cx, |agents, cx| agents.model_menu_opened(cx));
         let view = cx.entity().downgrade();
         let chosen: crate::text_input::Chosen = Box::new(move |closed, _, cx| {
-            let action = (closed.chosen())
-                .and_then(|item| ids.get(item))
-                .map(|(id, _)| TaskAction::PickModel(id.clone()));
+            let action = (closed.chosen()).and_then(|item| match ids.get(item) {
+                Some(Some(id)) => Some(TaskAction::PickModel(id.clone())),
+                _ => None,
+            });
             let closed = |view: &mut Self, cx: &mut Context<Self>| {
                 view.menu_open = None;
                 cx.notify();
@@ -1929,6 +1864,7 @@ impl TalkView {
     fn inks(&self, look: &Look) -> choices::Inks {
         let palette = look.palette;
         choices::Inks {
+            light: palette.tone == Tone::Light,
             text: palette.text(TITLE),
             dim: palette.gray(SECONDARY),
             plate: palette.plate(BAR_CHIP),
@@ -2754,6 +2690,32 @@ impl TalkView {
         self.step_line(step, glyph, look, cx)
     }
 
+    /// How open the pages' rail is this frame, from 0 to 1, and whether it's still sliding: the
+    /// thread's first page brings it in and its last page closing takes it out, over `RAIL`. Where
+    /// it `fits` beside the column it's open while there are `pages`; a resize, full screen, a
+    /// page beside the panel or the thread coming to show moves nothing, and under Reduce Motion
+    /// it's at once where it goes. `pages` is None while no thread shows.
+    fn rail_open(&self, pages: Option<bool>, fits: bool, now: Instant, still: bool) -> (f32, bool) {
+        let had = self.drawn_pages.replace(pages);
+        let pages = pages.unwrap_or(false);
+        if had
+            .zip(self.drawn_pages.get())
+            .is_some_and(|(had, has)| had != has)
+            && fits
+            && !still
+        {
+            self.rail_slide.set(Some((pages, now)));
+        }
+        let at = if pages && fits { 1. } else { 0. };
+        let slid = (self.rail_slide.get())
+            .filter(|(opening, _)| *opening == pages && fits && !still)
+            .and_then(|(opening, since)| rail_slid(opening, since, now));
+        if slid.is_none() {
+            self.rail_slide.set(None);
+        }
+        (slid.unwrap_or(at), slid.is_some())
+    }
+
     /// How far round the running ring is now, on the shell's breath, which draws the next frame
     /// only while a ring is drawn.
     fn turned(&self, look: &Look, cx: &mut Context<Self>) -> f32 {
@@ -3162,7 +3124,7 @@ impl TalkView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let sign = (self.shown.as_ref()).and_then(|shown| Knot::of(shown.stoppable, &shown.live));
-        let mark = knot::knot(SIGN_SIZE, &look.palette, gap);
+        let mark = knot::knot(SIGN_SIZE, &look.palette, sign, gap);
         let (drawn, composer) = (self.sign_drawn.clone(), self.composer_drawn.clone());
         div()
             .relative()
@@ -3323,12 +3285,7 @@ impl TalkView {
                     at: self.model_drawn.clone(),
                     click,
                 };
-                // The panel speaks a default by its own word, as it draws it; a named model whole.
-                let said = match form.row.model_word && word == crate::command_bar::DEFAULT_ROW {
-                    true => word.clone(),
-                    false => said,
-                };
-                (Some(mark), said, word, trigger)
+                (mark, said, word, trigger)
             });
         // Where the model's own word gives way, never under its first word's width.
         let model_least = match (&model, form.row.model_word) {
@@ -4608,6 +4565,16 @@ fn line_icons(icons: &mut Vec<Option<Arc<Image>>>, paged: &[pages::Paged], look:
     }));
 }
 
+/// How open a rail sliding in (`opening`) or out since `since` is at `now`, on the sidebar's
+/// ease-out cubic, or None once it's there.
+fn rail_slid(opening: bool, since: Instant, now: Instant) -> Option<f32> {
+    let t = now.saturating_duration_since(since).as_secs_f32() / RAIL;
+    (t < 1.).then(|| {
+        let eased = 1. - (1. - t).powi(3);
+        if opening { eased } else { 1. - eased }
+    })
+}
+
 /// The split's line's glyph.
 const SPLIT_GLYPH: &str = "icons/network.svg";
 
@@ -5013,6 +4980,12 @@ impl Render for TalkView {
         let held = look.behind
             || (self.shell.upgrade())
                 .is_some_and(|shell| shell.read(cx).watched_task_page().is_some());
+        let (rail_open, sliding) = self.rail_open(
+            self.shown.as_ref().map(|_| pages),
+            !across && !standing,
+            now,
+            still,
+        );
         let middle = shut(
             div()
                 .flex_1()
@@ -5076,20 +5049,38 @@ impl Render for TalkView {
                 (self.replies || !standing)
                     .then(|| shut(foot(on_column(self.composer(&look, gap, cx))))),
             );
-        let rail = (pages && !across && !standing).then(|| {
+        // The rail's slot, as open as it is: the column keeps its width in the room left of it,
+        // so it slides to that room's middle as the slot grows, and the rail, held at the slot's
+        // left, comes in from the right.
+        let beside = pages && !across && !standing;
+        let rail = (rail_open > 0.).then(|| {
             div()
                 .flex_none()
-                .w(px(RAIL_WIDTH))
+                .w(px((RAIL_WIDTH + RAIL_EDGE) * rail_open))
                 .h_full()
-                .py(px(RAIL_EDGE))
-                .mr(px(RAIL_EDGE))
-                .flex()
-                .flex_col()
+                .overflow_hidden()
                 .child(
-                    self.tiles
-                        .over(self.rail(false, &look, cx), self.drawn.clone(), held),
+                    div()
+                        .w(px(RAIL_WIDTH))
+                        .h_full()
+                        .py(px(RAIL_EDGE))
+                        .flex()
+                        .flex_col()
+                        // No page shows live while the slot slides: a tile is the core's own view,
+                        // which the slot's clip doesn't cut, so each would stand past the window's
+                        // edge and move on every frame. They come once the rail is in place.
+                        .children(beside.then(|| {
+                            (self.tiles).over(
+                                self.rail(false, &look, cx),
+                                self.drawn.clone(),
+                                held || sliding,
+                            )
+                        })),
                 )
         });
+        if sliding {
+            window.request_animation_frame();
+        }
         if !pages {
             self.drawn.borrow_mut().clear();
             self.crashed_drawn.borrow_mut().clear();
@@ -5117,7 +5108,6 @@ impl Render for TalkView {
             .on_action(cx.listener(Self::ilo_back))
             .on_action(cx.listener(Self::ilo_leave))
             .size_full()
-            .bg(stage_fill(&palette))
             .flex()
             .justify_center()
             // A press here is the conversation's, not the window background's, which moves the
@@ -5154,7 +5144,7 @@ fn ilo_head(kind: &IloKind, agent: &str) -> IloHead {
         Some(name) => {
             let (mut said, quoted) = words::with_name(kind, &own, name);
             // What its sentence says after the name.
-            said.extend(words::tail(kind, agent));
+            said.extend(words::tail(kind));
             (said, Some(quoted))
         }
         None => (own, None),

@@ -16,6 +16,10 @@ extern "C" {
 // |y| from the menu window's top left, which returns whether the menu takes it. |dismissed| is
 // called when the user leaves the menu for another window or app, or its browser window resizes,
 // moves or goes full screen; |choose| chooses an item by title, for the driver.
+// |undo| is asked when ⌘Z is typed at the menu, and returns whether the menu took it as an undo of
+// a reorder it made; otherwise the shortcut closes the menu.
+void host_menu_window_on_undo(bool (*undo)(void));
+
 void host_add_menu_window(void* view,
                           bool (*pointer)(int kind, double x, double y),
                           void (*dismissed)(void),

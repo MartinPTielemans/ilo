@@ -293,6 +293,7 @@ impl StandIn {
             program: self.folder.join("claude"),
             path: Some(path),
             model: None,
+            boxed: false,
         }
     }
 
@@ -410,6 +411,37 @@ fn the_cap_kills_the_run_with_all_it_started() {
         !stand_in.at("claude.late").exists(),
         "what it started went with it"
     );
+}
+
+// Whatever else holds the program's output open, as a process of its own that left the run's group
+// does, or another test's fork that hasn't yet exec'd on a busy runner, `end` is the answer: the
+// run says Ended at once, not when its output closes (#4479).
+#[cfg(unix)]
+#[test]
+fn ending_a_run_does_not_wait_for_what_holds_its_output() {
+    let folder = super::folder().unwrap();
+    let ready = folder.join("ready");
+    let stand_in = StandIn::new(
+        "2.1.332",
+        &format!(
+            "python3 -c \"import os, time; os.setsid(); open('{}', 'w').close(); time.sleep(20)\" &\nsleep 20",
+            ready.display()
+        ),
+    );
+    let run = Arc::new(Run::new(Duration::from_secs(60)).unwrap());
+    let ender = Arc::clone(&run);
+    let ends = std::thread::spawn(move || {
+        // Once what holds the pipe has left the run's group, which `end` can't kill.
+        while !ready.exists() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        ender.end();
+    });
+    let started = Instant::now();
+    let answer = run.answer(&stand_in.program(), &handed(&tabs(FEWEST)).unwrap(), FEWEST);
+    ends.join().unwrap();
+    assert_eq!(answer.err(), Some(Failed::Ended));
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[cfg(unix)]

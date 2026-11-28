@@ -58,7 +58,7 @@ impl Thread {
                 agents.start_task(cli, "Send the statement", None, 1, tier, cx)
             })
             .expect("started");
-        let folder = Granted::picked_for_test(base.join("home/Taxes"));
+        let folder = Granted::at_for_test(base.join("home/Taxes"));
         agents.update(cx, |agents, _| {
             let task = agents.task_mut(&agent).unwrap();
             task.state = State::Working;

@@ -18,7 +18,7 @@ use crate::tokens::shell::onboarding::card as t;
 
 /// The step's parts as the fifth mock sets them out: no padding, a head as tall as the name's
 /// field, a shorter pad, and no note.
-const FORM: Form = Form {
+pub(super) const FORM: Form = Form {
     padding: 0.,
     head: t::SPACE_EDITOR[1],
     pad_gap: t::SPACE_PAD[0],
@@ -31,6 +31,12 @@ const FORM: Form = Form {
 
 /// What the step's name is as it comes, unless an import brought Spaces (v9 §6).
 const HOME: &str = "Home";
+
+/// What Next names the Space for `typed`: cut to the field's most, an empty one being Home.
+fn kept_name(typed: &str) -> String {
+    let typed: String = typed.trim().chars().take(t::SPACE_NAME as usize).collect();
+    if typed.is_empty() { HOME.into() } else { typed }
+}
 
 /// The step's editor, made as the step first comes and kept while the card shows, so Back and a
 /// return keep what was set.
@@ -221,6 +227,15 @@ impl Shell {
             .child(field)
     }
 
+    /// The step's picture: the first Space's sidebar in the look the editor makes, called what Next
+    /// would name it as the name is typed, composition and all.
+    pub(super) fn space_picture(&self, cx: &App) -> Option<gpui::Div> {
+        let editor = self.onboarding.as_ref()?.space.as_ref()?;
+        let name = kept_name(editor.name.read(cx).text());
+        let piece = self.sidebar_piece(editor.space, name.into());
+        Some(piece.children(self.place(Step::Space, "piece")))
+    }
+
     /// Next: the name typed, cut to the field's most, the Space's if it's changed, an empty one
     /// being Home. The look was kept as it was picked; one only shown goes with the step.
     pub(super) fn space_keep(&mut self, cx: &mut Context<Self>) {
@@ -228,9 +243,7 @@ impl Shell {
             return;
         };
         let space = editor.space;
-        let typed = editor.name.read(cx).committed();
-        let typed: String = typed.trim().chars().take(t::SPACE_NAME as usize).collect();
-        let name = if typed.is_empty() { HOME.into() } else { typed };
+        let name = kept_name(&editor.name.read(cx).committed());
         let kept = self.spaces.iter().find(|each| each.id == space);
         if kept.is_some_and(|kept| kept.name != name) {
             log!("browser: onboarding space named");
