@@ -452,6 +452,11 @@ if ! windows; then
   step_settled 6 "skill: first run's last step didn't come"
   pass_step 6 "skill: "
   expect '^browser: onboarding done$' "skill: first run's card didn't end after its last step"
+  # The flow ends with the command bar up; it closes first, or its closing as Settings takes the
+  # keyboard hands the browser's window main again and Settings' clicks land there.
+  expect '^browser: command bar shown$' "skill: the command bar didn't come up after the flow"
+  send key escape
+  expect '^browser: command bar hidden$' "skill: Esc didn't close the command bar the flow left up"
   send menu Settings…
   settings_on_general "skill: Settings… didn't show Settings"
   send clickkey $(drawn "toolbar Other apps")
