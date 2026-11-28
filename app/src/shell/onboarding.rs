@@ -607,6 +607,7 @@ impl Shell {
             });
             let Some(handle) = open.or_else(|| FirstRun::open(shell.clone(), cx)) else {
                 log!("browser: first run's window didn't open");
+                shell.update(cx, |shell, cx| shell.first_run_gone(cx));
                 return;
             };
             shell.update(cx, |shell, cx| {
@@ -628,6 +629,22 @@ impl Shell {
     /// First run is showing, so the browser window it opened at launch waits for it to end.
     pub fn first_run_open(&self) -> bool {
         self.onboarding.is_some()
+    }
+
+    /// First run's window went, or never opened, while first run showed: it ends there, without
+    /// its exit, and the browser window it kept waiting comes on screen, so no way out of first
+    /// run leaves that window held. Not for a quit, which takes every window.
+    pub(super) fn first_run_gone(&mut self, cx: &mut Context<Self>) {
+        if self.onboarding.is_none() || super::quit_gone_ahead() {
+            return;
+        }
+        self.onboarding = None;
+        self.first_run = None;
+        // check.sh reads this line.
+        log!("browser: first run ended without its exit");
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.end_first_run(None, cx));
+        cx.notify();
     }
 
     /// Settings › Sync's view for the Welcome, following the account as the core says it is; none
@@ -1378,7 +1395,7 @@ impl Shell {
                 // the shell, before putting it on screen.
                 if let Some(handle) = first_run {
                     let browser = shell.read(cx).browser.clone();
-                    browser.end_first_run(handle.into(), cx);
+                    browser.end_first_run(Some(handle.into()), cx);
                 }
                 if opens_bar {
                     shell.update(cx, |shell, cx| shell.run(Command::NewTab, "onboarding", cx));
