@@ -72,13 +72,6 @@ impl Onboarding {
     }
 }
 
-/// The plate of a card drawn in `shape`, its width, height and radius, centred in a window `size`
-/// across: the exit's card in the shape its glass was given on the frame before.
-pub(super) fn behind(shape: (f32, f32, f32), size: (f32, f32)) -> Plate {
-    let (w, h, radius) = shape;
-    ((size.0 - w) / 2., (size.1 - h) / 2., w, h, radius)
-}
-
 /// The exit's frame `at` seconds in, in a window `size` across on this frame, as the host may
 /// have grown it since the last. The card stays centred in it throughout, and where it's
 /// `grown` it grows from its tokens' size to the window's.
