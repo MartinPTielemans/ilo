@@ -1025,6 +1025,45 @@ fn the_field_takes_no_window_keys_from_a_page_the_core_already_shows(cx: &mut Te
     );
 }
 
+/// At launch the field can hold the window's keys before the core shows the launch page (#4383).
+/// Held only for being shown, they go to that page as it shows, as with no field: the Mac's first
+/// responder stays the UI's view otherwise, and the page never has them. A field the user asked
+/// for, by a click or ⌘T, keeps them for the UI.
+#[gpui::test]
+fn the_page_shown_after_the_field_takes_the_keys_it_held(app: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(app);
+    host.take();
+    key_window(cx);
+    assert_eq!(host.take(), ["hold keyboard for page"]);
+    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
+    cx.run_until_parked();
+    assert!(
+        host.take().contains(&"focus page".to_string()),
+        "the page shown after the field never had the keys the field held for it"
+    );
+
+    // Asked for, by a click and by ⌘T: the field's keys are the UI's, and stay so.
+    for asked in ["click", "cmd-t"] {
+        let (shell, cx, host) = window_with_no_tab(app);
+        key_window(cx);
+        match asked {
+            "click" => cx.simulate_click(middle(&shell, cx), Modifiers::none()),
+            _ => shell.update(cx, |shell, cx| {
+                shell.run(crate::shell::Command::NewTab, "ui", cx)
+            }),
+        }
+        cx.run_until_parked();
+        assert!(field_focused(&shell, cx), "{asked}");
+        host.take();
+        shell.update(cx, |shell, cx| shell.set_selected(1, cx));
+        cx.run_until_parked();
+        assert!(
+            !host.take().contains(&"focus page".to_string()),
+            "a page took the keys from the field the user asked for by {asked}"
+        );
+    }
+}
+
 /// ⌘T and ⌘L give the field the keyboard and open no bar over it. The sidebar's New Tab and URL
 /// field and Start Again's ask still open the bar, as they did.
 #[gpui::test]

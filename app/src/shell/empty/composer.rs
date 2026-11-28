@@ -31,6 +31,9 @@ pub(in crate::shell) struct Resting {
     /// Whether the field is owed the keyboard, which it takes once, at the first frame that may
     /// give it (`give_resting_keys`), so whatever the user moves the keyboard to after keeps it.
     wants_keys: Owed,
+    /// The field holds the window's keys only for being shown, before the core shows a page:
+    /// the page shown next is owed them, as it would have had them with no field (#4383).
+    held_for_page: bool,
     /// The Space it rests in.
     space: u64,
 }
@@ -75,10 +78,25 @@ impl Shell {
                 // context holds them, until a click lands on the shell, which a header button's
                 // never does. The shell holds it again; a page that took the keyboard keeps it.
                 if resting.bar.read(cx).field_focus(cx).is_focused(window) {
-                    if self.page_keyboard.is_some() && self.page_has_keyboard(window, cx) {
+                    let page_has =
+                        self.page_keyboard.is_some() && self.page_has_keyboard(window, cx);
+                    if page_has {
                         self.page_keyboard = Some(Some(self.focus_handle.downgrade()));
                     }
                     window.focus(&self.focus_handle, cx);
+                    // On the Mac the hold left the UI's view the first responder, which the page
+                    // shown after it never takes by itself. Only the user's page: an agent's
+                    // tab never takes the keyboard.
+                    let users_page = self.selected != 0
+                        && self.talk_agent().is_none()
+                        && self.watched_task_page().is_none();
+                    if resting.held_for_page && users_page && !page_has {
+                        self.browser.focus_page(cx);
+                        log!(
+                            "browser: page {} takes the keys the field held",
+                            self.selected
+                        );
+                    }
                 }
                 log!("browser: resting field dropped");
             }
@@ -90,6 +108,7 @@ impl Shell {
             if resting.space != space {
                 resting.space = space;
                 resting.wants_keys = Owed::Shown;
+                resting.held_for_page = false;
                 let bar = resting.bar.clone();
                 bar.update(cx, |bar, cx| bar.space_changed(window, cx));
             }
@@ -100,6 +119,7 @@ impl Shell {
             bar,
             painted: false,
             wants_keys: Owed::Shown,
+            held_for_page: false,
             space,
         });
         cx.on_next_frame(window, |shell, _, cx| {
@@ -128,6 +148,7 @@ impl Shell {
             return false;
         }
         resting.wants_keys = Owed::Asked;
+        resting.held_for_page = false;
         cx.notify();
         true
     }
@@ -162,7 +183,11 @@ impl Shell {
         // GPUI's focus alone draws the caret, while the Mac sends a key to its window's first
         // responder, which a click gives the UI by itself and this hold gives it without one. Not
         // while the core already shows a page the shell hasn't heard of: the keys are that page's.
-        if self.browser.shown_now() == 0 {
+        let hold = self.browser.shown_now() == 0;
+        if let Some(resting) = &mut self.resting {
+            resting.held_for_page = hold && owed == Owed::Shown;
+        }
+        if hold {
             self.hold_keyboard_for_page(cx);
         }
         log!("browser: resting field has the keyboard");
@@ -170,7 +195,8 @@ impl Shell {
 
     /// Gives the resting field the keyboard, as a click on the page does.
     pub(in crate::shell) fn focus_resting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(resting) = &self.resting {
+        if let Some(resting) = &mut self.resting {
+            resting.held_for_page = false;
             let focus = resting.bar.read(cx).field_focus(cx);
             window.focus(&focus, cx);
         }
