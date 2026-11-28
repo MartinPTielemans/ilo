@@ -49,6 +49,25 @@ else
   send click 700 300
   edge_hit "left, the page has the keyboard" 223
   edge_asks "left, the page has the keyboard" 223
+  # Over the page GPUI applies no style, so the page's own cursors stay Chromium's: the pointer
+  # over the page's view isn't over GPUIView, and the platform asks of none while it is. The
+  # driver moves no real pointer, which the platform reads, so this holds the ask count only.
+  asks_before=$(grep -c '^browser: cursor style ' "$log")
+  reads_before=$(grep -c '^browser: cursor [^s]' "$log")
+  send cursor 700 300
+  expect '^browser: cursor .* over ' "the driver didn't read the page"
+  tries=0
+  while [ "$(grep -c '^browser: cursor [^s]' "$log")" = "$reads_before" ] && [ $tries -lt 50 ]; do
+    tries=$((tries + 1))
+    sleep 0.1
+  done
+  [ "$tries" -lt 50 ] || fail "the driver didn't read the page's view"
+  case "$(grep '^browser: cursor [^s]' "$log" | tail -1)" in
+    *" over GPUIView" | *" over AccessKitSubclassOfGPUIView")
+      fail "the page's view isn't what's under the pointer in the page" ;;
+  esac
+  [ "$(grep -c '^browser: cursor style ' "$log")" = "$asks_before" ] ||
+    fail "GPUI applied a cursor style with the pointer over the page: $(grep '^browser: cursor style ' "$log" | tail -1)"
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   send type move sidebar
