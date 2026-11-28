@@ -27,6 +27,7 @@ mod helpers;
 pub mod install;
 pub mod kept;
 mod lines;
+pub mod model;
 pub mod notes;
 pub mod page;
 #[cfg(windows)]
@@ -44,6 +45,7 @@ pub mod skill;
 pub mod task;
 pub mod tier;
 pub mod tools;
+pub mod turns;
 pub mod wall;
 
 pub use server::address;
