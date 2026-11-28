@@ -51,6 +51,11 @@ fn main() {
     let name_text = std::fs::read_to_string(&name).expect("no branding/name");
     println!("cargo:rustc-env=APP_NAME={}", name_text.trim());
     println!("cargo:rerun-if-changed={}", name.display());
+    // The rework's daily copy (the rework feature, build.sh rework), whose crash reports and counts
+    // name a channel of their own (build_info::channel).
+    if std::env::var_os("CARGO_FEATURE_REWORK").is_some() {
+        println!("cargo:rustc-env=APP_REWORK=1");
+    }
     // The product's name as the app's own strings say it (src/product.rs), which a fork changes
     // as it does the name above; the bundle, its file and data folder keep branding/name.
     let product = root.join("branding/product");
