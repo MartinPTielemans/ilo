@@ -84,13 +84,13 @@ if ! grep -q '^capturing' "$frames"; then
   esac
   fail "the window's pictures didn't start: $why"
 fi
-# Shows the Space named $1, whose id is $2, from the Space button's menu, and waits for the button's
-# mark to settle, which a click on the button waits for after any switch. The menu's choosing is the
-# switch the pictures look at.
+# Shows the Space named $1, whose id is $2, from the Space button's menu, which lists it among the
+# Spaces before New Space…, and waits for the button's mark to settle, which a click on the button
+# waits for after any switch. The menu's choosing is the switch the pictures look at.
 button_switch() {
   mark "$3"
   post click "$(sed -n 's/^browser: space button in window [0-9]* at //p' "$log" | tail -1)"
-  expect "^browser: menu shown \(.*, \)\{0,1\}$1\( (checked)\)\{0,1\}, $(cased 'New Space…')" \
+  expect "^browser: menu shown \(.*, \)\{0,1\}$1\( (checked)\)\{0,1\}, \(.*, \)\{0,1\}$(cased 'New Space…')" \
     "a click on the Space button didn't open its menu with $1 in it"
   send choose "$1"
   expect "^browser: space $2 in " "$1 in the Space button's menu didn't show Space $2"

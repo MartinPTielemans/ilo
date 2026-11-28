@@ -118,9 +118,12 @@ side_buttons "resized back" right
 
 send key s cmd
 expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar"
+# The strip's first point in from the right edge, the window's width less the strip the core
+# leaves the UI there: the core and the app count it as the strip's (#4484).
+edge=$((width - $(token shell edge-strip)))
 send move $((width - 400)) 300
-send move $((width - 3)) 300
-send move $((width - 3)) 306
+send move $edge 300
+send move $edge 306
 expect '^browser: reveal shown$' "the pointer at the right edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 shot revealed

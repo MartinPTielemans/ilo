@@ -66,6 +66,17 @@ pub(super) fn from_side(right: bool, width: f32, x: f32) -> f32 {
     }
 }
 
+/// Whether `x`, across a window `width` wide, is in the edge strip on the sidebar's side: its
+/// points from the window's edge in, as the core counts them (`InPageEdgeStrip`), so a point the
+/// core leaves the UI over a page is one the UI takes. Mirrored, `from_side` would take the right
+/// edge's point past the window and not its first one in (#4484).
+pub(super) fn at_edge(right: bool, width: f32, x: f32) -> bool {
+    match right {
+        true => (width - EDGE_STRIP..width).contains(&x),
+        false => (0. ..EDGE_STRIP).contains(&x),
+    }
+}
+
 /// `frame` in a window `width` wide, mirrored when the sidebar is on the right.
 pub(super) fn mirrored(right: bool, width: Pixels, frame: Bounds<Pixels>) -> Bounds<Pixels> {
     match right {
@@ -87,6 +98,11 @@ impl Shell {
     /// `x` across the window from the sidebar's side (`from_side`).
     pub(super) fn from_side(&self, x: f32) -> f32 {
         from_side(self.right, f32::from(self.viewport.width), x)
+    }
+
+    /// Whether `x` across the window is in the edge strip on the sidebar's side (`at_edge`).
+    pub(super) fn at_edge(&self, x: f32) -> bool {
+        at_edge(self.right, f32::from(self.viewport.width), x)
     }
 
     /// Where the docked sidebar's column starts across the window: 0, or its width in from the
@@ -729,7 +745,7 @@ impl Shell {
             let now = cx.background_executor().now();
             back = left.is_some_and(|left| now.duration_since(left) <= REVEAL_BACK);
         }
-        let in_strip = (0. ..EDGE_STRIP).contains(&side) && y >= 0.;
+        let in_strip = self.at_edge(x) && y >= 0.;
         self.reveal_strip = in_strip.then(|| match self.reveal_strip {
             Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
             None => (y, back),
@@ -786,6 +802,7 @@ impl Shell {
         if !self.can_reveal() {
             return;
         }
+        let at_edge = self.at_edge(x);
         // From the sidebar's side, gone staying gone.
         let x = match x < f32::MAX {
             true => self.from_side(x),
@@ -801,7 +818,7 @@ impl Shell {
         // The edge is the strip a page reaching the window's side leaves to the UI, the resize
         // edge's width (core/page_edge_strips.h). Past it, out of the window, the pointer has gone
         // to another window or display.
-        if !(0. ..EDGE_STRIP).contains(&x) {
+        if !at_edge {
             self.reveal_wait = None;
             self.reveal_strip = None;
             // A question or a chooser keeps it out until it's answered, the Cast card and its

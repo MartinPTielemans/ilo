@@ -10,14 +10,16 @@ use gpui::{
     VisualTestContext, point, px,
 };
 
-use crate::agents::task::{Card, Dot};
+use crate::agents::task::{ArchivedTask, Card, Dot};
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::shell::{
     Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot,
     empty::{
         FADE,
-        composer::{group_top, mark_top},
+        composer::group_top,
+        recents::{Recent, recents},
     },
+    library::Archived,
     recorder::Recorder,
     task_cards::tests::card,
 };
@@ -279,7 +281,7 @@ fn the_welcome_has_no_line_under_its_title(cx: &mut TestAppContext) {
         (gap - BUTTON_GAP).abs() < 0.5,
         "the button is {gap} under the title: something stands between them"
     );
-    assert_eq!(cx.debug_bounds("resting-mark"), None);
+    assert_eq!(cx.debug_bounds("resting-bar"), None);
 }
 
 /// Whether the empty page's bar is the composer, and what its field says with nothing typed.
@@ -312,7 +314,7 @@ fn the_empty_card_rests_on_a_field_that_asks_nothing(cx: &mut TestAppContext) {
     assert_eq!(*host.resting.borrow(), ["task agents"]);
     assert_eq!(
         composer(&shell, cx),
-        (false, "Search, or start a thread".into())
+        (false, "Search or enter address".into())
     );
 }
 
@@ -417,35 +419,222 @@ fn another_space_takes_the_bar_at_rest_back_to_search(cx: &mut TestAppContext) {
     );
 }
 
-/// Under the bar at rest are the threads whose home is the window's Space alone, those a run
-/// before left there too: another Space's never show, and a Space with none lists none.
-#[gpui::test]
-fn the_bar_at_rest_lists_its_own_spaces_threads_alone(cx: &mut TestAppContext) {
-    let host = Rc::new(Recorder::default());
-    let browser = host.clone();
-    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
-    let at = |n: u64, home: u64| Card {
+/// Tab `id`, closed in Space `space` at `at`.
+fn closed(id: u64, space: u64, at: f64) -> Archived {
+    Archived {
+        id,
+        url: format!("https://site{id}.example/").into(),
+        title: format!("Tab {id}").into(),
+        archived: at,
+        little: false,
+        space,
+    }
+}
+
+/// Thread `n`, asked in Space `home`, which ended at `at`.
+fn left(n: u64, home: u64, at: f64) -> ArchivedTask {
+    ArchivedTask {
+        agent: format!("task-{n}").into(),
         home,
-        ..card(n, Dot::Working)
-    };
-    shell.update(cx, |shell, cx| {
-        let space = |id: u64| (id, "Space".into(), None, 0, "".into(), "".into(), "".into());
-        shell.set_spaces(vec![space(1), space(2), space(3)], cx);
-        shell.set_space(1, cx);
-        shell.set_task_cards(vec![at(1, 1), at(2, 2), at(3, 1)], cx);
-        shell.set_kept_cards(vec![at(4, 2), at(5, 1)], cx);
-    });
-    let listed = |space: u64, cx: &mut VisualTestContext| {
-        shell.update(cx, |shell, cx| shell.set_space(space, cx));
-        shell.read_with(cx, |shell, _| {
-            (shell.latest_tasks(5).into_iter())
-                .map(|card| card.agent.to_string())
-                .collect::<Vec<_>>()
+        title: format!("Thread {n}").into(),
+        asked: "".into(),
+        dot: Dot::Done,
+        about: "".into(),
+        ended: at,
+        pages: "".into(),
+    }
+}
+
+/// Spaces 1 and 2 are profile 7's, 3 is profile 8's, and no other is the user's.
+fn profile_of(space: u64) -> Option<u64> {
+    match space {
+        1 | 2 => Some(7),
+        3 => Some(8),
+        _ => None,
+    }
+}
+
+fn names(recents: &[Recent]) -> Vec<String> {
+    (recents.iter())
+        .map(|recent| match recent {
+            Recent::Tab { id, .. } => format!("tab {id}"),
+            Recent::Thread { agent, .. } => agent.to_string(),
         })
-    };
-    assert_eq!(listed(1, cx), ["task-1", "task-3", "task-5"]);
-    assert_eq!(listed(2, cx), ["task-2", "task-4"]);
-    assert_eq!(listed(3, cx), Vec::<String>::new());
+        .collect()
+}
+
+/// The recents are the tabs closed and the threads left in any Space of the profile, never a
+/// Little Window's tab or one whose Space is gone, newest first and five at most; with threads
+/// off, the tabs alone, and with nothing, nothing.
+#[test]
+fn the_recents_are_the_profiles_closed_tabs_and_threads_newest_first_five_at_most() {
+    let archive = vec![
+        closed(1, 1, 50.),
+        closed(2, 3, 90.),
+        closed(3, 2, 30.),
+        Archived {
+            little: true,
+            ..closed(4, 1, 95.)
+        },
+        closed(5, 0, 99.),
+        closed(6, 1, 10.),
+        closed(7, 2, 5.),
+    ];
+    let tasks = vec![left(1, 2, 70.), left(2, 3, 80.), left(3, 1, 20.)];
+    let listed = recents(&archive, &tasks, profile_of, 7, true);
+    assert_eq!(
+        names(&listed),
+        ["task-1", "tab 1", "tab 3", "task-3", "tab 6"]
+    );
+    let tabs = recents(&archive, &tasks, profile_of, 7, false);
+    assert_eq!(names(&tabs), ["tab 1", "tab 3", "tab 6", "tab 7"]);
+    let other = recents(&archive, &tasks, profile_of, 8, true);
+    assert_eq!(names(&other), ["tab 2", "task-2"]);
+    assert!(recents(&[], &[], profile_of, 7, true).is_empty());
+}
+
+/// Build 17 reads the Archive, which doesn't say how a tab left: one the core's timer archived is
+/// listed by when it went, as one the user closed is, so it's above an older close. #4408 adds how
+/// a tab left, and changes this on purpose.
+#[test]
+fn a_tab_the_timer_archived_is_listed_as_a_closed_one_until_4408() {
+    let closed_by_the_user = closed(1, 1, 100.);
+    let taken_by_the_timer = closed(2, 1, 200.);
+    let archive = [taken_by_the_timer, closed_by_the_user];
+    let listed = recents(&archive, &[], profile_of, 7, true);
+    assert_eq!(names(&listed), ["tab 2", "tab 1"]);
+}
+
+/// A key window with no tab, its field with the keyboard, whose Space 1 has tabs 5 and 6 closed
+/// in it and thread 1 left there, and tab 7 closed in a Space that isn't the user's; threads on
+/// or off.
+fn resting_with_recents(
+    threads: bool,
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    cx.update(crate::shell::bind_keys);
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.threads.set(Some(threads));
+    shell.update(cx, |shell, cx| {
+        let archive = vec![closed(5, 1, 300.), closed(6, 1, 100.), closed(7, 9, 400.)];
+        shell.set_archive(archive, cx);
+        shell.set_archived_tasks(vec![left(1, 1, 200.)], cx);
+    });
+    key_window(cx);
+    // The recents draw from the page's second frame, which a test delivers itself.
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    assert!(field_focused(&shell, cx), "the field hasn't the keyboard");
+    (shell, cx, host)
+}
+
+fn listed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
+    cx.update(|_, cx| names(&shell.read(cx).recents(cx)))
+}
+
+fn recents_focused(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| {
+        (shell.read(cx).resting.as_ref()).is_some_and(|resting| resting.recents.is_focused(window))
+    })
+}
+
+/// ↓ in the field with nothing typed moves into the recents at their first row; ↩ opens the row
+/// the keys are on, a closed tab as the Library's Reopen does and a thread with its conversation;
+/// ↑ from the first row and Esc go back to the field.
+#[gpui::test]
+fn down_moves_into_the_recents_and_return_opens_the_row(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_with_recents(true, cx);
+    assert_eq!(listed(&shell, cx), ["tab 5", "task-1", "tab 6"]);
+    host.take();
+    cx.simulate_keystrokes("down");
+    assert!(
+        recents_focused(&shell, cx),
+        "↓ didn't move into the recents"
+    );
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    assert!(
+        calls.contains(&"restore archived 5".to_string()),
+        "↩ didn't reopen the first row's tab: {calls:?}"
+    );
+    cx.simulate_keystrokes("down enter");
+    assert!(
+        host.take().contains(&"task task-1 Restore".to_string()),
+        "↩ didn't bring the thread back"
+    );
+    cx.simulate_keystrokes("down down down enter");
+    assert!(
+        host.take().contains(&"restore archived 6".to_string()),
+        "↓ went past the last row"
+    );
+    cx.simulate_keystrokes("up up up");
+    assert!(field_focused(&shell, cx), "↑ from the first row stayed");
+    cx.simulate_keystrokes("down escape");
+    assert!(field_focused(&shell, cx), "Esc didn't go back to the field");
+}
+
+/// With threads off the recents are the closed tabs alone.
+#[gpui::test]
+fn with_agents_off_the_recents_are_closed_tabs_alone(cx: &mut TestAppContext) {
+    let (shell, cx, _) = resting_with_recents(false, cx);
+    assert_eq!(listed(&shell, cx), ["tab 5", "tab 6"]);
+}
+
+/// A private window lists no recents, and ↓ leaves its field with the keyboard.
+#[gpui::test]
+fn a_private_window_lists_no_recents(cx: &mut TestAppContext) {
+    let (shell, cx, _) = resting_with_recents(true, cx);
+    shell.update(cx, |shell, cx| {
+        shell.private = true;
+        cx.notify();
+    });
+    assert_eq!(listed(&shell, cx), Vec::<String>::new());
+    cx.simulate_keystrokes("down");
+    assert!(field_focused(&shell, cx), "↓ left a private window's field");
+}
+
+/// With nothing recent there's no plate and no heading, and ↓ leaves the field with the keyboard.
+#[gpui::test]
+fn with_nothing_recent_the_field_stands_alone(cx: &mut TestAppContext) {
+    cx.update(crate::shell::bind_keys);
+    let (shell, cx, _) = window_with_no_tab(cx);
+    key_window(cx);
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("resting-recents"), None);
+    cx.simulate_keystrokes("down");
+    assert!(
+        field_focused(&shell, cx),
+        "↓ left the field with nothing recent"
+    );
+}
+
+/// The recents stand under the bar in its column and give way once something's typed; a click
+/// on a row opens it. GPUI records where an element was drawn only in a debug build.
+#[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
+fn the_recents_stand_under_the_bar_and_give_way_to_words(cx: &mut TestAppContext) {
+    let (_, cx, host) = resting_with_recents(true, cx);
+    let bar = cx.debug_bounds("resting-bar").expect("no bar at rest");
+    let plate = cx.debug_bounds("resting-recents").expect("no recents");
+    assert!(
+        plate.top() >= bar.bottom(),
+        "the recents aren't under the bar"
+    );
+    let off = f32::from(plate.center().x - bar.center().x);
+    assert!(
+        off.abs() < 0.5,
+        "the recents are {off} off the bar's column"
+    );
+    let row = cx.debug_bounds("recent-2").expect("no third row");
+    host.take();
+    cx.simulate_click(row.center(), Modifiers::none());
+    assert!(host.take().contains(&"restore archived 6".to_string()));
+    cx.simulate_input("bo");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("resting-recents"), None, "words left them");
 }
 
 /// A window whose one Space has the unloaded pinned tab 20 and shows no page, so its field at
@@ -864,94 +1053,12 @@ fn leaving_the_empty_page_forgets_the_start(cx: &mut TestAppContext) {
     );
 }
 
-/// The bar rests in the empty window's column, 150 down, under the mark's 48 and the 28 under it
-/// (the lead's drawing), and the group moves up only as far as it needs to fit the card, never
-/// nearer its top than `TOP`.
+/// The bar rests a quarter of the way down the card, never nearer its top than `TOP`.
 #[test]
-fn the_bar_rests_in_its_column_under_the_marks_room_and_rises_only_to_fit() {
+fn the_bar_rests_a_quarter_of_the_way_down() {
     use crate::tokens::shell::composer::TOP;
-    let top = group_top(720., false, false);
-    assert_eq!(
-        top,
-        150. + 48. + 28.,
-        "the bar isn't 28 under a 48 mark at 150 down"
-    );
-    assert_eq!(
-        mark_top(top, false),
-        Some(150.),
-        "the mark doesn't start the column"
-    );
-    // A card 560 tall has room for the bar there, but not for the cards under it.
-    let cards = group_top(560., true, true);
-    assert!(cards < top, "the cards didn't lift the group");
-    assert!(group_top(400., true, true) == TOP, "it went above TOP");
-    assert_eq!(group_top(2000., true, true), top, "a tall card moved it");
-}
-
-/// The mark stands its gap over the bar where the card has that room over it. A Little Window
-/// has none, and neither has a card so short that the group was lifted to its top.
-#[test]
-fn the_mark_stands_its_gap_over_the_bar_and_gives_way() {
-    use crate::tokens::shell::composer::{MARK_GAP, TOP};
-    use crate::tokens::shell::empty::MARK_SIZE;
-    let top = group_top(720., false, false);
-    assert_eq!(mark_top(top, false), Some(top - MARK_GAP - MARK_SIZE));
-    assert_eq!(mark_top(top, true), None, "a Little Window drew the mark");
-    assert_eq!(mark_top(TOP, false), None, "it stands over the card's top");
-}
-
-/// The product's mark stands over the bar at rest: in the bar's column, its gap over the bar, at
-/// the size the tokens give it. GPUI records where an element was drawn only in a debug build.
-#[gpui::test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "GPUI records debug selectors only in debug builds"
-)]
-fn the_mark_stands_over_the_resting_bar_in_its_column(cx: &mut TestAppContext) {
-    use crate::tokens::shell::composer::MARK_GAP;
-    use crate::tokens::shell::empty::MARK_SIZE;
-    let (_, cx, _) = window_with_no_tab(cx);
-    let mark = cx
-        .debug_bounds("resting-mark")
-        .expect("the bar at rest has no mark over it");
-    let bar = cx.debug_bounds("resting-bar").expect("no bar at rest");
-    let off = f32::from(mark.center().x - bar.center().x);
-    assert!(off.abs() < 0.5, "the mark is {off} off the bar's column");
-    let gap = f32::from(bar.top() - mark.bottom());
-    assert!(
-        (gap - MARK_GAP).abs() < 0.5,
-        "the mark is {gap} over the bar"
-    );
-    assert_eq!(mark.size, gpui::size(px(MARK_SIZE), px(MARK_SIZE)));
-}
-
-/// A Little Window is a look at one page, so its card with no page has no mark, whatever else
-/// it rests on.
-#[gpui::test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "GPUI records debug selectors only in debug builds"
-)]
-fn a_little_window_with_no_page_draws_no_mark(cx: &mut TestAppContext) {
-    let host = Rc::new(Recorder::default());
-    let browser = host.clone();
-    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
-    shell.update(cx, |shell, cx| {
-        shell.set_tabs(
-            9,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Folders::default(),
-            cx,
-        );
-    });
-    cx.run_until_parked();
-    assert!(
-        shell.read_with(cx, |shell, _| shell.little.is_some() && shell.selected == 0),
-        "it isn't a Little Window with no page"
-    );
-    assert_eq!(cx.debug_bounds("resting-mark"), None);
+    assert_eq!(group_top(720.), 180.);
+    assert_eq!(group_top(100.), TOP, "it went above TOP");
 }
 
 /// Makes the test's window the key one, as the user's window is when they're in it.
@@ -1215,7 +1322,7 @@ fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert_eq!(
         composer(&shell, cx),
-        (false, "Search, or start a thread".into())
+        (false, "Search or enter address".into())
     );
     assert!(
         field_focused(&shell, cx),
@@ -1244,28 +1351,4 @@ fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
         let ran = rested(&host).iter().any(|c| c.starts_with("run task"));
         assert_eq!(ran, !private, "↩ started a thread, private: {private}");
     }
-}
-
-/// A thread at work in the bar's list at rest wears the turning ring before its state word, on
-/// the shell's one clock, in place of the green dot; a list with none at work asks for no frame,
-/// so an idle window draws nothing.
-#[gpui::test]
-fn a_working_threads_ring_turns_at_rest_and_nothing_else_asks_for_a_frame(cx: &mut TestAppContext) {
-    let (shell, cx, _) = window_with_no_tab(cx);
-    let listed = |dot: Dot, cx: &mut VisualTestContext| {
-        shell.update(cx, |shell, cx| shell.set_task_cards(vec![card(1, dot)], cx));
-        cx.run_until_parked();
-        shell.read_with(cx, |shell, _| {
-            assert_eq!(shell.latest_tasks(1).len(), 1, "the thread isn't listed");
-            shell.breath.pending()
-        })
-    };
-    assert!(
-        !listed(Dot::Done, cx),
-        "a done thread's card asked for a frame"
-    );
-    assert!(
-        listed(Dot::Working, cx),
-        "a working thread's ring doesn't turn"
-    );
 }

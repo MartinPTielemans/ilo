@@ -8,7 +8,12 @@
 //! as Arc's does. What it asks of the core and of its window goes through `Host`.
 
 use std::time::Instant;
-use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    sync::Arc,
+};
 
 use gpui::{
     AnyElement, AnyView, AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight,
@@ -121,16 +126,12 @@ use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
 use crate::tokens::command_bar::SELECTION as FIELD_SELECTION;
 use crate::tokens::command_bar::TITLE;
-use crate::tokens::command_bar::{
-    CHOICES_HEIGHT, CHOICES_MENU_DROP, FOOT_GAP, FOOT_HEIGHT, FOOT_LEFT, FOOT_LINE, FOOT_RIGHT,
-    FOOT_TEXT, PLUS,
-};
+use crate::tokens::command_bar::{CHOICES_HEIGHT, CHOICES_MENU_DROP, PLUS};
 use crate::tokens::command_bar::{CHOSEN_KIND, LIGHT_CHOSEN_KIND};
+use crate::tokens::shell::HAIRLINE;
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
-/// What the bar's field says with nothing typed where the bar can start a thread (Z2).
-const THREAD_PLACEHOLDER: &str = "Search, or start a thread";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const SPACES_PLACEHOLDER: &str = "Search Spaces…";
@@ -164,21 +165,19 @@ fn hint_key(key: &str, off_the_mac: bool) -> String {
     shell::key_name(key, off_the_mac)
 }
 
-/// The row that grows the bar into the composer with what's typed, second once something is
-/// typed, and the kind at its end (the words table's Z2b).
+/// The composer's round button, to a screen reader, and a thread row's kind at its end (Z2b).
 const NEW_THREAD: &str = "New Thread";
 const THREAD_KIND: &str = "Thread";
-/// The composer's foot: what ⇥ does at its left, and what ↩ does at its right (Z8).
-const BACK_TO_SEARCH: &str = "Back to Search";
-const OPENS_AS: &str = "Opens as a thread in its own tab";
-/// The switch at the input's end, wherever an assistant is ready: its halves, the one the bar is
-/// in plated, and for a screen reader its name and help, with the half as its value (Z53).
-const SWITCH: [&str; 2] = ["Search", "Thread"];
-const SWITCH_NAME: &str = "Search or Thread";
+/// The switch at the input's end, wherever an assistant is ready: the key chip and what it does
+/// before it, its halves, the one the bar is in lifted, and for a screen reader its name and help,
+/// with the half as its value; the chip and its words aren't read, so the help is heard once (Z53).
+const SWITCH_KEY: &str = "Tab";
+const TO_SWITCH: &str = "to switch";
+const SWITCH: [&str; 2] = ["Search", "Ask"];
+const SWITCH_NAME: &str = "Search or Ask";
 const SWITCH_HELP: &str = "Press Tab to switch";
-/// What the composer's field says with nothing typed, with no assistant to name (U2); with one it
-/// says `Ask {assistant} to do something`.
-const ASK_ANY_PLACEHOLDER: &str = "Ask an assistant to do something";
+/// What the composer's field says with nothing typed (Z53a, U2).
+const ASK_PLACEHOLDER: &str = "Ask anything";
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -298,10 +297,7 @@ fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
 /// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
 /// and the start checks it again.
 fn granted(picked: &std::path::Path) -> Option<Granted> {
-    let never = Never::here(None);
-    let root = task_files::resolved(picked);
-    let root = root.filter(|root| !task_files::never_grantable(root, &never))?;
-    Granted::picked(root).ok()
+    task_files::grant(picked, &Never::here(None))
 }
 
 /// The selected row's plate, the keyboard's, and its kind's ink, text-2, each the ink at its tone's.
@@ -811,6 +807,8 @@ pub struct CommandBar {
     a11y: bool,
     /// Whether it shows over the URL field, from a click on it, rather than centred.
     over_field: bool,
+    /// Where the switch's halves, Search and Ask, were last drawn, for the tests' clicks.
+    switch_drawn: Rc<RefCell<[Option<Bounds<Pixels>>; 2]>>,
     /// The URL it opened on, whose favicon the input shows until it's edited, as Arc's does.
     page: String,
     /// The site search the bar is in, if any.
@@ -1083,6 +1081,7 @@ fn new_bar(
             remove_drawn: None,
             a11y: false,
             over_field: false,
+            switch_drawn: Rc::default(),
             page: String::new(),
             site: None,
             commands: None,
@@ -2195,6 +2194,10 @@ impl CommandBar {
         if self.leave_ask(window, cx) {
             return;
         }
+        // At rest with threads off there's nothing to switch to, and ⇥ means only that (#4140).
+        if self.surface == Surface::InPlace && self.task_agents.is_none() {
+            return;
+        }
         // With tasks on, ⇥ in an empty field opens the composer, as with words (#4393); with them
         // off it lists only the commands, as Arc's does.
         let empty = self.input.read(cx).text().is_empty();
@@ -2284,18 +2287,15 @@ impl CommandBar {
         (self.task_agents.as_ref()).is_some_and(|agents| !agents.known || !agents.agents.is_empty())
     }
 
-    /// What the field says with nothing typed, outside a site search and the commands-only list:
-    /// Z2 where the bar can start a thread, as New Thread is offered; else E1, as with tasks off or
-    /// no assistant set up.
+    /// What the field says with nothing typed in search: E1 always, as the switch says the bar can
+    /// start a thread (Z53a).
     fn search_placeholder(&self) -> &'static str {
-        match self.lists_commands() && self.agents_ready() {
-            true => THREAD_PLACEHOLDER,
-            false => PLACEHOLDER_TEXT,
-        }
+        PLACEHOLDER_TEXT
     }
 
-    /// ⇥: what's typed becomes a thread's, and the rows give way to the composer's choices, which open as it last started a thread in the
-    /// profile.
+    /// ⇥: what's typed becomes a thread's, and the rows give way to the composer's choices, which
+    /// open as it last started a thread in the profile. The page the user is on is never taken
+    /// along: a tab goes in only when the user picks it (#4094).
     fn enter_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // check.sh reads this line.
         log!("browser: command bar asks an agent");
@@ -2341,14 +2341,10 @@ impl CommandBar {
         starts_on(self.task_agents.as_ref()?, picked)
     }
 
-    /// Puts what the field says with nothing typed: in the composer U2, naming the assistant the
-    /// thread starts on; in search Z2 or E1, as an assistant is ready or not.
+    /// Puts what the field says with nothing typed: `Ask anything` in the composer, E1 in search.
     fn show_placeholder(&self, cx: &mut App) {
         let placeholder: SharedString = match self.ask.is_some() {
-            true => match self.composer_assistant() {
-                Some(agent) => format!("Ask {} to do something", agent.name).into(),
-                None => ASK_ANY_PLACEHOLDER.into(),
-            },
+            true => ASK_PLACEHOLDER.into(),
             false => self.search_placeholder().into(),
         };
         self.input
@@ -3090,11 +3086,11 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// How tall the bar draws: its input, its rows, and the composer's choices and foot.
+    /// How tall the bar draws: its input, its rows, and the composer's choices.
     fn drawn_height(&self) -> f32 {
         let rows = self.rows.len();
         let foot = match self.ask.is_some() {
-            true => CHOICES_HEIGHT + LINE + FOOT_HEIGHT,
+            true => CHOICES_HEIGHT,
             false => 0.,
         };
         foot + match (self.surface, self.over_field) {
@@ -3105,19 +3101,9 @@ impl CommandBar {
         }
     }
 
-    /// `rows` with New Thread second, where ⇥ would grow the bar into the composer with what's
-    /// typed. The first row stays the page or search for it, which ↩ takes.
-    fn with_thread_row(&self, mut rows: Vec<Suggestion>, cx: &App) -> Vec<Suggestion> {
+    /// `rows` with none that starts a thread: the switch says what ⇥ does, so no row does (#4094).
+    fn with_thread_row(&self, mut rows: Vec<Suggestion>, _: &App) -> Vec<Suggestion> {
         rows.retain(|row| !row.starts_thread());
-        // In an empty bar the switch says what ⇥ does; the row is for what's typed.
-        if !rows.is_empty() && self.offers_ask(cx) && !self.typed(cx).is_empty() {
-            let thread = Suggestion {
-                text: NEW_THREAD.into(),
-                task: Some(TaskRow::Thread),
-                ..Suggestion::default()
-            };
-            rows.insert(1, thread);
-        }
         rows
     }
 
@@ -3828,16 +3814,21 @@ impl CommandBar {
         (self.chosen()).is_some_and(|row| self.site.is_none() && !row.keyword.is_empty())
     }
 
-    /// A click on the switch: what ⇥ does, between the search and the composer.
-    fn switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// A click on a half of the switch: it picks that half, Search or Ask, as ⇥ would get there.
+    fn pick_half(&mut self, ask: bool, window: &mut Window, cx: &mut Context<Self>) {
         log!("browser: command bar switch clicked");
-        if !self.leave_ask(window, cx) && self.may_ask(cx) {
-            self.enter_ask(window, cx);
+        match ask {
+            false => {
+                self.leave_ask(window, cx);
+            }
+            true if self.may_ask(cx) => self.enter_ask(window, cx),
+            true => {}
         }
     }
 
-    /// The switch at the input's end (Z53): Search and Thread, the one the bar is in plated, and
-    /// ⇥'s chip. One control to a screen reader, its value the half it's in.
+    /// The switch at the input's end (Z53): the `Tab` chip and `to switch`, then Search and Ask on
+    /// a flat plate with the half the bar is in lifted, as the open tab's pane is (#4398). One
+    /// control to a screen reader, its value the half it's in.
     fn mode_switch(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         use crate::tokens::settings::{
             CONTROL_RADIUS, SEGMENT_HEIGHT, SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS,
@@ -3849,8 +3840,12 @@ impl CommandBar {
         let palette = palette::current(cx);
         let on = usize::from(self.ask.is_some());
         let (plate, _) = chosen(&palette);
+        let drawn = self.switch_drawn.clone();
         let halves = SWITCH.iter().enumerate().map(|(index, words)| {
+            let drawn = drawn.clone();
             div()
+                .id(("switch-half", index))
+                .relative()
                 .flex_none()
                 .h(px(SEGMENT_HEIGHT))
                 .px(px(SEGMENT_X))
@@ -3859,11 +3854,25 @@ impl CommandBar {
                 .rounded(px(CONTROL_RADIUS))
                 .when(index == on, |half| {
                     half.bg(plate)
+                        .shadow(Level::Resting.shadow())
+                        .border(px(HAIRLINE))
+                        .border_color(Level::Resting.rim_in(&palette))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(palette.on_overlay(TITLE))
                 })
                 .when(index != on, |half| half.text_color(palette.on_overlay(DIM)))
+                .on_click(
+                    cx.listener(move |bar, _, window, cx| bar.pick_half(index == 1, window, cx)),
+                )
                 .child(*words)
+                .child(
+                    canvas(
+                        move |bounds, _, _| drawn.borrow_mut()[index] = Some(bounds),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
         });
         let track = div()
             .flex_none()
@@ -3878,7 +3887,7 @@ impl CommandBar {
             .children(halves);
         Some(
             div()
-                .id("search-or-thread")
+                .id("search-or-ask")
                 .when(self.a11y, |switch| {
                     switch
                         .role(Role::Button)
@@ -3894,9 +3903,14 @@ impl CommandBar {
                 // The key chip at the size of every hint's at the input's end.
                 .text_size(px(text::BODY))
                 .cursor_pointer()
-                .on_click(cx.listener(|bar, _, window, cx| bar.switch(window, cx)))
-                .child(track)
-                .child(key_chip(hint_key("tab", shell::OFF_THE_MAC), &palette)),
+                .child(key_chip(SWITCH_KEY.into(), &palette))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(palette.on_overlay(DIM))
+                        .child(TO_SWITCH),
+                )
+                .child(div().flex_none().ml(px(HINT_GAP)).child(track)),
         )
     }
 
@@ -4029,44 +4043,6 @@ impl CommandBar {
             ),
             round_at: None,
         })
-    }
-
-    /// The composer's foot: ⇥ and Back to Search, which a click does too, then what ↩ does.
-    fn foot(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let palette = palette::current(cx);
-        let words = |said: &'static str| {
-            div()
-                .flex_none()
-                .text_size(px(FOOT_TEXT))
-                .line_height(px(FOOT_LINE))
-                .text_color(palette.on_overlay(DIM))
-                .child(said)
-        };
-        let back = div()
-            .id("back-to-search")
-            .when(self.a11y, |back| {
-                back.role(Role::Button).aria_label(BACK_TO_SEARCH)
-            })
-            .flex()
-            .items_center()
-            .gap(px(FOOT_GAP))
-            .on_click(cx.listener(|bar, _, window, cx| {
-                bar.leave_ask(window, cx);
-            }))
-            .child(key_chip(hint_key("tab", shell::OFF_THE_MAC), &palette))
-            .child(words(BACK_TO_SEARCH));
-        div()
-            .h(px(FOOT_HEIGHT))
-            .flex_none()
-            .flex()
-            .items_center()
-            .pl(px(FOOT_LEFT))
-            .pr(px(FOOT_RIGHT))
-            .gap(px(FOOT_GAP))
-            .child(back)
-            .child(div().flex_1())
-            .child(words(OPENS_AS))
-            .child(key_chip(hint_key("enter", shell::OFF_THE_MAC), &palette))
     }
 
     /// What VoiceOver reads for a row: what it says, then what ↩ does on it when that isn't to
@@ -4329,7 +4305,13 @@ impl CommandBar {
                     bar.leave_at_start(window, cx)
                 }),
             )
-            .on_action(cx.listener(|bar, _: &Next, window, cx| bar.select_next(true, window, cx)))
+            .on_action(cx.listener(|bar, _: &Next, window, cx| {
+                // At rest with no rows, ↓ goes on to the recents under the bar (#4140).
+                if bar.surface == Surface::InPlace && bar.rows.is_empty() && bar.ask.is_none() {
+                    return cx.propagate();
+                }
+                bar.select_next(true, window, cx)
+            }))
             .on_action(
                 cx.listener(|bar, _: &Previous, window, cx| bar.select_next(false, window, cx)),
             )
@@ -4382,7 +4364,6 @@ impl CommandBar {
     }
 
     /// Whether ⇥ grew it into the composer.
-    #[cfg(test)]
     pub fn composing_thread(&self) -> bool {
         self.ask.is_some()
     }
@@ -4587,17 +4568,7 @@ impl Render for CommandBar {
                     )
                 })
                 .when(!rows.is_empty(), |bar| bar.child(self.list(rows, list_top)))
-                .when(self.ask.is_some(), |bar| {
-                    bar.child(self.choices(cx))
-                        .child(
-                            div()
-                                .h(px(hairline))
-                                .mx(px(LINE_INSET))
-                                .flex_none()
-                                .bg(palette.faint(LINE_COLOR)),
-                        )
-                        .child(self.foot(cx))
-                })
+                .when(self.ask.is_some(), |bar| bar.child(self.choices(cx)))
                 .children(self.a11y.then(|| self.announcer()))
                 // The floating level's rim in the palette's ink; its outline and shadow are the host's,
                 // round the window, or on Windows round it in the window.

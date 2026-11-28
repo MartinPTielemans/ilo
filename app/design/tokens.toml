@@ -247,15 +247,7 @@ hint-key-gap = 6.0
 field-fade = 24.0
 # The panel's corners, which the host's blur and shadow take too: the plates' 12 and their 8 in.
 radius = 20.0
-# The composer's foot, under a line after its rows: ⇥ and its words at the left, ↩ and what it
-# does at the right, the words 12 on a 16 line in the rows' dim ink (P3, screen 48).
-foot-height = 40.0
-foot-left = 20.0
-foot-right = 16.0
-foot-gap = 8.0
-foot-text = 12.0
-foot-line = 16.0
-# The composer's row of choices over its foot: 48 high with 6 of it under the triggers, 14 in at
+# The composer's row of choices, the bar's last (no foot, #4094): 48 high with 6 of it under the triggers, 14 in at
 # the left and 12 at the right, 2 between (P3, screen 48). A trigger is 26 high, its words 13 on a
 # 16 line and a chevron 10 after them, 8 in at each side and 5 between, with a plate only while
 # its menu shows; the model's starts 7 in, its assistant's mark 14 and 6 after it, its chevron 5
@@ -2203,57 +2195,33 @@ hint-gap = 12.0
 
 
 [shell.composer]
-# The page an empty Space rests on (#4140), as its drawing measures it on the window's ink: ⌘T's
-# bar at rest, with its own tokens, and under it the user's recent tasks. Its column starts 150
-# down; the mark (`shell.empty`'s) and `mark-gap` under it come before the bar. The group moves up
-# only as far as it needs to fit the cards, never nearer its top than `top`, and the bar and the
-# label keep 24 from the window's sides. A card's rim is white on a dark window and ink 0.09 on a
-# light one, where white doesn't show.
+# The page an empty Space rests on (#4140), as the owner's drawing has it: ⌘T's bar at rest, with
+# its own tokens, and under it the recents, in a column a quarter of the way down the card, never
+# nearer its top than `top`. The bar keeps 24 from the window's sides. A plate's rim is white on a
+# dark window and ink 0.09 on a light one, where white doesn't show.
 top = 40.0
-column-top = 150.0
-mark-gap = 28.0
+column-down = 0.25
 field-gutter = 24.0
 light-rim = 0.09
 # A chip's menu hangs 4 under it, its names under the chip's word, 8 in (the names-only drawing).
 chip-inset = 8.0
 menu-drop = 4.0
-# "Recent tasks", 600 wide, 14 semibold on an 18 line in full ink, 34 under the bar and 12 over
-# the cards, 4 in.
-label-width = 600.0
-label-size = 14.0
-label-line = 18.0
-label-top = 34.0
-label-bottom = 12.0
-label-inset = 4.0
-# Up to three cards, 190 wide and 15 apart, radius 16, ink 0.065 in a rim of white 0.09.
+# The recents: one plate the bar's width, 12 under it, ink 0.04 at the panel radius in a rim of
+# white 0.09, of up to five rows 36 tall with a hairline between. A row is 14 in at each end: its
+# favicon or the knot, 10 to the title, the site 8 after it and the time at its end, both in the
+# bar's dim. The row the keys are on is on the flat plate (#4401); one under the pointer on 0.05.
+recents = 5
+recents-gap = 12.0
+recents-radius = 16.0
+recents-fill = 0.04
+recents-rim = 0xffff_ff17
+recent-height = 36.0
+recent-inset = 14.0
+recent-gap = 10.0
+recent-site-gap = 8.0
+recent-hovered = 0.05
+# Of a profile's tasks a run before left, how many the browser makes cards of (pick_up.rs).
 cards = 3
-card-width = 190.0
-card-gap = 15.0
-card-radius = 16.0
-card-fill = 0.065
-card-rim = 0xffff_ff17
-# A card's words: 110 tall, 11 over, 12 in, 10 under. Its state line at 10.5, 12 tall, ink 0.6,
-# a working thread's turning ring 12, as tall as the line, 6 from the words; the title semibold 7
-# under it and 7 over its steps; each step 10.5 on a 15 line in ink 0.6, the one under way in full
-# ink.
-card-words = 110.0
-card-top = 11.0
-card-inset = 12.0
-card-bottom = 10.0
-state-size = 10.5
-state-height = 12.0
-state-ink = 0.6
-state-gap = 6.0
-state-glyph = 12.0
-title-gap = 7.0
-step-size = 10.5
-step-line = 15.0
-step-ink = 0.6
-# The task's page under its words: 112 tall, 6 in from the card's sides and foot, concentric in it.
-page-height = 112.0
-page-inset = 6.0
-page-radius = 10.0
-page-fill = 0.05
 [shell.extensions]
 # The room the URL field keeps for the host before it shows fewer actions (Ardia).
 host-room = 84.0

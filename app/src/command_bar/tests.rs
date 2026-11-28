@@ -3538,21 +3538,6 @@ impl Bar {
             .unwrap()
     }
 
-    /// A click on the composer's Back to Search, at its foot's left, under `rows` rows.
-    fn click_back_to_search(&mut self) {
-        use crate::tokens::command_bar::{CHOICES_HEIGHT, FOOT_HEIGHT, FOOT_LEFT};
-        let rows = (self.window)
-            .read_with(&self.cx.cx, |bar, _| bar.rows.len())
-            .unwrap();
-        // The window as tall as the host makes it, choices and foot and all, as it is round the
-        // composer.
-        let above = height(rows) + CHOICES_HEIGHT + LINE;
-        (self.cx).simulate_resize(window(WIDTH, above + FOOT_HEIGHT));
-        let y = above + FOOT_HEIGHT / 2.;
-        (self.cx).simulate_click(at(FOOT_LEFT + 4., y), Modifiers::none());
-        self.cx.run_until_parked();
-    }
-
     /// The chip before the input, and the hint at its end.
 
     /// What the composer's level and model triggers say.
@@ -3710,12 +3695,16 @@ impl Bar {
             .unwrap()
     }
 
-    /// A click on the switch's key chip, the last thing at the input's end, with the window as
-    /// wide as the host makes it.
-    fn click_switch(&mut self) {
+    /// A click on the switch's half `half`, 0 Search and 1 Ask, where it was last drawn, with the
+    /// window as wide as the host makes it.
+    fn click_half(&mut self, half: usize) {
         (self.cx).simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
-        let point = at(WIDTH - HINT_END - 4., HEIGHT / 2.);
-        (self.cx).simulate_click(point, Modifiers::none());
+        self.cx.run_until_parked();
+        let drawn = (self.window)
+            .read_with(&self.cx.cx, |bar, _| bar.switch_drawn.borrow()[half])
+            .unwrap()
+            .expect("no switch drawn");
+        (self.cx).simulate_click(drawn.center(), Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -3736,7 +3725,8 @@ impl Bar {
     }
 }
 
-/// ⇥ after typing makes it a thread's: the rows give way to the composer's choices, which open at the level every thread starts at and on
+/// ⇥ after typing makes it a thread's, the page the user is on never with it (owner, 27 Nov:
+/// "never take the tab"): the rows give way to the composer's choices, which open at the level every thread starts at and on
 /// Settings' assistant and model, and ↩ closes the bar, then starts the thread with them. Nothing
 /// about tasks runs as the bar opens or takes keys: the host is asked only what it last learned.
 #[gpui::test]
@@ -4046,8 +4036,8 @@ fn the_composer_opens_as_it_last_started_a_thread(cx: &mut TestAppContext) {
     );
 }
 
-/// ⇧⇥ leaves the ask with what was typed, closing Today's slot, as ⌫ at the start does. Esc
-/// closes the composer as it closes the bar.
+/// ⇧⇥ leaves the ask with what was typed, closing Today's slot, and so does ⌫ at the start: the
+/// page shown never went with it. Esc closes the composer as it closes the bar.
 #[gpui::test]
 fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     let mut bar = Bar::with_agents(cx, &[("claude", None)]);
@@ -4130,61 +4120,32 @@ fn leaving_the_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext)
     }
 }
 
-/// Where the bar can start a thread, its field says so with nothing typed (Z2); with tasks off,
-/// over a private window or with no assistant set up it says E1, as before. The words follow the
-/// assistants the browser learns while the bar shows.
+/// The bar's field says E1 with nothing typed, wherever it can start a thread or not: the switch
+/// says it can (Z53a, Z2 retired). The composer's says `Ask anything`.
 #[gpui::test]
-fn the_bar_says_it_starts_threads_where_it_can(cx: &mut TestAppContext) {
-    let placeholder = |bar: &mut Bar| {
-        (bar.window)
-            .read_with(&bar.cx.cx, |bar, cx| {
-                bar.input.read(cx).placeholder().to_string()
-            })
-            .unwrap()
-    };
+fn the_bar_says_e1_and_the_composer_ask_anything(cx: &mut TestAppContext) {
     let mut bar = Bar::with_agents(cx, &[("claude", None)]);
-    assert_eq!(placeholder(&mut bar), "Search, or start a thread");
+    assert_eq!(bar.placeholder(), "Search or enter address");
+    bar.keys("tab");
+    assert_eq!(bar.placeholder(), "Ask anything");
+    bar.keys("tab");
+    assert_eq!(bar.placeholder(), "Search or enter address");
 
     *bar.host.agents.borrow_mut() = agents(&[]);
     bar.cx.cx.update(task_agents_changed);
     bar.cx.run_until_parked();
-    assert_eq!(
-        placeholder(&mut bar),
-        "Search or enter address",
-        "the bar offers a thread with no assistant set up"
-    );
-    *bar.host.agents.borrow_mut() = agents(&[("codex", None)]);
-    bar.cx.cx.update(task_agents_changed);
-    bar.cx.run_until_parked();
-    assert_eq!(
-        placeholder(&mut bar),
-        "Search, or start a thread",
-        "an assistant set up while the bar shows"
-    );
-
-    let host = Recorder {
-        agents: RefCell::new(agents(&[("claude", None)])),
-        private: true,
-        ..Recorder::default()
-    };
-    let mut private = Bar::open(cx, Vec::new(), host);
-    assert_eq!(
-        placeholder(&mut private),
-        "Search or enter address",
-        "a private window's bar offers a thread"
-    );
+    assert_eq!(bar.placeholder(), "Search or enter address");
 }
 
-/// ⌘T's bar shows Search | Thread at its end wherever an assistant is ready, plated on the half
-/// it's in. ⇥ with nothing typed opens the composer, which says so in its field, and ⇥ again goes
-/// back to search; with words, ⇥ takes them to the composer and back. A click on the switch does
-/// what ⇥ does (#4393).
+/// ⌘T's bar shows Search | Ask at its end wherever an assistant is ready, the half it's in
+/// lifted. ⇥ with nothing typed opens the composer, and ⇥ again goes back to search; with words,
+/// ⇥ takes them to the composer and back. A click on a half picks that half (#4094).
 #[gpui::test]
-fn tab_and_the_switch_go_between_search_and_thread_in_the_new_tab_bar(cx: &mut TestAppContext) {
+fn tab_and_the_switch_go_between_search_and_ask_in_the_new_tab_bar(cx: &mut TestAppContext) {
     let mut bar = Bar::with_agents(cx, &[("claude", None)]);
     assert_eq!(
         bar.switch(),
-        Some((false, "Search, or start a thread".into()))
+        Some((false, "Search or enter address".into()))
     );
     assert!(
         !bar.threads().contains(&true),
@@ -4193,16 +4154,13 @@ fn tab_and_the_switch_go_between_search_and_thread_in_the_new_tab_bar(cx: &mut T
 
     bar.keys("tab");
     assert_eq!(bar.composer(), (true, String::new()));
-    assert_eq!(
-        bar.switch(),
-        Some((true, "Ask claude to do something".into()))
-    );
+    assert_eq!(bar.switch(), Some((true, "Ask anything".into())));
     assert_eq!(bar.calls(), ["asking true"]);
     bar.keys("tab");
     assert_eq!(bar.composer(), (false, String::new()));
     assert_eq!(
         bar.switch(),
-        Some((false, "Search, or start a thread".into()))
+        Some((false, "Search or enter address".into()))
     );
 
     bar.type_text("book a table");
@@ -4211,17 +4169,29 @@ fn tab_and_the_switch_go_between_search_and_thread_in_the_new_tab_bar(cx: &mut T
     bar.keys("tab");
     assert_eq!(bar.composer(), (false, "book a table".into()));
 
-    bar.click_switch();
-    assert_eq!(
-        bar.composer(),
-        (true, "book a table".into()),
-        "the click didn't"
-    );
-    bar.click_switch();
+    bar.click_half(0);
     assert_eq!(
         bar.composer(),
         (false, "book a table".into()),
-        "the click back didn't"
+        "a click on Search, the half it's in, moved it"
+    );
+    bar.click_half(1);
+    assert_eq!(
+        bar.composer(),
+        (true, "book a table".into()),
+        "a click on Ask didn't"
+    );
+    bar.click_half(1);
+    assert_eq!(
+        bar.composer(),
+        (true, "book a table".into()),
+        "a click on Ask, the half it's in, moved it"
+    );
+    bar.click_half(0);
+    assert_eq!(
+        bar.composer(),
+        (false, "book a table".into()),
+        "a click on Search didn't go back"
     );
     assert!(bar.is_open(), "a click on the switch closed the bar");
 }
@@ -4242,7 +4212,7 @@ fn with_no_assistant_ready_the_new_tab_bar_shows_no_switch(cx: &mut TestAppConte
     assert_eq!(bar.composer(), (true, String::new()));
     assert_eq!(bar.choices().1, SIGN_IN, "⇥ didn't offer setting one up");
     assert_eq!(bar.switch(), None, "the composer showed the switch");
-    assert_eq!(bar.placeholder(), "Ask an assistant to do something");
+    assert_eq!(bar.placeholder(), "Ask anything");
 
     let mut off = Bar::new(cx);
     assert_eq!(off.switch(), None, "threads off showed the switch");
@@ -4254,11 +4224,11 @@ fn with_no_assistant_ready_the_new_tab_bar_shows_no_switch(cx: &mut TestAppConte
     );
 }
 
-/// Words typed put New Thread second, under the page or search ↩ takes, which ↩ on the first row
-/// goes to, never starting a thread. ⇥, ↩ on New Thread and a click on it each grow the bar into
-/// the composer with the words kept, and ⇥ or a click on Back to Search goes back with them.
+/// Words typed list no New Thread: ↩ on the first row goes to the page or search, never starting a
+/// thread, and only ⇥ or the switch grows the bar into the composer, with the words kept, which ⇥
+/// takes back (#4094). The composer has no foot.
 #[gpui::test]
-fn new_thread_grows_the_bar_into_the_composer_and_back(cx: &mut TestAppContext) {
+fn only_tab_grows_the_bar_into_the_composer_and_back(cx: &mut TestAppContext) {
     let typed = "flights to lisbon";
     let rows = || vec![searching(typed), page("https://flights.test/")];
     let opened = |cx: &mut TestAppContext| {
@@ -4268,11 +4238,7 @@ fn new_thread_grows_the_bar_into_the_composer_and_back(cx: &mut TestAppContext) 
         bar
     };
     let mut bar = opened(cx);
-    assert_eq!(
-        bar.threads(),
-        [false, true, false],
-        "New Thread isn't second"
-    );
+    assert_eq!(bar.threads(), [false, false], "a row offers a thread");
     bar.calls();
     bar.keys("enter");
     assert!(!bar.is_open(), "↩ on the first row didn't go");
@@ -4294,26 +4260,6 @@ fn new_thread_grows_the_bar_into_the_composer_and_back(cx: &mut TestAppContext) 
     );
     bar.keys("tab");
     assert_eq!(bar.composer(), (false, typed.into()), "⇥ didn't go back");
-    bar.suggest(typed, rows());
-    bar.keys("down enter");
-    assert_eq!(
-        bar.composer(),
-        (true, typed.into()),
-        "↩ on New Thread didn't grow the bar"
-    );
-    bar.click_back_to_search();
-    assert_eq!(
-        bar.composer(),
-        (false, typed.into()),
-        "Back to Search didn't go back"
-    );
-    bar.suggest(typed, rows());
-    bar.click_row(1);
-    assert_eq!(
-        bar.composer(),
-        (true, typed.into()),
-        "a click on New Thread didn't grow the bar"
-    );
     assert!(bar.is_open());
 }
 
@@ -5194,12 +5140,15 @@ impl Resting {
             .unwrap()
     }
 
-    /// A click on the switch's key chip, the last thing at the field's end, under the 20 pt the
-    /// page draws above the bar.
-    fn click_switch(&mut self) {
-        let width = (self.cx).update(|window, _| f32::from(window.viewport_size().width));
-        let point = gpui::point(px(width - REST_RIGHT - 4.), px(20. + REST_HEIGHT / 2.));
-        (self.cx).simulate_click(point, Modifiers::none());
+    /// A click on the switch's half `half`, 0 Search and 1 Ask, where it was last drawn.
+    fn click_half(&mut self, half: usize) {
+        let drawn = (self.window)
+            .read_with(&self.cx, |rest, cx| {
+                rest.bar.read(cx).switch_drawn.borrow()[half]
+            })
+            .unwrap()
+            .expect("no switch drawn");
+        (self.cx).simulate_click(drawn.center(), Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -5419,41 +5368,43 @@ fn tab_grows_a_resting_bar_into_the_composer_and_back_keeps_the_words(cx: &mut T
     );
 }
 
-/// At rest the bar shows Search | Thread from its first frame where an assistant is ready, with Z2
-/// in its field. ⇥ with nothing typed grows it into the composer, whose field says so, and ⇥ again
-/// takes it back; a click on the switch does what ⇥ does, with words or none. With no assistant
-/// ready there's no switch, the field says E1, and ⇥ grows it into the composer's setup (#4393).
+/// At rest the bar shows Search | Ask from its first frame where an assistant is ready, with E1 in
+/// its field. ⇥ with nothing typed grows it into the composer, whose field says `Ask anything`, and
+/// ⇥ again takes it back; a click on a half picks that half, with words or none. With no assistant
+/// ready there's no switch and ⇥ grows it into the composer's setup; with threads off ⇥ does
+/// nothing at all (#4094, #4140).
 #[gpui::test]
-fn tab_and_the_switch_go_between_search_and_thread_at_rest(cx: &mut TestAppContext) {
+fn tab_and_the_switch_go_between_search_and_ask_at_rest(cx: &mut TestAppContext) {
     let mut rest = Resting::with_claude(cx);
     assert_eq!(
         rest.switch(),
-        Some((false, "Search, or start a thread".into()))
+        Some((false, "Search or enter address".into()))
     );
     rest.keys("tab");
     assert_eq!(rest.composer(), (true, String::new()));
-    assert_eq!(
-        rest.switch(),
-        Some((true, "Ask claude to do something".into()))
-    );
+    assert_eq!(rest.switch(), Some((true, "Ask anything".into())));
     rest.keys("tab");
     assert_eq!(rest.composer(), (false, String::new()));
-    rest.click_switch();
-    assert_eq!(rest.composer(), (true, String::new()), "the click didn't");
-    rest.click_switch();
+    rest.click_half(1);
+    assert_eq!(
+        rest.composer(),
+        (true, String::new()),
+        "a click on Ask didn't"
+    );
+    rest.click_half(0);
     assert_eq!(
         rest.composer(),
         (false, String::new()),
-        "the click back didn't"
+        "a click on Search didn't go back"
     );
     rest.type_text("book a table");
-    rest.click_switch();
+    rest.click_half(1);
     assert_eq!(rest.composer(), (true, "book a table".into()));
-    rest.click_switch();
+    rest.click_half(0);
     assert_eq!(rest.composer(), (false, "book a table".into()));
     assert_eq!(
         rest.switch(),
-        Some((false, "Search, or start a thread".into()))
+        Some((false, "Search or enter address".into()))
     );
 
     let mut none = Resting::with_agents(cx, &[]);
@@ -5461,6 +5412,22 @@ fn tab_and_the_switch_go_between_search_and_thread_at_rest(cx: &mut TestAppConte
     none.keys("tab");
     assert_eq!(none.composer(), (true, String::new()));
     assert_eq!(none.switch(), None, "the composer showed the switch");
+
+    let mut off = Resting::new(cx);
+    assert_eq!(off.switch(), None, "threads off showed the switch");
+    off.keys("tab");
+    assert_eq!(
+        off.composer(),
+        (false, String::new()),
+        "⇥ with threads off grew the bar"
+    );
+    off.type_text("book");
+    off.keys("tab");
+    assert_eq!(
+        off.composer(),
+        (false, "book".into()),
+        "⇥ with threads off and words did"
+    );
 }
 
 /// In a resting composer what's typed is the thread's, which nothing is suggested for, and ↩ starts
@@ -5678,14 +5645,13 @@ fn an_open_logs_its_frame_drawn_then_its_window_on_screen_once(cx: &mut TestAppC
     );
 }
 
-/// A folder the test makes, with the files named in it, as the system's panel gives them: beside
-/// the build, as ilo may give that on every system the tests run on, where the system's temporary
-/// folder is one ilo never gives on the Mac. Each is its own, as the tests run side by side.
+/// A folder the test makes, with the files named in it, as the system's panel gives them, where
+/// the floor gives one on every checkout (`files::test_folders`). Each is its own, as the tests
+/// run side by side.
 fn made(name: &str, files: &[&str]) -> std::path::PathBuf {
     static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/ilo-test-folders")
+    let folder = (crate::agents::files::test_folders())
         .join(format!("{name}-{}-{made}", std::process::id()))
         .join(name);
     _ = std::fs::remove_dir_all(&folder);
