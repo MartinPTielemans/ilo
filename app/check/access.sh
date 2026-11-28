@@ -322,8 +322,9 @@ else
   fi
 fi
 # A new profile's onboarding, read as the reader reads it (#3151): each step a dialog called by its
-# title, the intro by the app's name, with Continue and Skip buttons, and the colour step's
-# swatches a radio group called Colour, a radio button a colour, none picked until → picks the
+# title, the welcome too, with Get Started and Skip Setup buttons, the colour step with Continue
+# and Skip, and its
+# swatches a radio group called Color, a radio button a colour, none picked until → picks the
 # first. Its import home is empty, so the import step is left out.
 if ! grep -q '^accessibility: skipped' "$tree"; then
   log="$out/access-onboarding.log"
@@ -343,15 +344,17 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
   pid=$!
   exec 3> "$out/drive"
   await '^browser: onboarding started$' || fail "the onboarding didn't start"
-  # The intro goes on by itself 1.4 s after it settles, sooner than the Mac's reader compiles, so
-  # the read starts with the flow and asks again until the intro is there.
+  await '^browser: onboarding step intro settled$' || fail "the onboarding's welcome didn't draw"
   intro="$out/access-intro.txt"
-  read_tree "$dialog \"$app_name\"" > "$intro" &
-  reading=$!
-  await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
-  wait "$reading"
-  grep -q " $dialog \"$app_name\"" "$intro" || fail "the intro isn't a dialog called $app_name: $intro"
-  # Esc goes on from each step to the colour's, each one settled before the next Esc.
+  read_tree "$dialog \"Welcome to $app_name.\"" > "$intro"
+  grep -q " $dialog \"Welcome to $app_name.\"" "$intro" ||
+    fail "the welcome isn't a dialog called by its title, Welcome to $app_name.: $intro"
+  grep -q " $button \"Get Started\"" "$intro" || fail "the welcome's Get Started isn't a button: $intro"
+  grep -q " $button \"Skip Setup\"" "$intro" || fail "the welcome's Skip Setup isn't a button: $intro"
+  # Return goes on from the welcome, as Esc there would skip the setup, and Esc from each step
+  # after to the colour's, each one settled before the next Esc.
+  send key return
+  expect '^browser: onboarding left intro via return$' "Return didn't go on from the welcome"
   for _ in 1 2 3 4; do
     grep -q '^browser: onboarding step color settled$' "$log" && break
     send key escape
@@ -359,15 +362,15 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
   done
   grep -q '^browser: onboarding step color settled$' "$log" || fail "Esc didn't come to the colour step"
   colour="$out/access-colour.txt"
-  read_tree "$radio_group \"Colour\"" > "$colour"
-  grep -q " $dialog \"Pick a colour for your first Space.\"" "$colour" ||
+  read_tree "$radio_group \"Color\"" > "$colour"
+  grep -q " $dialog \"Pick a color for your first Space.\"" "$colour" ||
     fail "the colour step isn't a dialog called by its title: $colour"
   [ "$(grep -c " $dialog \"" "$colour")" = 1 ] ||
     fail "the step it left is still a dialog: $colour"
   grep -q " $button \"Continue\"" "$colour" || fail "Continue isn't a button: $colour"
   grep -q " $button \"Skip\"" "$colour" || fail "Skip isn't a button: $colour"
-  swatches=$(under "$radio_group \"Colour\"" "$colour" | grep " $radio \"[^\"]")
-  [ "$(echo "$swatches" | wc -l)" -ge 2 ] || fail "the swatches aren't radio buttons in Colour: $colour"
+  swatches=$(under "$radio_group \"Color\"" "$colour" | grep " $radio \"[^\"]")
+  [ "$(echo "$swatches" | wc -l)" -ge 2 ] || fail "the swatches aren't radio buttons in Color: $colour"
   ! echo "$swatches" | grep -q " $picked" || fail "a colour reads as picked before any is: $colour"
   first=$(echo "$swatches" | head -1 | sed 's/^[^"]*"\([^"]*\)".*/\1/')
   send key right
@@ -377,7 +380,7 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
     fail "→ didn't read as picking the first colour, $first: $picked_tree"
   exec 3>&-
   quit
-  echo "ok: $screen_reader reads the onboarding's intro as a dialog called $app_name, the colour step as a dialog called by its title with Continue and Skip buttons, and its $(echo "$swatches" | wc -l | tr -d ' ') swatches as radio buttons in Colour, $first picked by →. Trees: $intro, $colour, $picked_tree"
+  echo "ok: $screen_reader reads the onboarding's welcome as a dialog called by its title with Get Started and Skip Setup buttons, the colour step as a dialog called by its title with Continue and Skip buttons, and its $(echo "$swatches" | wc -l | tr -d ' ') swatches as radio buttons in Color, $first picked by →. Trees: $intro, $colour, $picked_tree"
 fi
 # The run's buses go with it.
 [ -z "${buses:-}" ] || kill $buses 2> /dev/null || true

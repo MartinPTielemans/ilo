@@ -1959,8 +1959,11 @@ impl Shell {
             return self.copy(&url, toast, cx);
         }
         self.browser.copy(&url, cx);
-        // check.sh reads this line.
-        log!("browser: copied {url}");
+        // check.sh reads this line. A sign-in's page's address can hold its code or a token.
+        match crate::agents::sign_in::quiet(tab) {
+            true => log!("browser: copied a sign-in's page"),
+            false => log!("browser: copied {url}"),
+        }
         let (browser, title) = (self.browser.clone(), self.title(tab));
         let share = std::rc::Rc::new(move |at, cx: &mut App| {
             browser.share_from_toast(&url, &title, at, cx)

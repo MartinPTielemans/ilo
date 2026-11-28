@@ -7,18 +7,15 @@
 //! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back. An agent's
 //! HTTP requests that may change something ask each time (#3548): each change in the agent's own
 //! words, marked as its, over what the browser knows from its method and overrides, so a delete
-//! reads as one whatever the words say; the whole request one press away; Deny, or Allow.
+//! reads as one whatever the words say; Deny, or Allow.
 
-use std::rc::Rc;
-
-use gpui::{Context, FontWeight, Window, accesskit::Role, div, prelude::*, px};
+use gpui::{Context, FontWeight, accesskit::Role, div, prelude::*, px};
 
 use super::agent_card_keys::{escape_mark, heard_title};
 use super::{
     Shell, TITLE,
-    permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_listener, part_listener},
+    permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_listener},
 };
-use crate::agent_request::{self, Closed};
 use crate::agents::request::{self, Does as Kind, Request};
 use crate::agents::{Answer, Question};
 use crate::palette::Tone;
@@ -26,7 +23,7 @@ use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::shell::PLATE_INSET;
 use crate::tokens::shell::permission::{
     BUTTON_GAP, CHANGE_ALONE_TOP, CHANGE_TOP, DETAIL, FACTS_LINE, FACTS_TOP, NUMBER, NUMBER_GAP,
-    SEE_RING, SEE_TOP,
+    SEE_TOP,
 };
 use crate::tokens::text;
 
@@ -91,24 +88,11 @@ impl Shell {
             }
         }
         self.agent_question = question;
-        // The whole request goes with its question.
-        let keep = self.agent_question.as_ref().map(|question| question.id);
-        agent_request::close(keep, cx);
         // The question needs the sidebar, so a hidden one comes out with it.
         if self.agent_question.is_some() && self.can_reveal() {
             self.set_revealed(true, cx);
         }
         cx.notify();
-    }
-
-    /// With the keyboard on "See the whole request" when its card goes (answered, gone or covered),
-    /// the window takes it: no drawn element holds it then, and GPUI matches a key's bindings from
-    /// the focused element, so ⌘T opened nothing (#3715).
-    pub(super) fn see_gone_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let see = self.agent_question().is_some_and(|q| !q.changes.is_empty());
-        if !see && self.agent_request_see.is_focused(window) {
-            window.focus(&self.focus_handle, cx);
-        }
     }
 
     /// The agent's question the card shows, unless a page's question or chooser has the place.
@@ -130,8 +114,6 @@ impl Shell {
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {
         if let Some(question) = self.agent_question.take() {
             self.browser.answer_agent(question.id, answer, cx);
-            // The whole request goes with its answer: the Agents' None after it changes nothing.
-            agent_request::close(None, cx);
             cx.notify();
         }
     }
@@ -148,24 +130,14 @@ impl Shell {
 
     /// The agent's question, as a card under the URL field.
     pub(super) fn agent_question_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        // The whole request shows only beside its question's card, so one a page's question covers
-        // goes, as one gone or answered does.
-        let (window, keep) = (self.browser.window(), self.agent_question().map(|q| q.id));
-        if agent_request::showing_over(cx)
-            .is_some_and(|(over, question)| over == window && Some(question) != keep)
-        {
-            cx.defer(move |cx| agent_request::follow(window, keep, cx));
-        }
         let Some(question) = self.agent_question() else {
             // Drawn again, it's logged again.
             self.agent_question_drawn.set(None);
-            self.agent_request_see_drawn.set(None);
             return None;
         };
         if !question.changes.is_empty() {
             return Some(self.request_card(question, cx));
         }
-        self.agent_request_see_drawn.set(None);
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
         let a11y = self.a11y;
         let escape = escape_mark(question);
@@ -249,8 +221,8 @@ impl Shell {
     }
 
     /// The card of an agent's requests that may change something: the agent's own sentence for
-    /// each, quoted under its name, over the browser's facts from the method; why it asks; the
-    /// whole request; Deny or Allow.
+    /// each, quoted under its name, over the browser's facts from the method; why it asks; Deny or
+    /// Allow.
     fn request_card(&self, question: &Question, cx: &mut Context<Self>) -> gpui::AnyElement {
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
         let (detail, ink) = (self.palette.on_overlay(DETAIL), self.palette.text(TITLE));
@@ -372,36 +344,7 @@ impl Shell {
             .max_h(px(room.max(3. * FACTS_LINE)))
             .overflow_y_scroll()
             .children(changes);
-        let showing = agent_request::showing(cx) == Some(question.id);
         let count = buttons(question).len();
-        let see = div()
-            .id("agent-request-see")
-            .mt(px(SEE_TOP))
-            .track_focus(&self.agent_request_see)
-            .focus_visible(crate::settings_rows::ring(self.palette.accent.into()))
-            // Ringed as a stop of the card's keys, as its buttons are.
-            .when(self.agent_card_ring() == Some(count), |mut see| {
-                let style = std::mem::take(Styled::style(&mut see));
-                *Styled::style(&mut see) =
-                    crate::settings_rows::ring(self.palette.accent.into())(style);
-                see
-            })
-            .rounded(px(SEE_RING))
-            .text_color(self.palette.accent)
-            .font_weight(FontWeight::MEDIUM)
-            .cursor_pointer()
-            .relative()
-            .child(part_listener(
-                "agent request see".into(),
-                &self.agent_request_see_drawn,
-                question.id,
-            ))
-            .child("See the whole request")
-            .when(a11y, |see| {
-                crate::settings_rows::named_button(see, "See the whole request")
-                    .aria_expanded(showing)
-            })
-            .on_click(cx.listener(|shell, _, window, cx| shell.see_whole_request(window, cx)));
         let escape = escape_mark(question);
         let buttons = buttons(question)
             .into_iter()
@@ -426,7 +369,6 @@ impl Shell {
                     .text_color(detail)
                     .child(crate::address_wrap::text(&question.why)),
             )
-            .child(see)
             .child(
                 div()
                     .mt(px(BUTTONS_TOP))
@@ -438,58 +380,6 @@ impl Shell {
             )
             .child(close)
             .into_any_element()
-    }
-
-    /// Shows the agent's request whole, beside its card, with the keyboard; Escape there gives it
-    /// back to "See the whole request".
-    pub(super) fn see_whole_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(question) = self.agent_question() else {
-            return;
-        };
-        let Some(card) = self.agent_question_drawn.get() else {
-            return;
-        };
-        let left = agent_request::beside(
-            f32::from(card.left()),
-            f32::from(card.right()),
-            self.right,
-            PLATE_INSET,
-        );
-        let top = f32::from(card.top());
-        let room = agent_request::room(top, f32::from(window.viewport_size().height));
-        let shell = cx.entity().downgrade();
-        let handle = window.window_handle();
-        let closed = Rc::new(move |how: Closed, cx: &mut gpui::App| {
-            if how != Closed::Escape {
-                return;
-            }
-            let shell = shell.clone();
-            _ = handle.update(cx, |_, window, cx| {
-                _ = shell.update(cx, |shell, cx| {
-                    // From the page too, if it had the keyboard before the request was opened.
-                    shell.take_keyboard(cx);
-                    window.focus(&shell.agent_request_see, cx);
-                    // check.sh reads this line.
-                    log!("browser: agent request keyboard back on see");
-                    cx.notify();
-                });
-            });
-        });
-        agent_request::show(
-            agent_request::Shown {
-                window: self.browser.window(),
-                question: question.id,
-                agent: request::plain(&question.agent).into(),
-                site: question.site.clone(),
-                changes: question.changes.clone(),
-                left,
-                top,
-                room,
-                closed,
-            },
-            cx,
-        );
-        cx.notify();
     }
 }
 
@@ -627,17 +517,14 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     use gpui::{Modifiers, TestAppContext, point, px};
 
-    use super::BUTTONS_TOP;
-    use crate::agent_request;
     use crate::agents::{Answer, Question, request::Request};
     use crate::shell::{Folders, Page, Question as PageQuestion, Shell, recorder::Recorder};
     use crate::tokens::shell::permission::{
-        BUTTON_GAP, BUTTON_HEIGHT, CLOSE, CLOSE_INSET, LINE, PADDING,
+        BUTTON_GAP, BUTTON_HEIGHT, CLOSE, CLOSE_INSET, PADDING,
     };
 
     fn question(id: u64) -> Question {
@@ -983,7 +870,7 @@ mod tests {
 
     /// Readers hear the card as an alert named by what the agent asks, then each change as a group:
     /// the agent's whole sentence, not the card's clip, and the browser's facts, said as its own.
-    /// Then "See the whole request", collapsed, Deny and Allow, and Close (#3548).
+    /// Then Deny and Allow, and Close (#3548).
     #[gpui::test]
     fn readers_hear_each_change_whole_in_the_cards_order(cx: &mut TestAppContext) {
         use gpui::accesskit::{NodeId, Role};
@@ -1034,7 +921,6 @@ mod tests {
                     "Group {app} sees: Changes something on team.example.com. Claude Code says: \
                      {whole}."
                 ),
-                "Button See the whole request, collapsed".to_string(),
                 "Button Deny".to_string(),
                 "Button Allow".to_string(),
                 "Button Close".to_string(),
@@ -1105,396 +991,5 @@ mod tests {
                 "{start:?} {quote:?}"
             );
         }
-    }
-
-    /// A body laid out as the overlay's own sections is drawn as one block of the agent's text,
-    /// under the address's, in the same column: a reader finds it whole there, and nothing in it
-    /// is a label of the overlay's.
-    #[gpui::test]
-    fn a_body_that_reads_as_a_label_is_drawn_in_its_block(cx: &mut TestAppContext) {
-        use gpui::accesskit::Role;
-        let (_, shell, cx) = window_with(cx);
-        let shown = Rc::new(Shown::default());
-        let whole = {
-            let shown = shown.clone();
-            cx.update(|_, cx| agent_request::open(shown, cx))
-        };
-        let whole = whole.expect("the whole request's window didn't open");
-        let body = "a=1\n\nWhat the browser sees\nReads something on team.example.com · GET\n";
-        shell.update(cx, |shell, cx| {
-            let mut one = change("POST", "/api/items", "Save a.");
-            one.body = body.into();
-            shell.set_agent_question(Some(requests(7, vec![one])), cx);
-        });
-        cx.run_until_parked();
-        shell.update_in(cx, |shell, window, cx| shell.see_whole_request(window, cx));
-        cx.run_until_parked();
-        let mut overlay = gpui::VisualTestContext::from_window(whole.into(), &cx.cx);
-        overlay.simulate_a11y_activation();
-        let tree = overlay.a11y_tree().expect("GPUI built a tree");
-        let blocks: Vec<(String, gpui::accesskit::Rect)> = (tree.nodes.iter())
-            .filter(|(_, node)| node.role() == Role::Label)
-            .map(|(_, node)| {
-                let label = node.label().unwrap_or("").to_string();
-                (label, node.bounds().expect("a block without bounds"))
-            })
-            .collect();
-        let find = |text: &str| {
-            let found: Vec<_> = blocks.iter().filter(|(label, _)| label == text).collect();
-            assert_eq!(found.len(), 1, "{text:?} in {blocks:?}");
-            found[0].1
-        };
-        let address = find("https://team.example.com/api/items");
-        let sent = find(body);
-        assert!(
-            sent.y0 >= address.y1,
-            "the body {sent:?} isn't under the address {address:?}"
-        );
-        assert_eq!(sent.x0, address.x0);
-        let labels = [
-            "What the browser sees",
-            "Reads something on team.example.com · GET",
-        ];
-        assert!(
-            !blocks
-                .iter()
-                .any(|(label, _)| labels.contains(&label.as_str())),
-            "a line of the body was drawn as its own: {blocks:?}"
-        );
-    }
-
-    #[derive(Default)]
-    struct Shown(RefCell<Vec<String>>);
-
-    impl agent_request::Host for Shown {
-        fn show(&self, window: u64, left: f32, _: f32, _: f32) {
-            self.0
-                .borrow_mut()
-                .push(format!("show over {window} at {left}"));
-        }
-        fn set_height(&self, _: f32) {}
-        fn hide(&self) {
-            self.0.borrow_mut().push("hide".into());
-        }
-    }
-
-    /// "See the whole request" shows it with the keyboard, and Escape there closes it and gives
-    /// the keyboard back to the button: the question is still asked, and nothing was sent.
-    #[gpui::test]
-    fn escape_in_the_whole_request_closes_it_and_answers_nothing(cx: &mut TestAppContext) {
-        let (host, shell, cx) = window_with(cx);
-        let shown = Rc::new(Shown::default());
-        let whole = {
-            let shown = shown.clone();
-            cx.update(|_, cx| agent_request::open(shown, cx))
-        };
-        let whole = whole.expect("the whole request's window didn't open");
-        shell.update(cx, |shell, cx| {
-            let one = change("DELETE", "/api/items/7", "Tidy up the old draft.");
-            shell.set_agent_question(Some(requests(7, vec![one])), cx);
-        });
-        cx.run_until_parked();
-        let see = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
-        let card = see.expect("the card wasn't drawn");
-        // "See the whole request" is the row over the buttons' row.
-        let row = card.bottom() - px(PADDING + BUTTON_HEIGHT + BUTTONS_TOP + LINE / 2.);
-        cx.simulate_click(
-            point(card.left() + px(PADDING + 8.), row),
-            Modifiers::none(),
-        );
-        cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), Some(7));
-        assert!(
-            shown
-                .0
-                .borrow()
-                .iter()
-                .any(|did| did.starts_with("show over"))
-        );
-
-        whole
-            .update(cx, |_, window, cx| {
-                window.dispatch_action(Box::new(agent_request::Dismiss), cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
-        assert!(shown.0.borrow().contains(&"hide".to_string()));
-        assert!(
-            !host
-                .take()
-                .iter()
-                .any(|did| did.starts_with("answer agent")),
-            "Escape answered the question"
-        );
-        shell.read_with(cx, |shell, _| {
-            assert_eq!(shell.agent_question().map(|question| question.id), Some(7))
-        });
-        let back = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
-        cx.update(|window, _| assert!(back.is_focused(window), "the keyboard isn't on See"));
-
-        // Answered, the question takes the whole request with it.
-        cx.simulate_click(
-            point(card.left() + px(PADDING + 8.), row),
-            Modifiers::none(),
-        );
-        cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), Some(7));
-        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
-        cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
-    }
-
-    /// "See the whole request" keeps its keys beside the card's: ↩ or Space, let go, opens the
-    /// whole request with the keyboard on it, a card's key asked or not, and answers nothing.
-    #[gpui::test]
-    fn see_keeps_its_keys(cx: &mut TestAppContext) {
-        cx.update(crate::shell::commands::bind_keys);
-        let (host, shell, cx) = window_with(cx);
-        let whole = cx.update(|_, cx| agent_request::open(Rc::new(Shown::default()), cx));
-        let whole = whole.expect("the whole request's window didn't open");
-        shell.update(cx, |shell, cx| {
-            let one = change("PUT", "/api/note", "Replace the note.");
-            shell.set_agent_question(Some(requests(7, vec![one])), cx);
-        });
-        cx.run_until_parked();
-        let see = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
-        for key in ["enter", "space"] {
-            cx.update(|window, cx| window.focus(&see, cx));
-            cx.run_until_parked();
-            let keystroke = gpui::Keystroke::parse(key).expect("a key");
-            cx.simulate_event(gpui::KeyDownEvent {
-                keystroke: keystroke.clone(),
-                is_held: false,
-                prefer_character_input: false,
-            });
-            cx.simulate_event(gpui::KeyUpEvent { keystroke });
-            cx.run_until_parked();
-            assert_eq!(
-                cx.update(|_, cx| agent_request::showing(cx)),
-                Some(7),
-                "{key} on See showed nothing"
-            );
-            whole
-                .update(cx, |_, window, cx| {
-                    window.dispatch_action(Box::new(agent_request::Dismiss), cx)
-                })
-                .unwrap();
-            cx.run_until_parked();
-            assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
-        }
-        assert!(
-            !host
-                .take()
-                .iter()
-                .any(|did| did.starts_with("answer agent")),
-            "a key on See answered the card"
-        );
-    }
-
-    /// Deny, after Escape in the whole request gave the keyboard back to "See the whole request",
-    /// takes the card and the button away, and the window's shortcuts still work (#3715).
-    #[gpui::test]
-    fn shortcuts_work_after_deny_from_the_whole_request(cx: &mut TestAppContext) {
-        cx.update(crate::shell::commands::bind_keys);
-        let (host, shell, cx) = window_with(cx);
-        let whole = cx.update(|_, cx| agent_request::open(Rc::new(Shown::default()), cx));
-        let whole = whole.expect("the whole request's window didn't open");
-        shell.update(cx, |shell, cx| {
-            let one = change("PUT", "/api/note", "Replace the note.");
-            shell.set_agent_question(Some(requests(7, vec![one])), cx);
-        });
-        cx.run_until_parked();
-        let see = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
-        let card = see.expect("the card wasn't drawn");
-        let row = card.bottom() - px(PADDING + BUTTON_HEIGHT + BUTTONS_TOP + LINE / 2.);
-        cx.simulate_click(
-            point(card.left() + px(PADDING + 8.), row),
-            Modifiers::none(),
-        );
-        cx.run_until_parked();
-        whole
-            .update(cx, |_, window, cx| {
-                window.dispatch_action(Box::new(agent_request::Dismiss), cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let back = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
-        cx.update(|window, _| assert!(back.is_focused(window), "the keyboard isn't on See"));
-
-        // Deny is the buttons' row's first.
-        let deny = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
-        cx.simulate_click(
-            point(card.left() + px(PADDING + 8.), deny),
-            Modifiers::none(),
-        );
-        cx.run_until_parked();
-        assert!(
-            host.take()
-                .iter()
-                .any(|did| did.starts_with("answer agent")),
-            "the click wasn't on Deny"
-        );
-        let asked = shell.read_with(cx, |shell, _| shell.agent_question().is_some());
-        assert!(!asked, "Deny left the question asked");
-        host.bar_open.set(false);
-        cx.simulate_keystrokes("cmd-t");
-        cx.run_until_parked();
-        assert!(host.bar_open.take(), "⌘T after Deny opened no new tab");
-    }
-
-    /// The next request's "See the whole request", drawn where the last one's was, has its place
-    /// logged again, as a check finds the button by that line (#3715).
-    #[gpui::test]
-    fn see_is_logged_again_for_the_next_request(cx: &mut TestAppContext) {
-        let (_, shell, cx) = window_with(cx);
-        let ask = |id: u64, cx: &mut gpui::VisualTestContext| {
-            shell.update(cx, |shell, cx| {
-                let one = change("PUT", "/api/note", "Replace the note.");
-                shell.set_agent_question(Some(requests(id, vec![one])), cx);
-            });
-            cx.run_until_parked();
-            shell.read_with(cx, |shell, _| shell.agent_request_see_drawn.get())
-        };
-        let first = ask(2, cx).expect("the first request's See wasn't drawn");
-        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
-        cx.run_until_parked();
-        let gone = shell.read_with(cx, |shell, _| shell.agent_request_see_drawn.get());
-        assert_eq!(
-            gone, None,
-            "See's place outlived its card, so the next isn't logged"
-        );
-        assert_eq!(ask(3, cx), Some(first));
-    }
-
-    /// The whole request shows only beside its question's card: it goes when the question is
-    /// answered, refused by the 5-minute rule (the Agents ask the next, or nothing), gone with its
-    /// client, or covered by a page's question taking the card's place, though the Agents say
-    /// nothing more of it after an answer.
-    #[gpui::test]
-    fn the_whole_request_goes_with_its_card(cx: &mut TestAppContext) {
-        let (host, shell, cx) = window_with(cx);
-        let shown = Rc::new(Shown::default());
-        let opened = {
-            let shown = shown.clone();
-            cx.update(|_, cx| agent_request::open(shown, cx))
-        };
-        opened.expect("the whole request's window didn't open");
-        let open = |id: u64, cx: &mut gpui::VisualTestContext| {
-            shell.update(cx, |shell, cx| {
-                let one = change("DELETE", "/api/items/7", "Tidy up the old draft.");
-                shell.set_agent_question(Some(requests(id, vec![one])), cx);
-            });
-            cx.run_until_parked();
-            shell.update_in(cx, |shell, window, cx| shell.see_whole_request(window, cx));
-            cx.run_until_parked();
-            assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), Some(id));
-        };
-        let card = |cx: &mut gpui::VisualTestContext| {
-            let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
-            card.expect("the card wasn't drawn")
-        };
-
-        // Answered: Deny, with the whole request open, and the Agents' None that follows.
-        open(7, cx);
-        let card_at = card(cx);
-        let last = card_at.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
-        cx.simulate_click(
-            point(card_at.left() + card_at.size.width * 0.25, last),
-            Modifiers::none(),
-        );
-        cx.run_until_parked();
-        assert!(host.take().contains(&"answer agent 7 Dismiss".to_string()));
-        assert_eq!(
-            cx.update(|_, cx| agent_request::showing(cx)),
-            None,
-            "answered"
-        );
-        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
-        cx.run_until_parked();
-
-        // Refused by the 5-minute rule, as the Agents ask the next question in its place.
-        open(8, cx);
-        shell.update(cx, |shell, cx| {
-            shell.set_agent_question(Some(question(9)), cx)
-        });
-        cx.run_until_parked();
-        assert_eq!(
-            cx.update(|_, cx| agent_request::showing(cx)),
-            None,
-            "refused"
-        );
-
-        // Gone with its client, as the Agents ask nothing.
-        open(10, cx);
-        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
-        cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None, "gone");
-
-        // A page's question takes the card's place, and the agent's is still asked.
-        open(11, cx);
-        shell.update(cx, |shell, cx| {
-            let asked = PageQuestion {
-                site: "example.com".into(),
-                permissions: Vec::new(),
-            };
-            shell.set_question(10, Some(asked), cx);
-        });
-        cx.run_until_parked();
-        assert_eq!(
-            cx.update(|_, cx| agent_request::showing(cx)),
-            None,
-            "covered"
-        );
-        shell.read_with(cx, |shell, _| {
-            assert_eq!(shell.agent_question.as_ref().map(|q| q.id), Some(11))
-        });
-        let hides = shown.0.borrow().iter().filter(|did| *did == "hide").count();
-        assert_eq!(hides, 4);
-    }
-
-    /// With the sidebar on the right, the whole request opens to the card's left, toward the page,
-    /// as the theme picker does; on the left, past its right. Both as "See the whole request"
-    /// opens it, from where the card was drawn.
-    #[gpui::test]
-    fn the_whole_request_opens_toward_the_page(cx: &mut TestAppContext) {
-        let (_, shell, cx) = window_with(cx);
-        let shown = Rc::new(Shown::default());
-        let opened = {
-            let shown = shown.clone();
-            cx.update(|_, cx| agent_request::open(shown, cx))
-        };
-        opened.expect("the whole request's window didn't open");
-        let mut sides = Vec::new();
-        for (id, right) in [(7, false), (8, true)] {
-            cx.update(|_, cx| cx.set_global(crate::shell::SidebarRight(right)));
-            cx.run_until_parked();
-            shell.update(cx, |shell, cx| {
-                let one = change("DELETE", "/api/items/7", "Tidy up the old draft.");
-                shell.set_agent_question(Some(requests(id, vec![one])), cx);
-            });
-            cx.run_until_parked();
-            let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
-            let card = card.expect("the card wasn't drawn");
-            shell.update_in(cx, |shell, window, cx| shell.see_whole_request(window, cx));
-            cx.run_until_parked();
-            let did = shown.0.borrow().last().cloned().unwrap_or_default();
-            let left: f32 = (did.rsplit(" at ").next().unwrap_or(""))
-                .parse()
-                .expect(&did);
-            sides.push((f32::from(card.left()), f32::from(card.right()), left));
-            shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
-            cx.run_until_parked();
-        }
-        let (_, card_right, left) = sides[0];
-        assert!(
-            left >= card_right,
-            "with the sidebar on the left it opened at {left}"
-        );
-        let (card_left, _, left) = sides[1];
-        assert!(
-            left + agent_request::WIDTH <= card_left,
-            "with the sidebar on the right it opened at {left}, over the card at {card_left}"
-        );
     }
 }

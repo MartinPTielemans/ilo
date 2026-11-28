@@ -57,6 +57,8 @@ pub struct Found {
     /// The models it listed itself when last asked, or None till it answers: a Claude too old to
     /// list them keeps ilo's names for them (`Cli::unlisted_models`).
     pub models: Option<Models>,
+    /// The plan the account is on, where the CLI says, as its row shows it: never saved.
+    pub plan: Option<String>,
 }
 
 /// The models a CLI lists for the signed-in account, in the CLI's order.
@@ -96,6 +98,7 @@ impl Found {
                 .map(PathBuf::from),
             path: saved.get("path").and_then(Value::as_str).map(String::from),
             models: Models::from_saved(saved),
+            plan: None,
         }
     }
 }
@@ -137,30 +140,28 @@ pub fn look(cli: Cli) -> Found {
             ready: Ready::NotFound,
             program: None,
             path,
-            models: None,
+            ..Default::default()
         };
     };
-    let mut command = command(&program);
-    match cli {
-        Cli::Claude => command.args(["auth", "status", "--json"]),
-        Cli::Codex => command.args(["login", "status"]),
-    };
-    if let Some(path) = &path {
-        command.env("PATH", path);
-    }
-    let output = command.stdin(Stdio::null()).stderr(Stdio::null()).output();
-    let ready = match output {
-        Err(error) => {
-            log!("browser: {} couldn't run: {error}", cli.id());
-            Ready::NotFound
-        }
-        Ok(output) => match cli {
-            Cli::Claude if claude_signed_in(&String::from_utf8_lossy(&output.stdout)) => {
-                Ready::SignedIn
+    let (ready, plan, models) = match cli {
+        Cli::Claude => {
+            let mut command = command(&program);
+            command.args(["auth", "status", "--json"]);
+            if let Some(path) = &path {
+                command.env("PATH", path);
             }
-            Cli::Codex if output.status.success() => Ready::SignedIn,
-            _ => Ready::SignedOut,
-        },
+            match command.stdin(Stdio::null()).stderr(Stdio::null()).output() {
+                Err(error) => {
+                    log!("browser: {} couldn't run: {error}", cli.id());
+                    (Ready::NotFound, None, None)
+                }
+                Ok(output) if claude_signed_in(&String::from_utf8_lossy(&output.stdout)) => {
+                    (Ready::SignedIn, None, None)
+                }
+                Ok(_) => (Ready::SignedOut, None, None),
+            }
+        }
+        Cli::Codex => codex_look(&program, path.as_deref()),
     };
     // check.sh reads this line.
     log!(
@@ -170,7 +171,7 @@ pub fn look(cli: Cli) -> Found {
     );
     let models = match (cli, ready) {
         (Cli::Claude, Ready::SignedIn) => claude_models(&program, path.as_deref()),
-        (Cli::Codex, Ready::SignedIn) => codex_models(&program, path.as_deref()),
+        (Cli::Codex, _) => models,
         _ => None,
     };
     if let Some(models) = &models {
@@ -185,6 +186,7 @@ pub fn look(cli: Cli) -> Found {
         program: Some(program),
         path,
         models,
+        plan,
     }
 }
 
@@ -320,9 +322,11 @@ fn lines_of(output: impl std::io::Read + Send + 'static) -> mpsc::Receiver<Strin
     lines
 }
 
-/// The models Codex lists for the signed-in user, which change with their plan and Codex's
-/// version: asked of its app-server, which starts no thread for it, and left after LIST_WAIT.
-fn codex_models(program: &Path, path: Option<&str>) -> Option<Models> {
+/// Whether Codex is signed in, its plan, and the models it lists for the account, which change with
+/// the plan and Codex's version: asked of its app-server, as its own sign-in is, which starts no
+/// thread for it, and left after LIST_WAIT. `account/read` says an expired sign-in is out, where
+/// `codex login status` said in (#4099).
+fn codex_look(program: &Path, path: Option<&str>) -> (Ready, Option<String>, Option<Models>) {
     let mut command = command(program);
     command
         .arg("app-server")
@@ -332,11 +336,18 @@ fn codex_models(program: &Path, path: Option<&str>) -> Option<Models> {
     if let Some(path) = path {
         command.env("PATH", path);
     }
-    let mut child = command.spawn().ok()?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            log!("browser: codex couldn't run: {error}");
+            return (Ready::NotFound, None, None);
+        }
+    };
     let mut stdin = child.stdin.take().expect("piped");
     let lines = lines_of(child.stdout.take().expect("piped"));
     let mut say = |message: Value| writeln!(stdin, "{message}").ok();
     let deadline = Instant::now() + LIST_WAIT;
+    let (mut ready, mut plan) = (Ready::SignedOut, None);
     let models = (|| {
         say(serde_json::json!({
             "id": 1,
@@ -356,11 +367,18 @@ fn codex_models(program: &Path, path: Option<&str>) -> Option<Models> {
             match message.get("id").and_then(Value::as_u64) {
                 Some(1) => {
                     say(serde_json::json!({ "method": "initialized" }))?;
+                    say(serde_json::json!({ "id": 2, "method": "account/read", "params": {} }))?;
+                }
+                Some(2) => {
+                    (ready, plan) = codex_account(&message);
+                    if ready != Ready::SignedIn {
+                        return None;
+                    }
                     say(
-                        serde_json::json!({ "id": 2, "method": "model/list", "params": { "limit": 100 } }),
+                        serde_json::json!({ "id": 3, "method": "model/list", "params": { "limit": 100 } }),
                     )?;
                 }
-                Some(2) => return Some(codex_listed(&message)),
+                Some(3) => return Some(codex_listed(&message)),
                 _ => {}
             }
         }
@@ -370,7 +388,43 @@ fn codex_models(program: &Path, path: Option<&str>) -> Option<Models> {
     drop(stdin);
     _ = child.kill();
     _ = child.wait();
-    models
+    (ready, plan, models)
+}
+
+/// Whether Codex's answer to `account/read` says it can run a task, and the ChatGPT plan it's on.
+/// Only the account's kind and plan are read, never its email. A provider that needs no OpenAI
+/// sign-in runs one signed out.
+pub fn codex_account(answer: &Value) -> (Ready, Option<String>) {
+    let Some(result) = answer.get("result") else {
+        return (Ready::SignedOut, None);
+    };
+    let account = result.get("account").filter(|account| account.is_object());
+    let needs = (result.get("requiresOpenaiAuth").and_then(Value::as_bool)).unwrap_or(true);
+    let ready = match account.is_some() || !needs {
+        true => Ready::SignedIn,
+        false => Ready::SignedOut,
+    };
+    let plan = (account.and_then(|account| account.get("planType")))
+        .and_then(Value::as_str)
+        .and_then(plan_name);
+    (ready, plan)
+}
+
+/// A plan's name as the row says it, for the plans the makers name: none for another.
+pub fn plan_name(plan: &str) -> Option<String> {
+    let name = match plan.to_ascii_lowercase().as_str() {
+        "free" => "Free",
+        "go" => "Go",
+        "plus" => "Plus",
+        "pro" => "Pro",
+        "max" => "Max",
+        "team" => "Team",
+        "business" => "Business",
+        "enterprise" => "Enterprise",
+        "edu" => "Edu",
+        _ => return None,
+    };
+    Some(name.to_string())
 }
 
 /// The models in Codex's answer to model/list, hidden ones left out, and the one it marks its

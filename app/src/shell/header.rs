@@ -5,6 +5,7 @@ use std::time::Instant;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::command_bar::PLACEHOLDER_TEXT;
+use crate::palette::Ground;
 use crate::site_controls::Place;
 
 use gpui::{
@@ -700,7 +701,7 @@ impl Shell {
                     svg()
                         .path("icons/leaf.svg")
                         .size(px(URL_BUTTON_GLYPH))
-                        .text_color(self.palette.accent),
+                        .text_color(self.palette.glyph(1.)),
                 )
                 .child(frame)
         });
@@ -786,9 +787,9 @@ impl Shell {
                     }),
                 )
             })
-            .bg(self.palette.plate(URL_FIELD))
+            .bg(self.palette.ground_plate(Ground::Field, URL_FIELD))
             // It brightens under the pointer as a tile does, from the same white 0.10 (ours).
-            .hover(|style| style.bg(self.palette.plate(TILE_HOVERED)))
+            .hover(|style| style.bg(self.palette.ground_plate(Ground::Field, TILE_HOVERED)))
             .text_size(px(text::BODY))
             .child(
                 div()
@@ -918,7 +919,7 @@ impl Shell {
             .pl(px(URL_FIELD_TEXT_X - PLATE_INSET))
             .pr(px(text_end))
             .rounded(px(PLATE_RADIUS))
-            .bg(self.palette.plate(URL_FIELD))
+            .bg(self.palette.ground_plate(Ground::Field, URL_FIELD))
             .text_size(px(text::BODY))
             .child(
                 div()

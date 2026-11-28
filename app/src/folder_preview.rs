@@ -20,6 +20,7 @@ use gpui::{
 
 use crate::elevation::Level;
 use crate::hover_card::{Anchor, Icon};
+use crate::hover_intent::{Intent, Next};
 use crate::palette::{Palette, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
 use crate::text_input::TextInput;
@@ -168,6 +169,8 @@ pub struct FolderPreview {
     /// The dwell's timer, or the leave's once the pointer has left the shown preview's row.
     /// Dropping it cancels it.
     wait: Option<Task<()>>,
+    /// When the preview shows: after DWELL, or at once while another shows.
+    intent: Intent,
     /// The pointer is on the preview, which keeps it.
     on_card: bool,
     /// The pointer is on the shown preview's row, which keeps it too.
@@ -226,6 +229,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
             shown: None,
             resting: None,
             wait: None,
+            intent: Intent::new(DWELL),
             on_card: false,
             on_row: false,
         })
@@ -275,6 +279,7 @@ pub fn dismissed(cx: &mut App) {
         preview.on_card = false;
         preview.on_row = false;
         if preview.shown.take().is_some() {
+            preview.intent.close(cx.background_executor().now());
             log!("browser: folder preview dismissed");
             cx.notify();
         }
@@ -295,31 +300,44 @@ impl FolderPreview {
         if rest.items.is_empty() {
             return;
         }
-        if let Some(shown) = &self.shown {
-            if shown.rest.folder == rest.folder {
-                self.wait = None;
-                self.on_row = true;
-                return;
-            }
-            self.resting = None;
+        if (self.shown.as_ref()).is_some_and(|shown| shown.rest.folder == rest.folder) {
             self.wait = None;
-            return self.show(rest, window, cx);
-        }
-        let waiting = self
-            .resting
-            .as_ref()
-            .is_some_and(|resting| resting.folder == rest.folder);
-        self.resting = Some(rest);
-        if waiting {
+            self.on_row = true;
             return;
         }
+        // The folder it already waits on keeps its wait, and shows as it is now.
+        if (self.resting.as_ref()).is_some_and(|resting| resting.folder == rest.folder) {
+            self.resting = Some(rest);
+            return;
+        }
+        match self.intent.enter(cx.background_executor().now()) {
+            Next::Open => {
+                self.resting = None;
+                self.wait = None;
+                self.show(rest, window, cx)
+            }
+            Next::Wait(delay) => {
+                self.resting = Some(rest);
+                self.wake_after(delay, window, cx);
+            }
+        }
+    }
+
+    /// Wakes after `delay` for the row it waits on, and shows its preview once the pointer has
+    /// rested its whole delay; a wake that came early waits out the rest.
+    fn wake_after(&mut self, delay: Duration, window: &mut Window, cx: &mut Context<Self>) {
         self.wait = Some(cx.spawn_in(window, async move |preview, cx| {
-            cx.background_executor().timer(DWELL).await;
+            cx.background_executor().timer(delay).await;
             preview
                 .update_in(cx, |preview, window, cx| {
                     preview.wait = None;
-                    if let Some(rest) = preview.resting.take() {
-                        preview.show(rest, window, cx)
+                    let now = cx.background_executor().now();
+                    if preview.intent.due(now) {
+                        if let Some(rest) = preview.resting.take() {
+                            preview.show(rest, window, cx)
+                        }
+                    } else if let Some(left) = preview.intent.early(now) {
+                        preview.wake_after(left, window, cx)
                     }
                 })
                 .ok();
@@ -334,6 +352,7 @@ impl FolderPreview {
         {
             self.resting = None;
             self.wait = None;
+            self.intent.leave();
         }
         let leaves = self
             .shown
@@ -409,7 +428,7 @@ impl FolderPreview {
         // check.sh reads this line, to see the preview is beside its row.
         log!("browser: folder preview shown {folder} at {left} {top} {WIDTH} {height}");
         // Under Reduce Motion nothing scales, and the fades stay (docs/ux-spec.md › Motion).
-        let from = if cx.reduce_motion() { 1. } else { FROM };
+        let from = if crate::motion::still(cx) { 1. } else { FROM };
         self.host.show(over, left, top, height, from);
         cx.notify();
     }
@@ -463,10 +482,10 @@ impl FolderPreview {
         self.go(1, cx);
     }
 
-    /// ↩ shows the tab selected. While an input method composes, it's the method's.
+    /// ↩ shows the tab selected, unless it was an input method's, composing in the search
+    /// (dismissal's rule).
     fn choose_selected(&mut self, _: &Choose, _: &mut Window, cx: &mut Context<Self>) {
-        if self.search.read(cx).composing() {
-            cx.propagate();
+        if !crate::dismissal::submits([&self.search.clone()], cx) {
             return;
         }
         let Some(shown) = &self.shown else {
@@ -489,14 +508,18 @@ impl FolderPreview {
         chosen(tab, cx);
     }
 
+    /// Esc closes the preview, unless it was an input method's, composing in the search.
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        self.close(cx);
+        if crate::dismissal::Close::escape_from([&self.search.clone()], cx).is_some() {
+            self.close(cx);
+        }
     }
 
     /// The preview goes, and the browser window gets the keyboard back.
     fn close(&mut self, cx: &mut Context<Self>) {
         self.wait = None;
         self.resting = None;
+        self.intent.close(cx.background_executor().now());
         self.on_card = false;
         self.on_row = false;
         if self.shown.take().is_some() {

@@ -1,11 +1,12 @@
 # check.sh runs this at 360.
 # A new profile's first launch plays the onboarding over the window, captured at each step in a
-# light and a dark appearance: the intro draws ilo's wordmark and its line and goes on by itself, or
-# at any key; the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
+# light and a dark appearance: the intro, the welcome, draws ilo's wordmark and its words beside a
+# loop and waits, where Return goes on and Esc skips the setup (#4093); the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
 # Linux), never the Mac's own browsers, and ↩ there shows its choices, with Import and Back, which
 # Esc goes back from to the list; Esc or Skip goes on from a step, the colour step's Return
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
-# welcome with the command bar up and a line under it. The default browser's step shows only while
+# welcome with the command bar up and a line under it. On the Mac, Transparency's step comes after
+# the colour's, as it shows only over the window's glass. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
 # the default for a moment, so the run never changes a desk's. The search engine's comes after it
 # with the profile's list: Esc sets none, and the dark pass's ↓ and Return set the engine after the
@@ -66,6 +67,9 @@ import_choices() {
 # The account's step, while the build names a server to sign in to.
 account=
 [ ! -s branding/sync-server ] || account="account "
+# Transparency's step, only over the window's glass, which only the Mac has.
+glass=
+[ "$(uname)" != Darwin ] || glass="transparency "
 # Launches a new profile, whose saved Spaces are gone and which isn't signed in, in appearance $1,
 # and reads the steps it shows into $steps.
 launch_new() {
@@ -81,22 +85,30 @@ launch_new() {
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    "intro import "*"color ${account}opt-ins") ;;
-    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, ${account}the opt-ins" ;;
+    "intro import "*"color ${glass}${account}opt-ins") ;;
+    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, the color, ${glass}${account}the opt-ins" ;;
   esac
+  # BROWSER_ONBOARDING gives the sheet its look but leaves the window's material the system's, so
+  # on a system of the other look the captures would show a sheet on glass no user can reach.
+  # ilo's own Appearance, picked as a user picks it, gives the window the same look (#4093).
+  look=Light
+  [ "$1" = light ] || look=Dark
+  send menu "$(cased "Appearance › $look")"
+  expect "^browser: appearance $1\$" "$1: View › Appearance › $look didn't set ilo's look"
 }
 
-# Light: the intro holds once drawn and goes on by itself, and Esc goes on from every step.
+# Light: the welcome waits once drawn, Return goes on from it, and Esc from every step after.
 launch_new light
 grep -q '^browser: onboarding started$' "$log" || fail "a new profile didn't start the onboarding"
 capture_step light-intro
-await '^browser: onboarding left intro via time$' || fail "light: the intro didn't go on by itself"
-await '^browser: onboarding step import settled$' || fail "light: the import step didn't come"
+send key return
+expect '^browser: onboarding left intro via return$' "light: Return didn't go on from the welcome"
+expect '^browser: onboarding step import settled$' "light: the import step didn't come"
 grep -q "^browser: import found $found\$" "$log" ||
   fail "light: the import step didn't find the fixture's $found"
 for each in $steps; do
   [ "$each" = intro ] && continue
-  # The import came before any key, so it's been waited for already.
+  # The import has been waited for already.
   [ "$each" = import ] ||
     expect "^browser: onboarding step $each settled\$" "light: the $each step didn't come"
   capture_step "light-$each"
@@ -128,10 +140,8 @@ grep -q '^browser: onboarding' "$log" &&
 exec 3>&-
 quit
 
-# Dark: a key skips the intro, Skip at the window's bottom right leaves the import, and the colour
-# step's → and Return give the first Space the first swatch. The key goes in as soon as the intro
-# settles, with no capture first, as the intro goes on by itself after 3.4 s; the light pass
-# captures it.
+# Dark: Return goes on from the welcome, Skip in the sheet's foot leaves the import, and
+# the colour step's → and Return give the first Space the first swatch.
 # With the system's animations off the app reduces its motion, read at launch, and follows them
 # back on. Only on a CI VM, as the setting is the desk's: on Windows "Show animations in Windows",
 # and on Linux GTK's settings file, the last word where, as in the CI session, no portal answers.
@@ -164,9 +174,10 @@ case $reduced in
     fi
     ;;
 esac
-send key a
-expect '^browser: onboarding left intro via key$' "dark: a key didn't skip the intro"
-# Back on once the still intro, which goes on by itself at 2 s, is left.
+capture_step dark-intro
+send key return
+expect '^browser: onboarding left intro via return$' "dark: Return didn't go on from the welcome"
+# Back on once the still welcome is left.
 if [ "$reduced" = windows ]; then
   windows_animations 1 || fail "PowerShell didn't turn Windows' animations back on"
   expect '^browser: reduce motion off$' \
@@ -175,22 +186,10 @@ fi
 expect '^browser: onboarding step import settled$' "dark: the import step didn't come"
 capture_step dark-import
 import_choices dark
-# Its words and chip end 24 in from the window's right and bottom, 20 tall.
-# Only the Mac's window frame is its content, so elsewhere the driver's layout gives its size: Linux
-# logs no frame (host_window_frame), and Windows' takes in the title bar and borders.
-frame=
-if [ "$(uname)" = Darwin ]; then
-  frame=$(grep -m1 '^browser: window [0-9]* frame ' "$log" | cut -d' ' -f7-8)
-fi
-if [ -z "$frame" ]; then
-  send layout
-  frame=$(grep -m1 '^browser: layout content ' "$log" |
-    sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\).*/\1 \2/')
-fi
-width=${frame% *}
-height=${frame#* }
-[ -n "$height" ] || fail "the window didn't log its frame"
-send click $((width - 24 - 15)) $((height - 24 - 10))
+# The sheet's Skip takes a click where the app last said it's drawn, as it logs where once the step
+# has come, before the choices above, and again only if it moves (#4093).
+await '^browser: onboarding skip at ' || fail "dark: the import step didn't draw its Skip"
+send click $(grep '^browser: onboarding skip at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding left import via skip$' \
   "dark: a click on Skip didn't leave the import step"
 case " $steps " in
@@ -272,6 +271,12 @@ capture_step dark-color
 send key return
 expect '^browser: onboarding picked color f0eae5$' "dark: → and Return didn't pick the first swatch"
 expect '^browser: onboarding left color via return$' "dark: Return didn't leave the colour step"
+if [ -n "$glass" ]; then
+  expect '^browser: onboarding step transparency settled$' "dark: Transparency's step didn't come after the colour's"
+  capture_step dark-transparency
+  send key escape
+  expect '^browser: onboarding left transparency via escape$' "dark: Esc didn't leave Transparency's step"
+fi
 if [ -n "$account" ]; then
   expect '^browser: onboarding step account settled$' "dark: the account step didn't come"
   capture_step dark-account
@@ -316,19 +321,20 @@ send key escape
 expect '^browser: command bar hidden$' "dark: Esc didn't close the command bar the flow left up"
 
 # Help › Welcome to ilo plays it again here, as the window shows no page, recorded from before it
-# starts until after the intro has gone on by itself to the import, as its motion's proof.
+# starts through its loop, as its motion's proof, and Esc there skips the setup: the flow ends
+# with no other step.
 record onboarding-intro 5
 send menu "Welcome to $app_name"
 expect '^browser: command welcome via ui$' "Welcome to $app_name didn't run"
 expect '^browser: onboarding step intro settled$' "Welcome to $app_name didn't play the intro again"
 recorded
-expect '^browser: onboarding left intro via time$' "the replayed intro didn't go on by itself"
-for each in $steps; do
-  [ "$each" = intro ] && continue
-  send key escape
-  expect "^browser: onboarding left $each via escape\$" "Esc didn't leave the replayed $each step"
-done
-expect '^browser: onboarding done$' "the replay didn't end after its last step"
+send key escape
+expect '^browser: onboarding left intro via escape$' "Esc didn't leave the replayed welcome"
+expect '^browser: onboarding skipped setup$' "Esc at the replayed welcome didn't skip the setup"
+expect '^browser: onboarding done$' "the replay didn't end after Esc skipped its setup"
+! sed -n '/^browser: onboarding left intro via escape$/,$p' "$log" |
+  grep -q '^browser: onboarding step [a-z-]*$' ||
+  fail "Esc at the replayed welcome went on to another step, not out of the flow"
 expect '^browser: command bar shown$' "the replay didn't end with the command bar"
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar the replay left up"
@@ -346,8 +352,8 @@ send menu "Welcome to $app_name"
 expect '^browser: onboarding step intro settled$' "Welcome to $app_name over a page didn't play it"
 [ "$(count_windows)" -gt "$windows" ] ||
   fail "Welcome to $app_name over a page didn't open a window for it"
-send key escape
-expect '^browser: onboarding left intro via key$' "Esc didn't skip the replayed intro"
+send key return
+expect '^browser: onboarding left intro via return$' "Return didn't go on from the replayed welcome"
 expect '^browser: onboarding step import settled$' "the replay's import step didn't come"
 capture_step replay
 for each in $steps; do
@@ -420,8 +426,9 @@ BROWSER_IMPORT_HOME="$fav_import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=dark \
 pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "favorites: the intro didn't draw"
-send key escape
-expect '^browser: onboarding left intro via key$' "favorites: a key didn't skip the intro"
+# Return, as the welcome waits for it and Esc there skips the whole setup (#4093).
+send key return
+expect '^browser: onboarding left intro via return$' "favorites: Return didn't go on from the welcome"
 expect '^browser: onboarding step import settled$' "favorites: the import step didn't come"
 send key return
 expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
@@ -437,7 +444,11 @@ await '^browser: onboarding step favorites settled$' ||
 capture_step favorites
 send key escape
 expect '^browser: onboarding left favorites via escape$' "favorites: Esc didn't leave the step"
+# The look goes back to the system's, as the light and dark passes set ilo's own, for the runs after.
+send menu "$(cased 'Appearance › Automatic')"
+expect '^browser: appearance automatic$' \
+  "favorites: View › Appearance › Automatic didn't give the look back to the system"
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the intro, which goes on by itself or at a key, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, the account while the build names a sync server and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
+echo "ok: a new profile's first launch plays the intro, which waits for Return and skips the setup at Esc, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, Transparency on the Mac, the account while the build names a sync server and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
