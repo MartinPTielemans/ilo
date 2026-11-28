@@ -9,6 +9,11 @@
 #include "browser_core/shortcut_key.h"
 #include "build/build_config.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/functional/callback.h"
+#include "ui/gfx/native_ui_types.h"
+#endif
+
 namespace input {
 struct NativeWebKeyboardEvent;
 }
@@ -41,6 +46,27 @@ void StopHearingLayouts();
 // field as its character, made without the key's modifiers, and its press never comes
 // (BridgedContentView's insertText:).
 std::unique_ptr<ui::KeyEvent> KeyBehindCharacter(const ui::KeyEvent& character);
+
+// Gives |unheard| each key going down with ⌃ and not ⌘ in |window| that AppKit's key bindings make
+// a no-op and views never heard (Heard), once AppKit has dispatched it. The engine's content view
+// takes the no-op as the key's handling where AppKit answers for noop:, as macOS 14 does for ⌃⇧1,
+// so the key goes nowhere (#4469). One a menu took is heard.
+class UnheardKeys {
+ public:
+  UnheardKeys(gfx::NativeWindow window,
+              base::RepeatingCallback<void(const ui::KeyEvent&)> unheard);
+  UnheardKeys(const UnheardKeys&) = delete;
+  UnheardKeys& operator=(const UnheardKeys&) = delete;
+  ~UnheardKeys();
+
+  // views gave the window a key event in AppKit's dispatch of the key going down.
+  void Heard();
+
+  struct Watch;
+
+ private:
+  std::unique_ptr<Watch> watch_;
+};
 #endif
 
 }  // namespace browser_core::platform
