@@ -3713,11 +3713,62 @@ void WriteJumpList();
 constexpr double kJumpListAfter = 2;
 }  // namespace
 
-// First run holding the window off screen is the Mac's alone so far.
-void host_hold_window(void* ui_view) {}
+namespace {
+// The browser window first run holds off screen until host_show_window, while it's held.
+HWND g_held = nullptr;
+UINT_PTR const kHeld = 4;
+HWND FirstRunWindow();
+
+// Keeps the held window hidden and inactive whatever asks to show or activate it, as Chromium
+// shows and activates a window it has made: first run's window keeps the keyboard.
+LRESULT CALLBACK HeldProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
+                          DWORD_PTR) {
+  if (hwnd == g_held) {
+    if (message == WM_WINDOWPOSCHANGING) {
+      auto* position = reinterpret_cast<WINDOWPOS*>(lparam);
+      position->flags &= ~SWP_SHOWWINDOW;
+      position->flags |= SWP_NOACTIVATE;
+    } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
+      // Activated while hidden, it would take the keys first run's step is waiting for.
+      if (HWND first_run = FirstRunWindow()) {
+        Later([first_run] {
+          if (g_held && IsWindow(first_run)) {
+            SetForegroundWindow(first_run);
+          }
+        });
+      }
+    } else if (message == WM_SETTINGCHANGE && wparam == SPI_SETCLIENTAREAANIMATION &&
+               g_reduce_motion_changed) {
+      // FrameProc hears "Show animations in Windows" change once the window shows; till then the
+      // held window does, as the app follows it from launch.
+      g_reduce_motion_changed();
+    }
+  }
+  return DefSubclassProc(hwnd, message, wparam, lparam);
+}
+}  // namespace
+
+void host_hold_window(void* ui_view) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  g_held = root;
+  SetWindowSubclass(root, HeldProc, kHeld, 0);
+  // The core may have put it on screen as it made it.
+  ShowWindow(root, SW_HIDE);
+  // check.sh reads this line.
+  if (Checked()) {
+    fprintf(stderr, "browser: window held off screen\n");
+  }
+}
 
 void host_show_window(void* ui_view) {
   HWND root = Root(ui_view);
+  if (root && root == g_held) {
+    g_held = nullptr;
+    RemoveWindowSubclass(root, HeldProc, kHeld);
+  }
   TakeTitleBar(ui_view);
   ShowWindow(root, SW_SHOW);
   SetForegroundWindow(root);
@@ -5477,6 +5528,16 @@ namespace {
 // First run's window, while it's open.
 HWND g_first_run = nullptr;
 }  // namespace
+
+namespace {
+HWND FirstRunWindow() {
+  return g_first_run;
+}
+}  // namespace
+
+void* host_first_run_window(void) {
+  return g_first_run && IsWindowVisible(g_first_run) ? g_first_run : nullptr;
+}
 
 void host_add_first_run(void* first_run_view) {
   g_first_run = Hwnd(first_run_view);

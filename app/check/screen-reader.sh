@@ -583,10 +583,11 @@ in_library() {
 }
 before=$heard
 press tab
-in_library Media tab
-says "$before" "'Media', 'tab'" "NVDA didn't say the Library's Media section after Tab from History's field"
+# Its sections' column has Downloads first and History next (ba7a55490).
+in_library Downloads tab
+says "$before" "'Downloads', 'tab'" "NVDA didn't say the Library's Downloads section after Tab from History's field"
 press down
-in_library Downloads down
+in_library History down
 press tab shift
 press tab shift
 in_library "Search history" "⇧Tab twice"

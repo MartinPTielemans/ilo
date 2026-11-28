@@ -52,9 +52,17 @@ impl FirstRun {
             // The card has no close: a step is left by its own buttons, so the system's close
             // (a window manager's, ⌘W) does nothing. The window goes as first run ends.
             window.on_window_should_close(cx, |_, _| false);
-            cx.new(|cx| FirstRun {
-                _shell: cx.observe(&shell, |_, _, cx| cx.notify()),
-                shell,
+            cx.new(|cx| {
+                // However else the window goes, first run goes with it, and the browser window it
+                // kept waiting comes on screen. As first run ends, it has already.
+                cx.on_release(|first_run: &mut FirstRun, cx| {
+                    (first_run.shell).update(cx, |shell, cx| shell.first_run_gone(cx));
+                })
+                .detach();
+                FirstRun {
+                    _shell: cx.observe(&shell, |_, _, cx| cx.notify()),
+                    shell,
+                }
             })
         })
         .ok()

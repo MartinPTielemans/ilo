@@ -1129,6 +1129,26 @@ fn it_ends_with_the_command_bar_up(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.in_hint));
 }
 
+/// First run's window going any way but its exit, as Windows could take it, ends first run with
+/// it, so the browser window it kept waiting comes on screen: no way out leaves that one held.
+#[gpui::test]
+fn first_runs_window_going_ends_it_and_shows_the_browser_window(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    let window = shell
+        .read_with(cx, |shell, _| shell.first_run)
+        .expect("its window");
+    host.take();
+    use gpui::AppContext as _;
+    cx.update_window(window.into(), |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), None, "first run ended with its window");
+    assert_eq!(host.take(), ["first run ended"]);
+    assert!(host.command_bars.borrow().is_empty(), "no exit, so no bar");
+}
+
 /// A quit under way closes the window the card fades from, so its end opens no command bar.
 #[gpui::test]
 fn a_quit_under_way_brings_no_command_bar_as_the_card_ends(cx: &mut TestAppContext) {

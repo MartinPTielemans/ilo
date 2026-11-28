@@ -280,10 +280,18 @@ for each in $steps; do
       # no close: neither passes the step or goes back.
       send key escape
       send key w cmd
+      # On Windows Alt+F4, ⌃F4 to the driver, asks first run's window to close, as its close
+      # button and the taskbar's Close window do: the card has no close, so it stays, and the
+      # browser window waits hidden behind it.
+      if windows; then
+        send key f4 ctrl
+      fi
       # A last command, handled after the keys, so by its end they have done what they do.
       send state
       [ "$(last_move)" = "browser: onboarding step 4 settled" ] ||
-        fail "dark: Esc and ⌘W at Your first Space moved the card: $(last_move)"
+        fail "dark: Esc, ⌘W or Alt+F4 at Your first Space moved the card: $(last_move)"
+      ! grep -q '^browser: first run ended without its exit$' "$log" ||
+        fail "dark: Esc, ⌘W or Alt+F4 at Your first Space closed first run's window"
       ;;
     5)
       # Either switch here would write into the run's own home, so only the skill launch below,

@@ -2166,7 +2166,7 @@ impl Browser for Recorder {
         self.record("first run shown".into())
     }
 
-    fn end_first_run(&self, _: gpui::AnyWindowHandle, cx: &mut App) {
+    fn end_first_run(&self, _: Option<gpui::AnyWindowHandle>, cx: &mut App) {
         if let Some(end) = self.first_run_end.borrow().as_ref() {
             end(cx);
         }

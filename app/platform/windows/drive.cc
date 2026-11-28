@@ -286,12 +286,31 @@ long BrowserIndex(HWND hwnd) {
   return -1;
 }
 
+// First run's window while it's on screen, since the user's input goes there then and the browser
+// window waits hidden behind it, as the Mac's driver has it; else the browser window driven.
 HWND Driven() {
+  if (HWND first_run = static_cast<HWND>(host_first_run_window())) {
+    return first_run;
+  }
   return Browser(g_driven);
 }
 
 bool Ours(HWND hwnd) {
   return hwnd && GetWindowThreadProcessId(hwnd, nullptr) == GetCurrentThreadId();
+}
+
+// The browser window driven, shown or not: while first run shows, the one waiting hidden behind
+// it, whose menus are still the app's, as the Mac's menu bar is while first run shows.
+HWND BrowserWindow() {
+  if (HWND root = Browser(g_driven)) {
+    return root;
+  }
+  for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+    if (Ours(top) && !IsWindowVisible(top) && FindWindowExW(top, nullptr, L"BrowserUI", nullptr)) {
+      return top;
+    }
+  }
+  return nullptr;
 }
 
 // Whether the pointer at |screen| would be in |hwnd|, as Windows hit tests: shown, enabled, not
@@ -2534,7 +2553,7 @@ bool Run(const std::string& line) {
     return true;
   }
   if (action == "menu" || action == "menubar") {
-    HWND ui_view = FindWindowExW(Driven(), nullptr, L"BrowserUI", nullptr);
+    HWND ui_view = FindWindowExW(BrowserWindow(), nullptr, L"BrowserUI", nullptr);
     return g_menus && ui_view && g_menus(ui_view, rest.c_str(), action == "menubar");
   }
   if (action == "choose") {

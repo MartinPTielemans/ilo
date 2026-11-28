@@ -1129,9 +1129,9 @@ pub trait Browser {
     /// as a window of its own, in front with the keyboard: until first run ends it's the only
     /// window on screen.
     fn show_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
-    /// Takes first run's `window` off screen and closes it, and puts the browser window it kept
-    /// waiting at launch on screen.
-    fn end_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// Takes first run's `window`, if it's still there, off screen and closes it, and puts the
+    /// browser window it kept waiting at launch on screen.
+    fn end_first_run(&self, _window: Option<gpui::AnyWindowHandle>, _cx: &mut App) {}
     /// Keeps the system's glass and shadow round first run's card to its size and corners now,
     /// as its entry grows it, where the host draws them. `frame` is the count of frames the card
     /// has drawn, which the Mac's host logs under the checks with the glass's shape.
