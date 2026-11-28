@@ -1094,7 +1094,7 @@ bool host_choose(const char* title);
 // from 0, once it's shown, else null.
 void* host_browser_window(size_t index);
 
-// For the test driver: first run's window while it's on screen, else null. The Mac's alone.
+// For the test driver: first run's window while it's on screen, else null. The Mac's and Windows'.
 void* host_first_run_window(void);
 
 // AppleScript, the Mac's alone (scripting.mm, ilo.sdef): what a script may ask of the app's windows,

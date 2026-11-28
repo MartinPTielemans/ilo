@@ -286,7 +286,12 @@ long BrowserIndex(HWND hwnd) {
   return -1;
 }
 
+// First run's window while it's on screen, since the user's input goes there then and the browser
+// window waits hidden behind it, as the Mac's driver has it; else the browser window driven.
 HWND Driven() {
+  if (HWND first_run = static_cast<HWND>(host_first_run_window())) {
+    return first_run;
+  }
   return Browser(g_driven);
 }
 

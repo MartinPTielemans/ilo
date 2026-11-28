@@ -5530,6 +5530,10 @@ HWND FirstRunWindow() {
 }
 }  // namespace
 
+void* host_first_run_window(void) {
+  return g_first_run && IsWindowVisible(g_first_run) ? g_first_run : nullptr;
+}
+
 void host_add_first_run(void* first_run_view) {
   g_first_run = Hwnd(first_run_view);
   ShowWindow(g_first_run, SW_HIDE);
