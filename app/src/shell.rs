@@ -222,7 +222,7 @@ pub use live_folders::{LiveAnswer, LiveItem, LiveList, LiveSource, PullState};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
 pub use menus::profile_goes_with;
-pub use menus::{MenuEntry, new_profile_name, profile_kept};
+pub use menus::{MakerMark, MenuEntry, new_profile_name, profile_kept};
 pub use onboarding::first_run_waiting;
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
@@ -594,6 +594,7 @@ use crate::tokens::shell::WINDOW_BUTTON_Y;
 use crate::tokens::shell::WINDOW_BUTTON_ZOOM;
 use crate::tokens::shell::WINDOWS_BUTTON_GLYPH;
 use crate::tokens::shell::WINDOWS_BUTTON_PLATE;
+use crate::tokens::shell::WINDOWS_CLOSE_GLYPH;
 use crate::tokens::shell::WINDOWS_CLOSE_HOVERED;
 use crate::tokens::text;
 
@@ -1589,6 +1590,9 @@ pub struct Shell {
     in_hint: bool,
     /// While the hint shows, what takes it away at the first key.
     hint_keys: Option<gpui::Subscription>,
+    /// When the window took the place of first run's grown card, while its content comes in
+    /// (`content_shown`).
+    content_since: Option<Instant>,
     /// The press under way was on a target that opens the command bar while it was open, so the
     /// click that follows only closes it.
     press_closed_bar: bool,
@@ -2257,6 +2261,7 @@ impl Shell {
             importing: None,
             in_hint: false,
             hint_keys: None,
+            content_since: None,
             press_closed_bar: false,
             bar_follows: false,
             edit_url_waits: None,
@@ -5101,6 +5106,14 @@ impl Render for Shell {
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         let empty_card = self.empty_card(cx);
+        let shown = self.content_shown();
+        // Drawn each frame while it comes in, and then never again.
+        if self.content_since.is_some() {
+            match shown < 1. {
+                true => window.request_animation_frame(),
+                false => self.content_since = None,
+            }
+        }
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5168,39 +5181,46 @@ impl Render for Shell {
                     }
                 }),
             )
-            .child(self.window_background())
-            .child(self.leave_listener(cx))
-            .child(self.ui_press_listener(cx))
-            // The page views go over the cards, as native views. A task the page area shows takes
-            // the card's place, the Space's page pushed out of the window (task_area.rs).
-            .when(normal, |shell| {
-                shell
-                    .children(self.cards())
-                    .children(self.little_bar(cx))
-                    .children(
-                        self.little
-                            .is_some()
-                            .then(|| self.question_card(cx))
-                            .flatten(),
-                    )
-                    .children(self.picture_element(cx))
-                    .children(empty_card)
-                    .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
-                    .children(self.pane_gaps(cx))
-                    .children(self.pane_handles(cx))
-            })
-            .children(task_area)
-            .children(self.side_panel(cx))
-            .children(under)
-            .children(sidebar)
-            .children(over)
-            .children(edge)
-            .children(own_buttons)
-            .child(self.scroll_listener(true, cx))
-            .child(self.navigate_listener(cx))
-            .children(self.reveal_edge(cx))
-            .children(self.resize_bands(cx))
-            .children(self.task_announcer())
+            // All it draws over its tint, which comes in after first run's grown card.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .when(shown < 1., |content| content.opacity(shown))
+                    .child(self.window_background())
+                    .child(self.leave_listener(cx))
+                    .child(self.ui_press_listener(cx))
+                    // The page views go over the cards, as native views. A task the page area shows takes
+                    // the card's place, the Space's page pushed out of the window (task_area.rs).
+                    .when(normal, |shell| {
+                        shell
+                            .children(self.cards())
+                            .children(self.little_bar(cx))
+                            .children(
+                                self.little
+                                    .is_some()
+                                    .then(|| self.question_card(cx))
+                                    .flatten(),
+                            )
+                            .children(self.picture_element(cx))
+                            .children(empty_card)
+                            .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
+                            .children(self.pane_gaps(cx))
+                            .children(self.pane_handles(cx))
+                    })
+                    .children(task_area)
+                    .children(self.side_panel(cx))
+                    .children(under)
+                    .children(sidebar)
+                    .children(over)
+                    .children(edge)
+                    .children(own_buttons)
+                    .child(self.scroll_listener(true, cx))
+                    .child(self.navigate_listener(cx))
+                    .children(self.reveal_edge(cx))
+                    .children(self.resize_bands(cx))
+                    .children(self.task_announcer()),
+            )
     }
 }
 
@@ -5812,24 +5832,15 @@ impl Shell {
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
                     .border(px(HAIRLINE))
-                    .border_color(gpui::black().opacity(REVEAL_BORDER))
+                    .border_color(rgba(REVEAL_BORDER))
                     .shadow(vec![BoxShadow {
-                        color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
+                        color: rgba(crate::tokens::shell::REVEAL_RIM).into(),
                         offset: point(px(0.), px(0.)),
                         blur_radius: px(0.),
                         spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
                         inset: true,
                     }])
-                    .bg(self.palette.underlay)
-                    .children(self.paged_weights().into_iter().map(|(space, weight)| {
-                        self.foot_glow(
-                            space,
-                            self.width(),
-                            f32::from(window.viewport_size().height) - 2. * REVEAL_INSET,
-                            REVEAL_RADIUS,
-                        )
-                        .opacity(weight)
-                    }))
+                    .bg(self.window_fill())
                     .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
@@ -5978,7 +5989,9 @@ impl Shell {
                             .size(px(WINDOWS_BUTTON_GLYPH))
                             .text_color(ink)
                             .when(close, |svg| {
-                                svg.group_hover(glyph, |style| style.text_color(gpui::white()))
+                                svg.group_hover(glyph, |style| {
+                                    style.text_color(rgb(WINDOWS_CLOSE_GLYPH))
+                                })
                             }),
                     )
             }))

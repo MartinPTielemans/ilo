@@ -50,14 +50,14 @@ impl Cli {
         Cli::ALL.into_iter().find(|cli| cli.id() == id)
     }
 
-    /// The effort levels its own program takes when ilo starts it, under the names its help gives
-    /// them, in order; none where it takes no effort setting (#4140). Claude Code's `--effort`
-    /// lists these; Codex's help names no effort option.
+    /// What it says of itself, which the UI reads (provider.rs). Every CLI has its row there.
+    pub fn caps(self) -> &'static super::provider::Caps {
+        super::provider::caps(self.id()).expect("every CLI is a provider")
+    }
+
+    /// The effort levels its own program takes when ilo starts it (provider.rs).
     pub fn efforts(self) -> &'static [&'static str] {
-        match self {
-            Cli::Claude => &["low", "medium", "high", "xhigh", "max"],
-            Cli::Codex => &[],
-        }
+        self.caps().efforts
     }
 
     /// What the user calls it, in text only: agents have no maker's logo or colour.

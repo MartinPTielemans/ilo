@@ -644,7 +644,8 @@ fn the_chrome_has_no_warm_grey_and_no_colour_but_amber() {
                 "the site colours are back"
             );
         } else if table != "[board]" && !line.starts_with('#') {
-            let lower = line.to_ascii_lowercase();
+            // A value's digits, without the underscores that group them, as `0xf3f0_e8eb`.
+            let lower = line.to_ascii_lowercase().replace('_', "");
             if warm.iter().any(|grey| lower.contains(grey)) || line.starts_with("status-agent") {
                 found.push(format!("{table} {line}"));
             }
@@ -655,4 +656,141 @@ fn the_chrome_has_no_warm_grey_and_no_colour_but_amber() {
         "warm greys or retired colours:\n{}",
         found.join("\n")
     );
+}
+
+/// The surfaces on the one look (#4402) take every colour and shadow from the tokens: none names
+/// white or black, fades a colour by a number of its own, or gives a shadow helper a number but
+/// nought. `look_literal` already finds hex colours and literal shadows across `app/src`.
+const ONE_LOOK: &[&str] = &[
+    "command_bar.rs",
+    "command_bar/choices.rs",
+    "tab_switcher.rs",
+    "settings.rs",
+    "settings_card.rs",
+    "settings_column.rs",
+    "settings_overview.rs",
+    "settings_pictures.rs",
+    "settings_rows.rs",
+    "settings_search.rs",
+    "settings_shortcuts.rs",
+    "menu.rs",
+    "tooltip.rs",
+    "hover_card.rs",
+    "site_controls.rs",
+    "toast.rs",
+    "zoom_hud.rs",
+    "find_bar.rs",
+    "link_preview.rs",
+    "shell.rs",
+    "shell/rows.rs",
+    "shell/sidebar.rs",
+    "shell/task_cards/card.rs",
+    "shell/task_cards/glyph.rs",
+    "dialog.rs",
+    "shell/conversation.rs",
+    "shell/themes.rs",
+    "theme_picker.rs",
+];
+
+#[test]
+fn the_one_looks_surfaces_name_no_colour_or_shadow_but_the_tokens() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for file in ONE_LOOK {
+        let text = fs::read_to_string(src.join(file)).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (n, line) in lines.iter().enumerate() {
+            if line.starts_with("#[cfg(test)]")
+                && lines
+                    .get(n + 1)
+                    .is_some_and(|l| l.starts_with("mod tests {"))
+            {
+                break;
+            }
+            let code = match line.trim_start().starts_with("//") {
+                true => "",
+                false => line.split(" //").next().unwrap(),
+            };
+            if let Some(literal) = surface_literal(code) {
+                found.push(format!("{file}:{}: {literal}", n + 1));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "these belong in design/tokens.toml:\n{}",
+        found.join("\n")
+    );
+}
+
+#[test]
+fn finds_white_black_a_numbers_fade_and_a_shadows_number() {
+    for code in [
+        ".text_color(gpui::white())",
+        "knob: white().into(),",
+        ".bg(Hsla::black())",
+        "accent.opacity(0.2),",
+        ".shadow(vec![shadow(ledge, 2., 0., 0.)])",
+        ".shadow(drop_shadow(HANDLE_SHADOW, 3., 10.))",
+    ] {
+        assert!(surface_literal(code).is_some(), "missed {code}");
+    }
+    for code in [
+        ".bg(palette.white)",
+        "panel.opacity(0.)",
+        "page.opacity(1.)",
+        "fill.opacity(PLATE)",
+        "unpainted.opacity(1. - pose.page)",
+        ".shadow(shadow(ledge, LEDGE_Y, 0., 0.))",
+        "fn shadow(color: Hsla, y: f32, blur: f32) -> BoxShadow {",
+    ] {
+        assert_eq!(surface_literal(code), None, "{code} names no colour");
+    }
+}
+
+/// The first white or black, fade by a number other than nought or one, or call of a shadow helper
+/// with a number other than nought in `code`.
+fn surface_literal(code: &str) -> Option<&str> {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let starts = |at: usize| !code[..at].ends_with(|c: char| word(c));
+    for name in ["white()", "black()"] {
+        if let Some((at, _)) = code.match_indices(name).find(|(at, _)| starts(*at)) {
+            return Some(&code[at..at + name.len()]);
+        }
+    }
+    let number = |arg: &str| {
+        let arg = arg.trim();
+        !arg.is_empty() && arg.chars().all(|c| c.is_ascii_digit() || "._".contains(c))
+    };
+    let call = |at: usize, open: usize| {
+        let close = open + code[open..].find(')').unwrap_or(code.len() - open);
+        (
+            &code[at..(close + 1).min(code.len())],
+            &code[open + 1..close],
+        )
+    };
+    for (at, _) in code.match_indices(".opacity(") {
+        let (whole, arg) = call(at + 1, at + ".opacity".len());
+        if number(arg)
+            && arg.trim_end_matches(['.', '0']) != ""
+            && arg.trim() != "1."
+            && arg.trim() != "1"
+        {
+            return Some(whole);
+        }
+    }
+    for (at, _) in code
+        .match_indices("shadow(")
+        .filter(|(at, _)| !code[..*at].ends_with("fn "))
+    {
+        let begin = code[..at].rfind(|c: char| !word(c)).map_or(0, |b| b + 1);
+        let (whole, args) = call(begin, at + "shadow".len());
+        if args
+            .split(',')
+            .any(|arg| number(arg) && arg.contains(|c: char| ('1'..='9').contains(&c)))
+        {
+            return Some(whole);
+        }
+    }
+    None
 }

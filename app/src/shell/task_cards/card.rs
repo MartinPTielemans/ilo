@@ -176,6 +176,7 @@ impl Shell {
         MarkInks {
             ink: Hsla::from(self.palette.ink),
             on_primary: self.on_primary(),
+            needs_you: Hsla::from(self.palette.needs_you),
         }
     }
 
@@ -495,7 +496,11 @@ impl Shell {
                     .truncate()
                     .text_size(px(text::SMALL))
                     .line_height(px(line))
-                    .text_color(text_2)
+                    // A waiting card's words are amber, as its mark is (#4402).
+                    .text_color(match form {
+                        Form::Waits => Hsla::from(self.palette.needs_you),
+                        _ => text_2,
+                    })
                     .child(match lead {
                         0 => StyledText::new(words),
                         lead => StyledText::new(words).with_highlights([(0..lead, led)]),

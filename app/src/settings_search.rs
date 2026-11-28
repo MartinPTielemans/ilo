@@ -14,7 +14,7 @@ use crate::shell;
 use crate::text_input::TextInput;
 use crate::tokens::settings::{
     BUTTONS_TOP, HEADING_BOTTOM, HEADING_TOP, PAGE_WIDTH, SEARCH_CLEAR, SEARCH_CLEAR_FILL,
-    SEARCH_CLEAR_GLYPH, SEARCH_HINT, TEXT_X,
+    SEARCH_CLEAR_GLYPH, SEARCH_CLEAR_INK, SEARCH_HINT, TEXT_X,
 };
 use crate::tokens::shell::PLATE_INSET;
 use crate::tokens::shell::library::{
@@ -261,7 +261,7 @@ pub fn field(
                 svg()
                     .path("icons/x.svg")
                     .size(px(SEARCH_CLEAR_GLYPH))
-                    .text_color(base.opacity(0.9)),
+                    .text_color(base.opacity(SEARCH_CLEAR_INK)),
             )
             .into_any_element(),
     };

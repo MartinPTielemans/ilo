@@ -265,7 +265,7 @@ impl Shell {
                 .pt(px(SAFE_START_PAD))
                 .rounded(px(PLATE_RADIUS))
                 .overflow_hidden()
-                .bg(self.window_fill_at(1.))
+                .bg(self.window_fill())
                 .child(
                     div()
                         .absolute()
