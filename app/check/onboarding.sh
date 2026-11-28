@@ -165,6 +165,33 @@ grep -q '^browser: window held for first run$' "$log" ||
   fail "light: the Mac left the browser's window on screen while first run showed"
 expect '^browser: window on screen after first run$' \
   "light: the browser's window didn't come on screen as first run ended"
+# On the Mac the exit grows the window, and the host logs each shape it gives the card's glass and
+# the last frame the UI had drawn as Core Animation committed it: the glass goes out with the next.
+# It reaches the screen with the frame that draws the card in its shape, or the one after, never
+# before it and never two late (exit item 3).
+if [ "$(uname)" = Darwin ]; then
+  expect '^browser: onboarding exit grows$' \
+    "light: the Mac's host didn't grow first run's window for its exit, so its glass can't be read"
+  last=$(sed -n 's/^browser: first run glass \(.*\) set at frame .*/\1/p' "$log" | tail -1)
+  expect "^browser: first run glass $last committed after frame " \
+    "light: the host didn't log the grow's last glass shape, $last, as committed"
+  lag=$(awk '
+    /^browser: onboarding exit (grows|fades)$/ { n = 0; split("", card); split("", went); next }
+    /^browser: onboarding card frame / { shape = $7 " " $8; if (!(shape in card)) card[shape] = $5 }
+    /^browser: first run glass .* committed after frame / { went[++n] = $5 " " $6 " " $10 + 1 }
+    END {
+      for (i = 1; i <= n; i++) {
+        split(went[i], g, " ")
+        shape = g[1] " " g[2]
+        if (!(shape in card)) continue
+        read++
+        if (g[3] < card[shape] || g[3] > card[shape] + 1)
+          printf "glass %s went out with frame %d, the card drew it at frame %d; ", shape, g[3], card[shape]
+      }
+      if (!read) printf "no glass shape of the grow matched a frame the card drew in it"
+    }' "$log")
+  [ -z "$lag" ] || fail "light: the grow's glass wasn't on the card's frame or the next: $lag"
+fi
 ! grep -q '^browser: onboarding sign in via ' "$log" || fail "light: Not Now at the Welcome signed in"
 expect '^browser: command new-tab via onboarding$' "light: the flow didn't end with the command bar"
 expect '^browser: command bar shown$' "light: the command bar didn't come up after the flow"

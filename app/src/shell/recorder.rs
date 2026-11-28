@@ -2173,7 +2173,7 @@ impl Browser for Recorder {
         self.record("first run ended".into())
     }
 
-    fn shape_first_run(&self, width: f32, height: f32, radius: f32) {
+    fn shape_first_run(&self, width: f32, height: f32, radius: f32, _frame: u64) {
         self.record(format!("first run shaped {width} {height} {radius}"))
     }
 

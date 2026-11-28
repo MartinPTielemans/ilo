@@ -331,6 +331,9 @@ pub(super) struct Onboarding {
     /// change: on the entry's frames, and once as it ends. The exit draws its card by it, a frame
     /// behind (`exit::behind`).
     shaped: Option<(f32, f32, f32)>,
+    /// How many frames the card has drawn, told to the host with each shape for the checks' log of
+    /// the glass's lag behind it.
+    drawn: u64,
     /// Whether the exit has drawn a frame of its grow, past the content's fade.
     growing: bool,
     /// Help › Welcome plays the card again, which keeps no step to resume at.
@@ -556,6 +559,7 @@ impl Shell {
             since: now,
             entry: Some(now),
             shaped: None,
+            drawn: 0,
             growing: false,
             replay,
             pressed: Vec::new(),
@@ -803,7 +807,13 @@ impl Shell {
                 // Asked here at the press, never from a draw, so a host that grows the window
                 // has a turn to before the grow's first frame; never with Reduce Motion.
                 if !still {
-                    onboarding.grows = Some(self.browser.grows_first_run());
+                    let grows = self.browser.grows_first_run();
+                    // check.sh reads it: the exit's frames are the grow's only when it grows.
+                    log!(
+                        "browser: onboarding exit {}",
+                        if grows { "grows" } else { "fades" }
+                    );
+                    onboarding.grows = Some(grows);
                 }
                 onboarding.grown_exit = onboarding.grown(still);
                 if !onboarding.replay {
@@ -1337,9 +1347,14 @@ impl Shell {
             let last = onboarding.grown(still).then(|| {
                 let plate = exit::frame(onboarding.exit_length(still), true, viewport).plate;
                 let (_, _, w, h, radius) = plate;
+                onboarding.drawn += 1;
                 if onboarding.shaped != Some((w, h, radius)) {
-                    self.browser.shape_first_run(w, h, radius);
+                    self.browser.shape_first_run(w, h, radius, onboarding.drawn);
                 }
+                log!(
+                    "browser: onboarding card frame {} drawn {w:.1} {h:.1}",
+                    onboarding.drawn
+                );
                 (plate, (w, h, radius))
             });
             let grown_exit = onboarding.grown_exit;
@@ -1509,8 +1524,9 @@ impl Shell {
         let growing =
             exiting.is_some_and(|at| at > crate::tokens::shell::onboarding::exit::CONTENT);
         let grow_starts = growing && !std::mem::replace(&mut onboarding.growing, growing);
+        onboarding.drawn += 1;
         if before != Some(shape) {
-            self.browser.shape_first_run(w, h, radius);
+            self.browser.shape_first_run(w, h, radius, onboarding.drawn);
         }
         // The glass is the system's and reaches the screen a frame after the card drawn with it,
         // so the exit draws the card in the shape its glass was given the frame before, and fill
@@ -1520,6 +1536,14 @@ impl Shell {
             (Some(_), Some(before)) if !grow_starts => exit::behind(before, viewport),
             _ => plate,
         };
+        // check.sh reads the exit's frames against the host's lines for its glass.
+        if exit.is_some() {
+            let (_, _, w, h, _) = plate;
+            log!(
+                "browser: onboarding card frame {} drawn {w:.1} {h:.1}",
+                onboarding.drawn
+            );
+        }
         if step == Step::Space {
             self.space_editor(light, window, cx);
         }

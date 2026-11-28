@@ -6488,6 +6488,8 @@ static NSImage* FirstRunMask(double radius) {
 // by it again, as the UI gives a shape only when it changes.
 static NSSize g_first_run_card;
 static double g_first_run_radius;
+// The last frame the UI said it drew the card in (host_set_first_run_frame), for the checks' log.
+static uint64_t g_first_run_drawn;
 
 // Keeps the glass and the shadow to the card as last shaped, centred in first run's window.
 static void PlaceFirstRunGlass() {
@@ -6496,6 +6498,19 @@ static void PlaceFirstRunGlass() {
   const NSRect card = NSMakeRect(round(NSMidX(bounds) - g_first_run_card.width / 2),
                                  round(NSMidY(bounds) - g_first_run_card.height / 2),
                                  g_first_run_card.width, g_first_run_card.height);
+  // Under the checks, each shape is logged as it's set and again once Core Animation has committed
+  // it, with the last frame the UI had drawn by then: the glass goes out with the UI's next, and
+  // onboarding.sh reads its lag behind the card from that (exit item 3). Nothing is logged in use.
+  const bool logged = Checked();
+  if (logged) {
+    fprintf(stderr, "browser: first run glass %.1f %.1f set at frame %llu\n", card.size.width,
+            card.size.height, (unsigned long long)g_first_run_drawn);
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+      fprintf(stderr, "browser: first run glass %.1f %.1f committed after frame %llu\n",
+              card.size.width, card.size.height, (unsigned long long)g_first_run_drawn);
+    }];
+  }
   // GPUI's glass fills the window; it's kept to the card, which the UI draws over it.
   for (NSView* view in content.subviews) {
     if ([view isKindOfClass:NSVisualEffectView.class]) {
@@ -6505,16 +6520,20 @@ static void PlaceFirstRunGlass() {
       glass.maskImage = FirstRunMask(g_first_run_radius);
     }
   }
+  if (logged) {
+    [CATransaction commit];
+  }
   // The shadow is the window's drawn shape, read once this frame is on screen.
   dispatch_async(dispatch_get_main_queue(), ^{
     [g_first_run invalidateShadow];
   });
 }
 
-void host_set_first_run_frame(double width, double height, double radius) {
+void host_set_first_run_frame(double width, double height, double radius, uint64_t frame) {
   if (!g_first_run) {
     return;
   }
+  g_first_run_drawn = frame;
   g_first_run_card = NSMakeSize(width, height);
   g_first_run_radius = radius;
   PlaceFirstRunGlass();
