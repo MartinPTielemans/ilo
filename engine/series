@@ -104,6 +104,8 @@ ours/chromium-core-history-traversal.patch
 ours/chromium-core-agent-no-permissions.patch
 ours/chromium-core-agent-no-http-warning.patch
 ours/chromium-core-held-page.patch
+ours/chromium-core-product-name-quit.patch
+ours/chromium-alert-helper-name.patch
 # mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch

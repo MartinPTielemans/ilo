@@ -1,0 +1,71 @@
+Lets the alert Chrome shows when the browser quits with downloads running name the browser by the
+app's name for it, as the warning before http does (g_browser_core_product_name,
+//browser_core/hooks.h), rather than "Quit Chromium anyway?" (#4474). Chromium writes its name into
+the string and each translation, so the app's name takes the place of Chromium's own,
+IDS_PRODUCT_NAME, wherever the text has it. With no name from the app, the text stays Chromium's.
+
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -33,7 +33,9 @@
+ #include "base/scoped_multi_source_observation.h"
+ #include "base/scoped_observation.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/sys_string_conversions.h"
++#include "browser_core/hooks.h"  // nogncheck
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/thread_pool.h"
+ #include "base/threading/scoped_blocking_call.h"
+@@ -1408,8 +1410,18 @@
+   // Dialog text: warning and explanation.
+   NSString* titleText = l10n_util::GetPluralNSStringF(
+       IDS_ABANDON_DOWNLOAD_DIALOG_TITLE, downloadCount);
+-  NSString* explanationText =
+-      l10n_util::GetNSString(IDS_ABANDON_DOWNLOAD_DIALOG_BROWSER_MESSAGE);
++  // browser_core: the browser by the app's name for it, where the text names
++  // Chromium (//browser_core/hooks.h).
++  std::u16string explanation =
++      l10n_util::GetStringUTF16(IDS_ABANDON_DOWNLOAD_DIALOG_BROWSER_MESSAGE);
++  const std::u16string product = g_browser_core_product_name
++                                     ? g_browser_core_product_name()
++                                     : std::u16string();
++  if (!product.empty()) {
++    base::ReplaceSubstringsAfterOffset(
++        &explanation, 0, l10n_util::GetStringUTF16(IDS_PRODUCT_NAME), product);
++  }
++  NSString* explanationText = base::SysUTF16ToNSString(explanation);
+ 
+   // "Cancel download and exit" button text.
+   NSString* exitTitle =
+--- a/chrome/browser/ui/views/download/download_in_progress_dialog_view.cc
++++ b/chrome/browser/ui/views/download/download_in_progress_dialog_view.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/views/download/download_in_progress_dialog_view.h"
+ 
++#include "base/strings/string_util.h"
++#include "browser_core/hooks.h"  // nogncheck
++
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+ #include "chrome/grit/branded_strings.h"
+ #include "chrome/grit/generated_resources.h"
+@@ -74,8 +77,18 @@
+       // as the original check, so it's never ok to close.
+       NOTREACHED();
+   }
++  // browser_core: the browser by the app's name for it, where the text names
++  // Chromium (//browser_core/hooks.h).
++  std::u16string message = l10n_util::GetStringUTF16(message_id);
++  const std::u16string product = g_browser_core_product_name
++                                     ? g_browser_core_product_name()
++                                     : std::u16string();
++  if (!product.empty()) {
++    base::ReplaceSubstringsAfterOffset(
++        &message, 0, l10n_util::GetStringUTF16(IDS_PRODUCT_NAME), product);
++  }
+   auto message_label = std::make_unique<views::Label>(
+-      l10n_util::GetStringUTF16(message_id),
++      message,
+       views::style::CONTEXT_DIALOG_BODY_TEXT, views::style::STYLE_SECONDARY);
+   message_label->SetMultiLine(true);
+   message_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);

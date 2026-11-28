@@ -282,6 +282,17 @@ for helper in "$framework"/Helpers/*" Helper ("*"Alerts).app"; do
   plutil -replace CFBundleIconFile -string "$name" "$helper_plist"
   plutil -replace CFBundleIconName -string "$name" "$helper_plist"
 done
+# macOS 14 names the alert helper by its file when it asks whether the app may notify (#4475), so
+# the one the engine starts, Aperitif's, takes the app's own name, its CFBundleName and " Alerts".
+# The key tells the engine (chromium-alert-helper-name.patch) to look for it by that name.
+aperitif=$(echo "$framework"/Helpers/*" Helper (Aperitif Alerts).app")
+if [ -d "$aperitif" ]; then
+  alerts="$shown Alerts"
+  mv "$aperitif/Contents/MacOS/$(basename "$aperitif" .app)" "$aperitif/Contents/MacOS/$alerts"
+  plutil -replace CFBundleExecutable -string "$alerts" "$aperitif/Contents/Info.plist"
+  mv "$aperitif" "$framework/Helpers/$alerts.app"
+  plutil -replace BrowserCoreAlertHelperNamed -bool YES "$plist"
+fi
 # Each helper is signed again, ad hoc, keeping the entitlements, flags and runtime the engine gave
 # it: an alert helper's signature seals the Info.plist rewritten above, and the engine's leaves the
 # GPU's Aperitif helper sealed with resources it hasn't got. Then the framework, whose signature
