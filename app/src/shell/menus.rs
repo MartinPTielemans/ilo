@@ -540,13 +540,13 @@ impl Shell {
         );
     }
 
-    /// The look of the window's menus: the Space's window's, dark or light, with its accent under
-    /// the row the pointer or the keys are on.
+    /// The look of the window's menus: the Space's window's, dark or light, and its accent, which
+    /// capture's markup marks what's chosen in.
     pub fn menu_look(&self) -> Look {
         let palette = self.palette_of(self.space);
         Look {
             light: palette.tone == Tone::Light,
-            highlight: Highlight::of(&palette),
+            accent: Highlight::of(&palette),
         }
     }
 
@@ -840,7 +840,13 @@ impl Shell {
                 let item = chosen.and_then(|at| items.into_iter().nth(at));
                 if let Some((_, name, action)) = item {
                     log!("browser: command {name} via tab menu");
-                    action(shell, cx)
+                    return action(shell, cx);
+                }
+                // Closed with no pick, the pointer still on the row rests for its card again, with
+                // no move, as none rested while the menu was up (#4108). A pick changed the row or
+                // is closing it, as Rename's field and Close Tab do, so it rests on the next move.
+                if shell.hovered == Some(row) {
+                    shell.hover_card(row, true, cx);
                 }
             }),
             cx,

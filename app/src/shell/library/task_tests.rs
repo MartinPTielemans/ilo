@@ -47,13 +47,16 @@ fn card() -> Card {
         replies: true,
         title: "Lisbon museum hours".into(),
         status: "Most open at 10".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot: Dot::Done,
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 

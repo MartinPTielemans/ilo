@@ -11,17 +11,31 @@ use gpui::{
     point, px,
 };
 
-use super::{Drawn, END_FADE, INTRO_END, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
+use super::{Drawn, END_FADE, OptIn, STEP_MOTION, STILL_FADE, Step};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
-use crate::tokens::shell::onboarding::{IMPORT_HOLD, SKIP_MARGIN};
+use crate::tokens::shell::onboarding::IMPORT_HOLD;
+use crate::tokens::shell::onboarding::loops::{
+    COLOR_AT, COLOR_SWIPE, DEFAULT_AT, DEFAULT_OPEN, FAVORITES_CAME, IMPORT_CAME, PERIOD,
+    WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
+};
+use crate::transparency::{self, Transparency};
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
 /// keyboard in the UI.
 fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    // The transparency step keeps its level where Settings does: here, a folder of the test's own.
+    let dir = std::env::temp_dir().join(format!(
+        "ilo-onboarding-{}-{}",
+        std::process::id(),
+        cx.test_function_name().unwrap_or("test")
+    ));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    cx.update(|cx| transparency::kept_in(dir.to_string_lossy().into_owned(), cx));
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
@@ -40,10 +54,27 @@ fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestConte
         );
         shell.set_space(1, cx);
         shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+        // Over no glass, as on Linux and Windows, so the flow's steps are the same on every OS;
+        // the transparency step's tests give it the Mac's.
+        shell.blurred = false;
     });
     cx.update(|window, cx| window.focus(&shell.focus_handle(cx), cx));
     cx.run_until_parked();
     (shell, cx, host)
+}
+
+/// A first window over glass, as the Mac's is, where the transparency step shows.
+fn glass_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    let (shell, cx, host) = first_window(cx);
+    shell.update(cx, |shell, _| shell.blurred = true);
+    (shell, cx, host)
+}
+
+/// The level the transparency step shows.
+fn level(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<Transparency> {
+    shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().map(|onboarding| onboarding.level)
+    })
 }
 
 /// The step the flow shows, if it shows.
@@ -62,10 +93,16 @@ fn started(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// Goes on with Esc to `to`, as the user skipping each step before it does.
+/// Goes on with Esc to `to`, as the user skipping each step before it does, from the welcome with
+/// Return, as its Esc skips the whole setup.
 fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
-    while step(shell, cx).is_some_and(|step| step != to) {
-        cx.simulate_keystrokes("escape");
+    // A flow that never comes to `to` fails rather than spins. Esc may take a few presses at a
+    // step, as the import's goes back inside it first, but never this many.
+    for _ in 0..32 {
+        let Some(at) = step(shell, cx).filter(|&step| step != to) else {
+            break;
+        };
+        cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
     }
     assert_eq!(step(shell, cx), Some(to));
 }
@@ -78,11 +115,40 @@ fn waited(cx: &mut VisualTestContext, seconds: f32) {
     cx.run_until_parked();
 }
 
+/// Clicks the step's Skip, in the corner or in the sheet's foot.
+fn click_skip(cx: &mut VisualTestContext) {
+    let skip = placed("skip", cx).expect("Skip is drawn");
+    cx.simulate_click(skip.center(), Modifiers::none());
+}
+
+/// Where the step shown draws `name` (Shell::place).
+fn placed(name: &str, cx: &mut VisualTestContext) -> Option<gpui::Bounds<gpui::Pixels>> {
+    cx.run_until_parked();
+    let shell = cx
+        .update(|window, _| window.root::<Shell>().flatten())
+        .expect("a shell");
+    shell.read_with(cx, |shell, _| {
+        let onboarding = shell.onboarding.as_ref()?;
+        onboarding.places.borrow().get(name).copied()
+    })
+}
+
+/// Whether the flow's last frame asked for another, once what it asked for has drawn.
+fn asks_for_frames(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().is_some_and(|o| o.drawing)
+    })
+}
+
 fn later(shell: &Entity<Shell>, cx: &mut VisualTestContext, seconds: f32) {
     shell.update(cx, |shell, cx| {
         let onboarding = shell.onboarding.as_mut().expect("the flow shows");
         let back = |at: Instant| at - Duration::from_secs_f32(seconds);
         onboarding.since = back(onboarding.since);
+        onboarding.loop_since = onboarding.loop_since.map(back);
         onboarding.ending = onboarding.ending.map(back);
         cx.notify();
     });
@@ -162,95 +228,171 @@ fn the_flow_takes_the_keyboard_as_it_shows(cx: &mut TestAppContext) {
     let taken = |calls: Vec<String>| calls.iter().filter(|call| *call == "focus ui").count();
     assert_eq!(taken(host.take()), 1, "the flow's first frame takes it");
     later(&shell, cx, 0.5);
-    cx.simulate_keystrokes("a");
+    cx.simulate_keystrokes("enter");
     later(&shell, cx, STEP_MOTION);
     assert_eq!(taken(host.take()), 0, "the frames and steps after leave it");
 }
 
-/// Any key skips the intro to the first step, and so does a click anywhere.
+/// The welcome waits for the user, however long: another key or a click on the window leaves it
+/// be, Return or Get Started goes on, and Esc or Skip Setup ends the flow there, as its last step
+/// does.
 #[gpui::test]
-fn any_key_or_click_skips_the_intro(cx: &mut TestAppContext) {
+fn the_welcome_waits_then_goes_on_or_skips_the_setup(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
+    later(&shell, cx, 3. * PERIOD);
     cx.simulate_keystrokes("a");
+    let corner = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0.origin);
+    cx.simulate_click(corner + point(px(4.), px(4.)), Modifiers::none());
+    assert_eq!(step(&shell, cx), Some(Step::Intro), "it waits");
+    cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::Import));
 
-    started(&shell, cx);
-    let middle = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0.center());
-    cx.simulate_click(middle, Modifiers::none());
-    assert_eq!(step(&shell, cx), Some(Step::Import));
+    for leave in ["escape", "skip"] {
+        started(&shell, cx);
+        match leave {
+            "escape" => cx.simulate_keystrokes("escape"),
+            _ => click_skip(cx),
+        }
+        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+        assert!(ending.is_some(), "{leave} ends the flow at the welcome");
+        later(&shell, cx, END_FADE);
+        assert_eq!(step(&shell, cx), None, "{leave}");
+    }
 }
 
-/// Left alone, the intro holds once it's drawn, then the first step comes.
+/// With the system's Reduce Motion, the welcome's wordmark is the still one, all there once its
+/// words have faded in, and its loop is its last frame, asking for none.
 #[gpui::test]
-fn the_intro_goes_on_by_itself(cx: &mut TestAppContext) {
-    let (shell, cx, _) = first_window(cx);
-    started(&shell, cx);
-    later(&shell, cx, INTRO_END - 0.5);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Intro),
-        "it holds after it's drawn"
-    );
-    later(&shell, cx, 0.5);
-    assert_eq!(step(&shell, cx), Some(Step::Import));
-}
-
-/// With the system's Reduce Motion, the intro is the still one, all there once its line has faded
-/// in, long before the drawn one's line comes, and goes on at its shorter end. Turned off while it
-/// shows, as the system says it changed, the intro holds until the full one's end.
-#[gpui::test]
-fn reduce_motion_gives_the_still_intro(cx: &mut TestAppContext) {
+fn reduce_motion_gives_the_still_welcome(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     cx.update(|_, cx| cx.set_reduce_motion(true));
     started(&shell, cx);
-    let settled = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        shell.read_with(cx, |shell, _| {
-            shell.onboarding.as_ref().is_some_and(|o| o.settled)
-        })
-    };
     later(&shell, cx, STILL_FADE);
+    let settled = shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().is_some_and(|o| o.settled)
+    });
     assert!(
-        settled(&shell, cx),
-        "the still intro is all there once its line fades in"
+        settled,
+        "the still welcome is all there once its words fade in"
     );
-    later(&shell, cx, STILL_END - STILL_FADE);
-    assert_eq!(step(&shell, cx), Some(Step::Import));
-
-    started(&shell, cx);
-    cx.update(|_, cx| cx.set_reduce_motion(false));
-    cx.run_until_parked();
-    later(&shell, cx, STILL_END);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Intro),
-        "it holds past the still one's end"
+    assert!(!shell.read_with(cx, |shell, _| shell.onboarding_looping()));
+    assert!(
+        !asks_for_frames(&shell, cx),
+        "a still welcome draws no more frames"
     );
-    later(&shell, cx, INTRO_END - STILL_END);
-    assert_eq!(step(&shell, cx), Some(Step::Import));
 }
 
-/// The timer the intro holds on can wake the window before the end by the flow's own clock, as
-/// Windows' did (#1026); the intro then waits out what's left, with nothing else drawing it.
+/// A step's loop plays only while its step shows: the next step's, going on or back, starts from
+/// its own beginning rather than where the one before was, and ending the flow ends them all.
 #[gpui::test]
-fn the_intro_goes_on_after_a_timer_that_wakes_it_early(cx: &mut TestAppContext) {
+fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    let looping = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.onboarding_looping())
+    };
+    // How long the loop shown has played.
+    let played = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let onboarding = shell.onboarding.as_ref()?;
+            (onboarding.loop_since).map(|at| onboarding.secs_since(at))
+        })
+    };
+    started(&shell, cx);
+    later(&shell, cx, 2. * PERIOD);
+    assert!(looping(&shell, cx), "the welcome's loop plays");
+    assert!(asks_for_frames(&shell, cx), "and draws");
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    later(&shell, cx, STEP_MOTION);
+    assert!(looping(&shell, cx), "the default browser's loop plays");
+    assert!(
+        played(&shell, cx).is_some_and(|played| played <= STEP_MOTION),
+        "from its own start as its step came, not the welcome's: {:?}",
+        played(&shell, cx)
+    );
+    skip_to(&shell, cx, Step::Color);
+    later(&shell, cx, 2. * STEP_MOTION);
+    click_back(cx);
+    later(&shell, cx, STEP_MOTION);
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert!(
+        played(&shell, cx).is_some_and(|played| played <= STEP_MOTION),
+        "Back starts the step's loop again, not the colour's: {:?}",
+        played(&shell, cx)
+    );
+
+    started(&shell, cx);
+    later(&shell, cx, 1.);
+    cx.simulate_keystrokes("escape");
+    later(&shell, cx, END_FADE);
+    assert_eq!(step(&shell, cx), None);
+    assert!(!asks_for_frames(&shell, cx), "an ended flow draws nothing");
+}
+
+/// Clicks the sheet's Back.
+fn click_back(cx: &mut VisualTestContext) {
+    let back = placed("back", cx).expect("Back is drawn");
+    cx.simulate_click(back.center(), Modifiers::none());
+}
+
+/// Back goes to the step before, which comes again; the welcome has none.
+#[gpui::test]
+fn back_goes_to_the_step_before(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
-    later(&shell, cx, INTRO_END - 0.5);
-    // The hold's timer is set for the half second left; the flow's clock falls half a second
-    // behind it, as a timer that ends early leaves it.
-    shell.update(cx, |shell, _| {
-        let onboarding = shell.onboarding.as_mut().expect("the flow shows");
-        onboarding.since += Duration::from_secs_f32(0.5);
-    });
-    cx.executor().advance_clock(Duration::from_secs_f32(0.75));
     cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
-    // What's left passes, and only the timer the woken frame set wakes the window.
-    cx.executor().advance_clock(Duration::from_secs_f32(0.5));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Import));
+    assert!(placed("back", cx).is_none(), "the welcome has no Back");
+    skip_to(&shell, cx, Step::Color);
+    later(&shell, cx, STEP_MOTION);
+    click_back(cx);
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    let backward = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().backward);
+    assert!(backward, "it comes from the left");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Color),
+        "and goes on again as before"
+    );
+}
+
+/// A colour picked shows on the window at once, as the theme picker's does; Continue keeps it, and
+/// Skip, Esc or Back take it off again with nothing kept.
+#[gpui::test]
+fn a_colour_picked_shows_at_once_and_goes_unless_kept(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    let shown = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            shell.theme_of(1).map(|theme| theme.main_color())
+        })
+    };
+    for leave in ["escape", "skip", "back", "enter"] {
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Color);
+        later(&shell, cx, STEP_MOTION);
+        host.take();
+        cx.simulate_keystrokes("right");
+        assert_eq!(
+            shown(&shell, cx),
+            Some(SWATCHES[0]),
+            "{leave}: shown at once"
+        );
+        assert!(
+            !host.take().iter().any(|call| call.contains("space color")),
+            "{leave}: nothing kept while it shows"
+        );
+        match leave {
+            "skip" => click_skip(cx),
+            "back" => click_back(cx),
+            key => cx.simulate_keystrokes(key),
+        }
+        let kept = host.take().iter().any(|call| call.contains("space color"));
+        assert_eq!(kept, leave == "enter", "{leave}");
+        if leave != "enter" {
+            assert_eq!(shown(&shell, cx), None, "{leave} takes it off");
+        }
+        shell.update(cx, |shell, _| shell.onboarding = None);
+    }
 }
 
 /// Esc skips each step in turn, and after the last the flow fades out from over the first
@@ -259,7 +401,7 @@ fn the_intro_goes_on_after_a_timer_that_wakes_it_early(cx: &mut TestAppContext) 
 fn escape_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
-    cx.simulate_keystrokes("a");
+    cx.simulate_keystrokes("enter");
     for next in [Step::DefaultBrowser, Step::Color] {
         later(&shell, cx, STEP_MOTION);
         cx.simulate_keystrokes("escape");
@@ -297,12 +439,7 @@ fn return_and_skip_go_on_from_a_step(cx: &mut TestAppContext) {
         match go_on {
             "return" => cx.simulate_keystrokes("enter"),
             _ => {
-                let viewport = shell.read_with(cx, |shell, _| shell.viewport);
-                let skip = point(px(SKIP_MARGIN + 30.), px(SKIP_MARGIN + 10.));
-                cx.simulate_click(
-                    point(viewport.width - skip.x, viewport.height - skip.y),
-                    Modifiers::none(),
-                );
+                click_skip(cx);
             }
         }
         if next.is_some() {
@@ -435,13 +572,14 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
         let dialogs = said.iter().filter(|(role, ..)| *role == Role::Dialog);
         dialogs.map(|(_, name, _)| name.clone()).collect::<Vec<_>>()
     };
-    assert_eq!(dialogs(&read(cx)), [env!("APP_NAME")], "the intro");
+    let welcome = concat!("Welcome to ", env!("APP_NAME"), ".");
+    assert_eq!(dialogs(&read(cx)), [welcome], "the welcome, by its title");
 
     skip_to(&shell, cx, Step::Color);
     let said = read(cx);
     assert_eq!(
         dialogs(&said),
-        ["Pick a colour for your first Space."],
+        ["Pick a color for your first Space."],
         "the step it went on to only, as the one before slides out"
     );
     let line = cx
@@ -465,7 +603,7 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     }
     assert!(
         said.iter()
-            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Colour")
+            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Color")
     );
     let colours = |said: &[(Role, String, Option<Toggled>)]| {
         let swatches = said.iter().filter(|(role, ..)| *role == Role::RadioButton);
@@ -719,12 +857,7 @@ fn skip_and_esc_leave_the_count_as_it_stands(cx: &mut TestAppContext) {
         match leave {
             "escape" => cx.simulate_keystrokes("escape"),
             _ => {
-                let viewport = shell.read_with(cx, |shell, _| shell.viewport);
-                let skip = point(px(SKIP_MARGIN + 30.), px(SKIP_MARGIN + 10.));
-                cx.simulate_click(
-                    point(viewport.width - skip.x, viewport.height - skip.y),
-                    Modifiers::none(),
-                );
+                click_skip(cx);
             }
         }
         let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
@@ -1025,7 +1158,7 @@ fn no_browser_found_leaves_the_import_out(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.no_browsers.set(true);
     started(&shell, cx);
-    cx.simulate_keystrokes("a");
+    cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
 }
 
@@ -1340,7 +1473,10 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(list.title, "Bring your stuff.");
     assert_eq!(
         list.line,
-        format!("From the browser you used. It all stays on {here}.")
+        format!(
+            "Spaces, pinned tabs, folders and favorites from the browser you used. It all \
+             stays on {here}."
+        )
     );
     assert_eq!(list.button.as_deref(), Some("Import from Arc"));
     assert_eq!(list.corner, Corner::Skip);
@@ -1638,11 +1774,14 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     started(&shell, cx);
     assert_eq!(
         keyed(cx),
-        Some((Role::Dialog, env!("APP_NAME").into())),
-        "the intro"
+        Some((Role::Button, "Get Started".into())),
+        "the welcome rests on its button, as a step with no choice does"
     );
 
     skip_to(&shell, cx, Step::DefaultBrowser);
+    // On the sheet, ⇥ from the step's button goes round to Back, then Skip.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
     cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     press("enter", cx);
@@ -1653,7 +1792,7 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     );
     assert_eq!(
         keyed(cx),
-        Some((Role::RadioGroup, "Colour".into())),
+        Some((Role::RadioGroup, "Color".into())),
         "the step it went on to has the keyboard"
     );
     cx.simulate_keystrokes("right");
@@ -1663,9 +1802,14 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
         Some((Role::RadioButton, first)),
         "→ picks the first, which it reads"
     );
+    // The sheet's foot, in its reading order: Back, Skip, then the step's button.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Continue".into())));
-    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("shift-tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     host.take();
     press("enter", cx);
@@ -1714,7 +1858,7 @@ fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
     );
     press("escape", cx);
     assert_eq!(step(&shell, cx), Some(Step::Color));
-    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Colour".into())));
+    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Color".into())));
     press("enter", cx);
     assert_eq!(
         step(&shell, cx),
@@ -1891,5 +2035,441 @@ fn a_screen_reader_reads_the_engines_as_one_choice(cx: &mut TestAppContext) {
             ("Bing", Some(Toggled::False)),
             ("Google", Some(Toggled::False)),
         ]
+    );
+}
+
+/// Over glass the transparency step comes right after the colour; over none it's left out, as
+/// there's nothing behind the window to show through.
+#[gpui::test]
+fn the_transparency_step_follows_the_colour_over_glass(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(step(&shell, cx), Some(Step::Transparency));
+}
+
+#[gpui::test]
+fn no_glass_leaves_the_transparency_step_out(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    let steps = shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().unwrap().steps.clone()
+    });
+    assert!(!steps.contains(&Step::Transparency), "{steps:?}");
+}
+
+/// The preview opens the flow at a step by its name or its number, and at the transparency step
+/// without glass too, so the step can be looked at on any host.
+#[gpui::test]
+fn the_preview_opens_the_flow_at_a_step_by_name_or_number(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    let at = |name: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.onboarding = None;
+            shell.onboarding_at(Some("dark"), name, cx);
+            shell.onboarding.as_ref().map(|onboarding| onboarding.step)
+        })
+    };
+    assert_eq!(at("6", cx), Some(Step::Color));
+    assert_eq!(at("transparency", cx), Some(Step::Transparency));
+    assert_eq!(at("7", cx), Some(Step::Transparency));
+}
+
+/// The keyboard rests on the picker, which shows Standard, and the arrows move the pick, stopping
+/// at either end.
+#[gpui::test]
+fn the_arrows_move_the_transparency_pick(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Transparency);
+    later(&shell, cx, STEP_MOTION);
+    let resting = cx.update(|window, cx| {
+        let first = shell
+            .read(cx)
+            .onboarding
+            .as_ref()
+            .unwrap()
+            .first_stop
+            .clone();
+        first.is_focused(window)
+    });
+    assert!(resting, "the keyboard rests on the picker");
+    assert_eq!(level(&shell, cx), Some(Transparency::Standard));
+    cx.simulate_keystrokes("left");
+    assert_eq!(
+        cx.update(|_, cx| transparency::level(cx)),
+        Transparency::Less,
+        "a pick applies at once, as Settings' does"
+    );
+    assert_eq!(level(&shell, cx), Some(Transparency::Less));
+    cx.simulate_keystrokes("left up");
+    assert_eq!(
+        level(&shell, cx),
+        Some(Transparency::Less),
+        "it stops at Less"
+    );
+    cx.simulate_keystrokes("right down down");
+    assert_eq!(level(&shell, cx), Some(Transparency::More), "and at More");
+    cx.simulate_keystrokes("up");
+    assert_eq!(level(&shell, cx), Some(Transparency::Standard));
+}
+
+/// ↩ goes on with the level shown, kept; Esc and Skip go on with Standard, keeping nothing new.
+/// Here it's the last step, so going on ends the flow.
+#[gpui::test]
+fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    for (go_on, kept) in [
+        ("enter", Transparency::More),
+        ("escape", Transparency::Standard),
+        ("skip", Transparency::Standard),
+    ] {
+        // A first run, at Standard.
+        cx.update(|_, cx| transparency::set(Transparency::Standard, cx));
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Transparency);
+        later(&shell, cx, STEP_MOTION);
+        cx.simulate_keystrokes("right");
+        match go_on {
+            "skip" => {
+                click_skip(cx);
+            }
+            key => cx.simulate_keystrokes(key),
+        }
+        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+        assert!(ending.is_some(), "{go_on} went on from the last step");
+        assert_eq!(level(&shell, cx), Some(kept), "{go_on}");
+        assert_eq!(cx.update(|_, cx| transparency::level(cx)), kept, "{go_on}");
+        later(&shell, cx, END_FADE);
+    }
+}
+
+/// While the step shows, and while it slides in or away, the shell draws nothing of its own under
+/// the flow, so the window's glass is the preview; the step before keeps it, and it comes back
+/// as the flow ends.
+#[gpui::test]
+fn the_window_is_bare_glass_at_the_transparency_step(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    let bare = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.onboarding_bare())
+    };
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    assert!(!bare(&shell, cx), "the colour step keeps the shell");
+    cx.simulate_keystrokes("escape");
+    assert!(bare(&shell, cx), "the transparency step is bare");
+    later(&shell, cx, STEP_MOTION);
+    assert!(bare(&shell, cx), "and stays bare once it's in");
+    cx.simulate_keystrokes("escape");
+    assert!(
+        !bare(&shell, cx),
+        "the shell comes back under the flow's fade"
+    );
+}
+
+/// Whether `part` is wholly inside `whole`.
+fn inside(part: gpui::Bounds<gpui::Pixels>, whole: gpui::Bounds<gpui::Pixels>) -> bool {
+    part.left() >= whole.left()
+        && part.right() <= whole.right()
+        && part.top() >= whole.top()
+        && part.bottom() <= whole.bottom()
+}
+
+/// Holds the step's loop `at` seconds in, and draws it.
+fn held_at(shell: &Entity<Shell>, cx: &mut VisualTestContext, at: f32) {
+    shell.update(cx, |shell, cx| shell.onboarding_hold_loop(Some(at), cx));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn the_welcomes_pointer_clicks_each_tab_in_its_window(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    // The second tab, the third, then the first again, each as the pointer clicks it.
+    for (start, row) in WELCOME_AT.into_iter().zip(["row-1", "row-2", "row-0"]) {
+        held_at(&shell, cx, start + WELCOME_MOVE + WELCOME_CLICK / 2.);
+        let window = placed("window", cx).expect("the loop's window is drawn");
+        let pointer = placed("pointer", cx).expect("the pointer is drawn");
+        let tab = placed(row, cx).expect("the tab is drawn");
+        assert!(
+            inside(pointer, window) && tab.contains(&pointer.origin),
+            "the pointer's tip clicks {row} inside the loop's window, but it was at {pointer:?} \
+             with the tab at {tab:?} in the window at {window:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn the_colors_swipe_moves_the_rows_inside_the_sidebar(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    held_at(&shell, cx, COLOR_AT[0] + COLOR_SWIPE / 2.);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let next = placed("next-space-row", cx).expect("the next Space's row is drawn");
+    assert!(
+        next.right() <= sidebar.right(),
+        "halfway through the swipe the next Space's row shows only in the sidebar, left of \
+         {:?}, never over the page, but it showed to {:?}",
+        sidebar.right(),
+        next.right()
+    );
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("next-space-row", cx).is_none_or(|row| row.size.width <= px(0.)),
+        "at rest the next Space's rows don't show"
+    );
+}
+
+#[gpui::test]
+fn each_loop_moves_within_a_second_of_its_start(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    held_at(&shell, cx, 0.);
+    let first = placed("pointer", cx).expect("the pointer is drawn");
+    held_at(&shell, cx, 1.);
+    let then = placed("pointer", cx).expect("the pointer is drawn");
+    assert_ne!(
+        first.origin, then.origin,
+        "the welcome's pointer moves in its first second"
+    );
+    skip_to(&shell, cx, Step::Color);
+    held_at(&shell, cx, 0.);
+    let first = placed("next-space-row", cx).map(|row| row.size.width);
+    held_at(&shell, cx, 1.);
+    let then = placed("next-space-row", cx).map(|row| row.size.width);
+    assert_ne!(first, then, "the color's rows swipe in its first second");
+}
+
+#[gpui::test]
+fn the_cards_welcome_waits_under_the_flow_and_comes_as_it_fades(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    waited(cx, 5.);
+    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        let now = cx.executor().now();
+        shell.read_with(cx, |shell, _| shell.card_opacity(now))
+    };
+    assert_eq!(
+        shown(&shell, cx),
+        0.,
+        "the card's welcome draws nothing under the flow, which the window shows through"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        shown(&shell, cx) > 0.,
+        "the card's welcome shows as the flow fades"
+    );
+}
+
+/// At the import on the sheet, Back goes back in its view where its state has somewhere to go back
+/// to, as Esc does: from a browser's choices to the list, keeping the step; from the list, to the
+/// step before.
+#[gpui::test]
+fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+    let drawn = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.drawn());
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(drawn(cx), Some("pick"), "↩ shows the browser's choices");
+    click_back(cx);
+    cx.run_until_parked();
+    assert_eq!(
+        drawn(cx),
+        Some("list"),
+        "Back in a browser's choices goes back to the list"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import), "keeping the step");
+    click_back(cx);
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Intro),
+        "Back at the list goes to the step before"
+    );
+}
+
+/// The import's loop lands the other browser's bookmarks and tabs in the small window's sidebar,
+/// the first within its first second and every one inside the sidebar, and its last frame, still,
+/// is what came.
+#[gpui::test]
+fn the_imports_loop_lands_each_in_the_sidebar(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, _) = importing_from(Rc::new(Browser::new(None)), cx);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tile-0", cx).is_none(),
+        "nothing has landed as the loop starts"
+    );
+    held_at(&shell, cx, 1.);
+    assert!(
+        placed("tile-0", cx).is_some(),
+        "the first favorite lands in the loop's first second"
+    );
+    held_at(&shell, cx, IMPORT_CAME);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for name in [
+        "tile-0", "tile-1", "tile-2", "tile-3", "tab-0", "tab-1", "tab-2", "tab-3",
+    ] {
+        let part = placed(name, cx).unwrap_or_else(|| panic!("{name} has landed by then"));
+        assert!(
+            inside(part, sidebar),
+            "{name} lands inside the sidebar at {sidebar:?}, but it was at {part:?}"
+        );
+    }
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("came", cx).is_some() && placed("tab-3", cx).is_some(),
+        "the still last frame is what came"
+    );
+}
+
+/// The favorites step, from an import whose history offers `offered`, each ticked.
+fn at_favorites<'a>(
+    offered: &[&str],
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    &'a mut VisualTestContext,
+    Entity<crate::import::ImportView>,
+) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Import);
+    let view = shell
+        .read_with(cx, |shell, _| {
+            shell.importing.as_ref().map(|i| i.view.clone())
+        })
+        .expect("the import view");
+    let offered = (offered.iter())
+        .map(|&url| crate::import::found::Tab {
+            url: url.into(),
+            name: String::new(),
+        })
+        .collect();
+    view.update(cx, |view, _| view.offer(offered));
+    view.update(cx, |_, cx| {
+        cx.emit(ImportEvent::Started);
+        cx.emit(ImportEvent::Placed);
+    });
+    waited(cx, IMPORT_HOLD);
+    assert_eq!(step(&shell, cx), Some(Step::Favorites));
+    later(&shell, cx, STEP_MOTION);
+    (shell, cx, view)
+}
+
+/// The favorites step is on the sheet: its tiles on the left, which a click on one unticks, and
+/// its foot's Back, Skip and button.
+#[gpui::test]
+fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
+    let (shell, cx, view) = at_favorites(&["https://example.com/", "https://example.org/"], cx);
+    assert!(
+        super::sheet::on_sheet(Step::Favorites),
+        "the favorites step shows on the sheet"
+    );
+    let drawn = |name: &str, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| view.drawn_place(name))
+    };
+    let tile = drawn("import-favorite example.com", cx).expect("the first site's tile is drawn");
+    cx.simulate_click(tile, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let ticked = shell.read_with(cx, |shell, cx| {
+        (shell.favorites_ticked(cx).into_iter())
+            .map(|tab| tab.url)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        ticked,
+        ["https://example.org/"],
+        "a click on a tile on the sheet unticks it"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+}
+
+/// The favorites' loop ticks the sites in turn but the last, each ticked landing in the small
+/// window's sidebar as a tile, the first within its first second and none outside the sidebar;
+/// the last never lands, and the still last frame is what came.
+#[gpui::test]
+fn the_favorites_loop_lands_each_ticked_site_in_the_sidebar(cx: &mut TestAppContext) {
+    let (shell, cx, _) = at_favorites(&["https://example.com/"], cx);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tile-0", cx).is_none(),
+        "nothing has landed as the loop starts"
+    );
+    held_at(&shell, cx, 1.);
+    assert!(
+        placed("tile-0", cx).is_some(),
+        "the first ticked site lands in the loop's first second"
+    );
+    held_at(&shell, cx, FAVORITES_CAME);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for name in ["tile-0", "tile-1", "tile-2"] {
+        let part = placed(name, cx).unwrap_or_else(|| panic!("{name} has landed by then"));
+        assert!(
+            inside(part, sidebar),
+            "{name} lands inside the sidebar at {sidebar:?}, but it was at {part:?}"
+        );
+    }
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("came", cx).is_some() && placed("tile-2", cx).is_some(),
+        "the still last frame is what came"
+    );
+    assert!(
+        placed("tile-3", cx).is_none(),
+        "the site left unticked never lands"
+    );
+}
+
+/// The default browser's step is on the sheet, its button in the foot, and its loop's pointer
+/// clicks the other app's link, which then opens in the small window's sidebar as a new tab, with
+/// its page; nothing has opened as the loop starts, and the still last frame is the link open.
+#[gpui::test]
+fn the_default_browsers_loop_opens_the_link_as_a_tab(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::IMPORT_LAND;
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::DefaultBrowser),
+        "the default browser's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tab-new", cx).is_none(),
+        "nothing has opened as the loop starts"
+    );
+    let press = DEFAULT_AT + WELCOME_MOVE + WELCOME_CLICK;
+    held_at(&shell, cx, press);
+    let pointer = placed("pointer", cx).expect("the pointer is drawn");
+    let link = placed("link", cx).expect("the link is drawn");
+    assert!(
+        link.contains(&pointer.origin),
+        "the pointer's tip clicks the link at {link:?}, but it was at {pointer:?}"
+    );
+    held_at(&shell, cx, press + DEFAULT_OPEN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tab = placed("tab-new", cx).expect("the link has opened as a tab");
+    assert!(
+        inside(tab, sidebar),
+        "the new tab lands inside the sidebar at {sidebar:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("tab-new", cx).is_some() && placed("page-new", cx).is_some(),
+        "the still last frame is the link open, its page shown"
     );
 }

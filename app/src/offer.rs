@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use crate::{
-    palette::{Palette, STATE_HOVERED, STATE_PRESSED},
+    palette::{Ground, Palette, STATE_HOVERED, STATE_PRESSED},
     settling::Settling,
     shell,
     text_input::{FieldMenu, TextInput},
@@ -384,15 +384,18 @@ impl OfferPrompt {
         cx.notify();
     }
 
-    /// Return saves, once an input method has committed what it was composing.
+    /// Return saves, unless it was an input method's, composing in the field (dismissal's rule).
     fn accept(&mut self, _: &Accept, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.input.read(cx).composing() {
+        if crate::dismissal::submits([&self.input.clone()], cx) {
             self.answer(Answer::Accept, cx);
         }
     }
 
+    /// Escape declines, unless it was an input method's, composing in the field.
     fn not_now(&mut self, _: &NotNow, _: &mut Window, cx: &mut Context<Self>) {
-        self.answer(Answer::NotNow, cx);
+        if crate::dismissal::Close::escape_from([&self.input.clone()], cx).is_some() {
+            self.answer(Answer::NotNow, cx);
+        }
     }
 
     /// Shows the page's usernames under the field, and puts the one chosen in it.
@@ -482,9 +485,14 @@ impl Render for OfferPrompt {
                     label,
                 )
             } else {
-                let hovered = palette.state(PLATE, STATE_HOVERED);
-                let pressed = palette.state(PLATE, STATE_PRESSED);
-                (palette.plate(PLATE), hovered, pressed, palette.text(TITLE))
+                let hovered = palette.ground_state(Ground::Offer, PLATE, STATE_HOVERED);
+                let pressed = palette.ground_state(Ground::Offer, PLATE, STATE_PRESSED);
+                (
+                    palette.ground_plate(Ground::Offer, PLATE),
+                    hovered,
+                    pressed,
+                    palette.text(TITLE),
+                )
             };
             div()
                 .id(id)
@@ -512,7 +520,7 @@ impl Render for OfferPrompt {
                 .items_center()
                 .pl(px(FIELD_X))
                 .rounded(px(PLATE_RADIUS))
-                .bg(palette.plate(PLATE))
+                .bg(palette.ground_plate(Ground::Offer, PLATE))
         };
         let chevron = div()
             .id("usernames")

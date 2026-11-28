@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use super::*;
+use crate::tokens::settings::{HEIGHT, WIDTH};
 use crate::tokens::shell::library::SEARCH_HEIGHT;
 
 /// The column alone, showing what it last picked.
@@ -55,20 +56,17 @@ fn shown(cx: &mut TestAppContext) -> (gpui::Entity<Shown>, &mut VisualTestContex
         picked: Rc::default(),
         foot: Rc::default(),
     });
-    cx.simulate_resize(size(px(820.), px(660.)));
+    cx.simulate_resize(size(px(WIDTH), px(HEIGHT)));
     cx.run_until_parked();
     (view, cx)
 }
 
-/// Where the middle of `section`'s plate is: the sections 2 apart from 12 under the search field,
-/// 48 down, their groups 12 apart.
+/// Where the middle of `section`'s plate is: the sections 2 apart under the search field, each
+/// group under its label.
 fn plate_y(section: Section) -> f32 {
-    let (mut y, mut first) = (COLUMN_TOP + SEARCH_HEIGHT + SEARCH_GAP, true);
+    let mut y = COLUMN_TOP + SEARCH_HEIGHT + SEARCH_GAP;
     for group in Section::GROUPS {
-        if !first {
-            y += SECTION_GROUP_GAP;
-        }
-        first = false;
+        y += LABEL_TOP + LABEL_LINE + LABEL_BOTTOM;
         for &each in group {
             if each == section {
                 return y + PLATE_HEIGHT / 2.;
@@ -79,7 +77,7 @@ fn plate_y(section: Section) -> f32 {
     unreachable!()
 }
 
-/// The thirteen sections run down the column in their three groups, and a click on each shows it.
+/// The fourteen sections run down the column in their three groups, and a click on each shows it.
 #[gpui::test]
 fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     let (view, cx) = shown(cx);
@@ -88,6 +86,7 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
         names,
         [
             "General",
+            "Appearance",
             "Tabs & Sidebar",
             "Features",
             "Agents",
@@ -118,7 +117,10 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     }
     // Each click picked once: none reached the ground, whose press moves the window, which the
     // test window can't.
-    assert_eq!(view.read_with(cx, |view, _| view.picked.borrow().len()), 13);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.picked.borrow().len()),
+        Section::all().count()
+    );
 }
 
 /// Chromium's settings sit at the column's foot, 8 up from the window's bottom, and a click there
@@ -126,14 +128,14 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_foot_opens_chromiums_settings(cx: &mut TestAppContext) {
     let (view, cx) = shown(cx);
-    let y = 660. - FOOT_BOTTOM - PLATE_HEIGHT / 2.;
+    let y = HEIGHT - FOOT_BOTTOM - PLATE_HEIGHT / 2.;
     cx.simulate_click(point(px(COLUMN / 2.), px(y)), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.foot.get()), 1);
     assert!(view.read_with(cx, |view, _| view.picked.borrow().is_empty()));
 }
 
-/// At Settings' 720 × 480 minimum the thirteen sections don't fit over the foot: they scroll above
+/// At Settings' 720 × 480 minimum the fourteen sections don't fit over the foot: they scroll above
 /// it, so the last, scrolled to, shows clear of the foot, and a click on the foot is the foot's.
 #[gpui::test]
 fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContext) {
@@ -352,7 +354,7 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    assert_eq!(stops.len(), 20, "{names:?}");
+    assert_eq!(stops.len(), 21, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a
@@ -717,4 +719,20 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
     assert_eq!(scroll(cx).0, 0., "↑ to General left it above the list");
     press("enter", cx);
     assert_eq!(view.read_with(cx, |view, _| view.shown), Section::General);
+}
+
+/// Each group of sections has its label, and Appearance is the Browser group's second, after
+/// General, as #4092 moves the look's rows out of General and Tabs & Sidebar into it.
+#[test]
+fn appearance_follows_general_under_browser() {
+    assert_eq!(Section::LABELS.len(), Section::GROUPS.len());
+    assert_eq!(Section::LABELS[0], "Browser");
+    assert_eq!(
+        Section::GROUPS[0][..2],
+        [Section::General, Section::Appearance]
+    );
+    assert_eq!(
+        Section::all().filter(|&s| s == Section::Appearance).count(),
+        1
+    );
 }

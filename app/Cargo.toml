@@ -111,6 +111,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Registry",
@@ -148,6 +149,11 @@ cc = "1"
 [dev-dependencies]
 # The tests draw the UI in GPUI's test windows, with no engine, and simulate the keys typed.
 gpui = { path = ".deps/zed/crates/gpui", features = ["test-support"] }
+
+# The Mac's text system, which GPUI's test windows don't have, for the test that a medium is a face
+# of its own there (src/face.rs).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_apple = { path = ".deps/zed/crates/gpui_apple", features = ["font-kit"] }
 
 # A fake of Flatpak's portal on a connection of its own, for the updater's tests.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

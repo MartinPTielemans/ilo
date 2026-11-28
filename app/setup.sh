@@ -22,8 +22,9 @@ ZED_URL=https://github.com/zed-industries/zed
 # with Vulkan alone on Linux, builds each pipeline once for all windows, the first time one draws
 # with it, resizes a canvas under WebGL without waiting on the GPU, which WebGL can't, and lets a
 # browser's WebGPU canvas be see-through. gpui_apple's, like the other renderers', starts a
-# window's atlases small, and it and gpui_macos's say on stderr, a line at most every few seconds,
-# when a frame doesn't reach the screen (#3270).
+# window's atlases small, it and gpui_macos's say on stderr, a line at most every few seconds,
+# when a frame doesn't reach the screen (#3270), and it gives a text in medium the face's medium,
+# which its match read as heavier and passed over for the regular.
 PATCHES="gpui-macos-embedded.patch gpui-windows-embedded.patch gpui-linux-embedded.patch \
   gpui-scale.patch gpui-wgpu.patch gpui-apple-atlas.patch"
 mkdir -p .deps
