@@ -273,7 +273,8 @@ show_space() {
 }
 # Shows the Space named $1, whose id is $2, from the Space button's menu, which lists every Space by
 # name before New Space…. The button's mark slides once the rows have settled and the app then logs
-# it, so nothing that clicks or captures the button waits for less (#4400).
+# it, so nothing that clicks or captures the button waits for less (#4400). With $3 it doesn't
+# wait for that, for a click sent while the page still slides in.
 choose_space() {
   post click "$(space_button)"
   expect "^browser: menu shown \(.*, \)\{0,1\}$1\( (checked)\)\{0,1\}, \(.*, \)\{0,1\}$(cased 'New Space…')" \
@@ -284,7 +285,8 @@ choose_space() {
   # The menu shows the shortcut too, and a row chosen runs the one command.
   [ "$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: command ')" = 1 ] ||
     fail "$1 in the Space button's menu ran more than one command"
-  expect '^browser: space button settled$' "the Space button's mark didn't settle after showing $1"
+  [ -n "${3:-}" ] ||
+    expect '^browser: space button settled$' "the Space button's mark didn't settle after showing $1"
 }
 send click $page_point
 show_space "key 1 ctrl" select-space page "$first" "$a"
@@ -537,7 +539,7 @@ expect "^browser: dragged $c to space $second today\$" "a row let go in the next
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the drag to the next Space"
 expect "^browser: today $b\$" "⌘Z didn't take the dragged tab back: \"$(today)\""
-choose_space "$first_name" "$first"
+choose_space "$first_name" "$first" sliding
 expect_tabs "$c $a" "$a" "after ⌘Z put the dragged tab back"
 # Sent while the Space's page still slides in, the click acts on the row that rests under it.
 send click "$(row 0)"
@@ -712,10 +714,11 @@ EOF
 [ -n "$bh" ] || fail "the Library's column said nothing of where it drew the Spaces button"
 send click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
-spaces_wide=$(($(token shell.library column-width) + $(token shell.library spaces-left) +
+spaces_full=$(($(token shell.library column-width) + $(token shell.library spaces-left) +
   2 * $(token shell.library card-width) + $(token shell.library card-gap) +
   $(token shell.library plus-gap) + $(token shell.library plus-size) +
   $(token shell.library plus-after)))
+spaces_wide=$spaces_full
 page_least=$((${content%x*} - $(token shell.library spaces-page)))
 [ $spaces_wide -gt $page_least ] && spaces_wide=$page_least
 expect "^browser: library spaces 2 wide $spaces_wide\$" \
@@ -723,41 +726,62 @@ expect "^browser: library spaces 2 wide $spaces_wide\$" \
 expect "^browser: library resized $spaces_wide\$" "the Library didn't settle at its Spaces' width"
 ../tools/window-screenshot.sh "$pid" "$out/library-spaces.png" || fail "no window to capture"
 # At rest a card's field is its icon and name alone; its plate, the slot's dashes and the brush
-# come with the pointer on the field, here the second card's, 25 down its 48 from the top, and go
-# with the pointer on the card below the field. The capture above is at rest, the pointer on the
-# Spaces button.
+# come with the pointer on the field, here the second card's, at the middle of where the Library
+# says it drew it, and go with the pointer on the card below the field. The capture above is at
+# rest, the pointer on the Spaces button.
 grep -q "^browser: library field $second at rest drawn\$" "$log" ||
   fail "the second card's field wasn't drawn at rest"
-send move $((404 + 120)) $((48 + 25))
+# Where the Library says it drew part $1 of Space $2's card: its middle in part_x and part_y, and
+# its box in part_left, part_top, part_w and part_h. The lib tests hold where the layout puts each.
+part_at() {
+  read -r part_left part_top part_w part_h << EOF
+$(grep "^browser: library $1 $2 at [0-9]" "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+  [ -n "$part_h" ] || fail "the Library said nothing of where it drew Space $2's card's $1"
+  part_x=$((part_left + part_w / 2))
+  part_y=$((part_top + part_h / 2))
+}
+part_at card "$first"
+first_left=$part_left first_x=$part_x first_w=$part_w
+part_at card "$second"
+second_left=$part_left second_x=$part_x second_w=$part_w
+# Below the field, halfway down the second card.
+off_field="$second_x $((${content#*x} / 2))"
+part_at field "$second"
+send move $part_x $part_y
 expect "^browser: library field $second shown drawn\$" "the pointer on the second card's field didn't show its plate"
 ../tools/window-screenshot.sh "$pid" "$out/library-field-hover.png" || fail "no window to capture"
-send move 524 $((${content#*x} / 2))
+send move $off_field
 expect "^browser: library field $second at rest drawn\$" "the pointer leaving the second card's field left its plate"
-# The brush, 4 in from the field's end and 28 wide, and the icon's slot, 6 in and 24 wide, are on
-# the field, and light it too (#1074).
-card_y=$((48 + 25))
-brush_x=$((404 + 240 - 8 - 4 - 14))
-slot_x=$((404 + 8 + 6 + 12))
-send move $brush_x $card_y
+# The brush at the field's end and the icon's slot at its start are on the field, and light it
+# too (#1074).
+part_at brush "$second"
+brush_point="$part_x $part_y"
+part_at slot "$second"
+slot_point="$part_x $part_y"
+part_at slot "$first"
+first_slot_point="$part_x $part_y"
+send move $brush_point
 expect "^browser: library field $second shown drawn\$" "the pointer on the second card's brush didn't light its field"
-send move 524 $((${content#*x} / 2))
+send move $off_field
 expect "^browser: library field $second at rest drawn\$" "the pointer leaving the second card's brush left its plate"
-send move $slot_x $card_y
+send move $slot_point
 expect "^browser: library field $second shown drawn\$" "the pointer on the second card's icon slot didn't light its field"
-send move 524 $((${content#*x} / 2))
+send move $off_field
 expect "^browser: library field $second at rest drawn\$" "the pointer leaving the second card's icon slot left its plate"
-# A right-click on the second card, 404 in and half its 240 wide, shows that Space's menu, with
-# the colour it was given, and leaves the Library open on the Space shown.
-post rightclick 524 $((${content#*x} / 2))
+# A right-click on the second card, below its field, shows that Space's menu, with the colour it
+# was given, and leaves the Library open on the Space shown.
+post rightclick $off_field
 card_menu="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
 expect "$card_menu" "a right-click on the second Space's card didn't show its menu"
 none_since '^browser: library space ' || fail "a right-click on a card showed its Space"
 send dismiss
-# The ••• at the second card's foot, its middle 22 in from the card's right and 21.5 above its foot,
-# shows with the pointer on the card, here on the ••• itself, which the capture shows before the
-# menu covers it. It shows the same menu and leaves the Library open on the Space shown (#1401).
-more_point="$((404 + 240 - 22)) $((${content#*x} - 48 - 22))"
+# The ••• at the second card's foot shows with the pointer on the card, here on the ••• itself,
+# which the capture shows before the menu covers it. It shows the same menu and leaves the Library
+# open on the Space shown (#1401).
+part_at more "$second"
+more_point="$part_x $part_y"
 send move $more_point
 ../tools/window-screenshot.sh "$pid" "$out/library-card-more.png" || fail "no window to capture"
 post click $more_point
@@ -771,7 +795,7 @@ send dismiss
 # the window only the look of the Space it shows, the first. $1 is the appearance, its segment at
 # the panel's head. With open as $2 the panel stays open.
 appear() {
-  send click $brush_x $card_y
+  send click $brush_point
   expect "^browser: theme picker for $second\$" "the second card's brush didn't open the theme picker"
   expect '^browser: theme picker drawn$' "the brush's theme picker didn't draw itself on screen"
   none_since '^browser: library hidden$' || fail "the brush's theme picker closed the Library"
@@ -790,7 +814,7 @@ appear() {
 # keyboard, leaving the Library open and the Space where it was, and escape puts the name back.
 # $1 is the capture's name.
 rename_card() {
-  send click $((404 + 8 + 6 + 24 + 6 + 20)) $card_y
+  send click $name_point
   expect "^browser: rename space $second in library\$" "a click on the card's name didn't edit it"
   none_since '^browser: library space ' || fail "a click on a card's name showed its Space"
   none_since '^browser: library hidden$' || fail "a click on a card's name closed the Library"
@@ -801,6 +825,8 @@ rename_card() {
   none_since '^browser: renamed space ' || fail "escape in a card's name renamed the Space"
   none_since '^browser: library hidden$' || fail "escape in a card's name closed the Library"
 }
+part_at name "$second"
+name_point="$part_x $part_y"
 appear light
 appear dark open
 # Escape, and the brush straight after it, as the picker fades out: it shows again and stays, and
@@ -810,35 +836,36 @@ appear light
 rename_card library-rename.png
 appear automatic
 # The second card's slot hangs the icon picker from itself over the Library, which stays open,
-# and a click on the first card's slot, 264 to the left, moves the picker there. Escape closes the
+# and a click on the first card's slot moves the picker there. Escape closes the
 # picker, and then the Library.
-send click $slot_x $card_y
+send click $slot_point
 expect "^browser: icon picker for $second on " "the second card's icon slot didn't open the icon picker"
 none_since '^browser: library hidden$' || fail "the card's icon picker closed the Library"
 ../tools/window-screenshot.sh "$pid" "$out/library-icon-picker.png" || fail "no window to capture"
-send click $((slot_x - 264)) $card_y
+send click $first_slot_point
 expect "^browser: icon picker for $first on " "a click on the first card's slot didn't move the icon picker"
 none_since '^browser: library hidden$' || fail "moving the icon picker closed the Library"
 send key escape
 expect '^browser: icon picker hidden$' "escape didn't close the card's icon picker"
 none_since '^browser: library hidden$' || fail "escape in the card's icon picker closed the Library"
-# The second card's handle, at its foot 22 in from its left and 22 above it, drags it along the
-# cards: its middle taken left of the first card's middle, with the pointer a card's width over
-# the first card's handle, it goes first, the Library staying open with the Space shown where it
-# was, and ⌘Z puts it back. Held there, the card itself follows the pointer along the row and the
-# first springs one cell right, making room; the recording has the card settling into the open
-# slot as it's let go (#1580, #4452). It starts after the still, which would end it (#2026).
-handle_point="$((404 + 22)) $((${content#*x} - 48 - 22))"
-handle_x=${handle_point% *}
-handle_y=${handle_point#* }
+# The second card's handle, at its foot on its left, drags it along the cards: its middle taken
+# left of the first card's middle, with the pointer a card's width over the first card's handle, it
+# goes first, the Library staying open with the Space shown where it was, and ⌘Z puts it back.
+# Held there, the card itself follows the pointer along the row and the first springs one cell
+# right, making room; the recording has the card settling into the open slot as it's let go
+# (#1580, #4452). It starts after the still, which would end it (#2026).
+part_at handle "$second"
+handle_point="$part_x $part_y"
+handle_y=$part_y
+over_first=$((part_x - 264 - 20))
 send move $handle_point
 send press $handle_point
-send dragto 420 $handle_y
+send dragto $((part_x - 6)) $handle_y
 expect "^browser: drag space $second\$" "the second card's handle didn't drag the card"
-send dragto $((handle_x - 264 - 20)) $handle_y
+send dragto $over_first $handle_y
 ../tools/window-screenshot.sh "$pid" "$out/library-space-drag.png" || fail "no window to capture"
 record library-space-drag 3
-send release $((handle_x - 264 - 20)) $handle_y
+send release $over_first $handle_y
 expect "^browser: dropped space $second after 0\$" "the second card let go over the first didn't move its Space"
 expect "^browser: spaces $second $first\$" "the second Space didn't go first"
 recorded
@@ -852,22 +879,28 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the cards back in th
 # one before that is the drop's (#2026, #4059, #4067).
 expect_after '^browser: spaces settled$' "the cards didn't settle after ⌘Z put the Spaces back" \
   "^browser: spaces $first $second\$"
-send move $((handle_x - 264)) $handle_y
-send drag $((handle_x - 264)) $handle_y 600 $handle_y
+part_at handle "$first"
+second_half=$((second_left + second_w * 3 / 4))
+send move $part_x $handle_y
+send drag $part_x $handle_y $second_half $handle_y
 expect "^browser: dropped space $first after $second\$" "the first card's handle flicked past the second card didn't move its Space"
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"
 send key z cmd
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back after the flick"
-# In a window 700 wide the two cards, 744 across, don't fit: the section leaves the page 56, 644,
-# and its cards scroll across under two fingers, give past their last and spring back to it once
-# let go, 100 along, the Library staying open (Arc 1.171, #1401).
+# In a window 700 wide the two cards don't fit: the section leaves the page its spaces-page, and
+# its cards scroll across under two fingers, give past their last and spring back to it once let
+# go, as far along as they're wider than the section, the Library staying open (Arc 1.171,
+# #1401). The fingers go 100 past that, 20 a move.
 if [ -n "$fingers" ]; then
+  cards_room=$((spaces_full - (700 - $(token shell.library spaces-page))))
+  [ $cards_room -gt 0 ] || fail "two cards, $spaces_full across, fit a window 700 wide, so nothing scrolls"
   send resize 700 ${content#*x}
   expect "^browser: drawn at 700x${content#*x}\$" "the window didn't draw 700 wide"
   record library-cards 3
-  send swipe 500 $((${content#*x} / 2)) -20 0 10
+  send swipe 500 $((${content#*x} / 2)) -20 0 $(((cards_room + 100) / 20))
   expect '^browser: swipe cards$' "two fingers over the cards that don't fit didn't scroll them"
-  expect '^browser: library cards at 100$' "the cards let go past their last didn't spring back to it"
+  expect "^browser: library cards at $cards_room\$" \
+    "the cards let go past their last didn't spring back to it, $cards_room along"
   recorded
   none_since '^browser: library hidden$' || fail "two fingers over the cards closed the Library"
   ../tools/window-screenshot.sh "$pid" "$out/library-cards.png" || fail "no window to capture"
@@ -1663,8 +1696,14 @@ expect '^browser: today $' "⌘Z brought back the tab ⇧⌘T had reopened: Toda
 expect '^browser: space button settled$' "the Space button's mark didn't settle after ⌘Z brought the Space back"
 # Each window keeps its own ⌘Z: with a Space deleted in this window and the archive cleared in a
 # second one, the second window's ⌘Z brings back the archive and not the Space, and this one's the
-# Space and not the archive.
-open_from_bar "http://localhost:$port/two.html"
+# Space and not the archive. The Space ⌘Z brought back shows no page, so ⌘T gives the field it rests
+# on the keyboard, where it opened the command bar before (#4140).
+resting_key t "Space ⌘Z brought back"
+expect '^browser: command new-tab via ui$' "⌘T in the Space ⌘Z brought back didn't reach the UI"
+send type "http://localhost:$port/two.html"
+send key return
+expect '^browser: today [0-9][0-9]*$' "the tab for two.html didn't open in the Space ⌘Z brought back"
+expect "^browser: loaded $(today) http://localhost:$port/two.html\$" "two.html didn't load in its tab"
 send key w cmd
 expect '^browser: today $' "⌘W didn't take the tab out of Today: Today is \"$(today)\""
 expect '^browser: archive [1-9][0-9]* tabs$' "⌘W didn't archive the tab"
@@ -1715,14 +1754,14 @@ card_drag() {
   send dragto $2 124
   send release $2 124
 }
-card_drag 260 524
+card_drag $first_x $second_x
 expect "^browser: library dragged [0-9]* to space $second\$" \
   "the first card's tab dragged onto the second's didn't go to its Space"
 carded=$(grep '^browser: library dragged ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: today $carded\$" "the tab dragged onto the second card isn't its Space's Today: \"$(today)\""
 none_since '^browser: library hidden$' || fail "the drag onto the second card closed the Library"
 ../tools/window-screenshot.sh "$pid" "$out/library-card-drag.png" || fail "no window to capture"
-card_drag 524 260
+card_drag $second_x $first_x
 expect "^browser: library dragged $carded to space $first\$" \
   "the tab dragged back from the second card didn't go back to the first Space"
 expect '^browser: today $' "the tab dragged back left the second Space's Today \"$(today)\""

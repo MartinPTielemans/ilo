@@ -298,10 +298,7 @@ fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
 /// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
 /// and the start checks it again.
 fn granted(picked: &std::path::Path) -> Option<Granted> {
-    let never = Never::here(None);
-    let root = task_files::resolved(picked);
-    let root = root.filter(|root| !task_files::never_grantable(root, &never))?;
-    Granted::picked(root).ok()
+    task_files::grant(picked, &Never::here(None))
 }
 
 /// The selected row's plate, the keyboard's, and its kind's ink, text-2, each the ink at its tone's.
@@ -326,10 +323,8 @@ pub const EFFORT_DEFAULT: &str = "Default";
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
 
-/// The widest the chip before the input grows, as a page's title can be long, and its favicon's
-/// size, as the chip's text is the rows' body size.
+/// The widest the chip before the input grows.
 const CHIP_MAX: f32 = 180.;
-const CHIP_FAVICON: f32 = 12.;
 /// The tile after a row's end, as Switch to Tab's: its margin from the row's end, and its glyph's
 /// box.
 const END_TILE_RIGHT: f32 = 3.;
@@ -342,10 +337,9 @@ fn bare_end() -> f32 {
     END_TILE_RIGHT + (ICON_BOX - END_GLYPH) / 2.
 }
 
-/// A task ⇥ is making of what's typed: the page that goes with it, as its address and title, which
-/// ⌫ at the field's start takes off.
+/// A task ⇥ is making of what's typed. No page of the user's goes with it: a thread never gets
+/// the tab the user is on.
 struct Ask {
-    page: Option<(SharedString, SharedString)>,
     /// The level the thread starts at: what the composer last started one with in the profile,
     /// or the user's pick on its level menu. Only these set it.
     tier: Tier,
@@ -670,18 +664,14 @@ pub trait Host {
     /// learns again which agents are ready, in the background, which `agents_changed` then gives
     /// the page's bar.
     fn look_for_agents(&self, cx: &mut App);
-    /// The page the user is on, if it's a web page: its address and title, all of it that goes
-    /// with an ask, as the agent never gets the user's tab.
-    fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
-    /// Starts `asked` as a task on the agent `agent`, with `page` and the files and folder the
-    /// user added on the plus, from the Space the bar shows over, and hides the bar by folding it
+    /// Starts `asked` as a task on the agent `agent`, with the files and folder the user added on
+    /// the plus, from the Space the bar shows over, and hides the bar by folding it
     /// into the ask's slot, which its card takes, or where the window shows no slot, as `hide`
     /// does.
     fn run_task(
         &self,
         agent: &str,
         asked: &str,
-        page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
@@ -1487,13 +1477,8 @@ pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
         .ok();
 }
 
-/// A chip before the input: a mode's or a page's, with the page's favicon, in `fill`.
-fn mode_chip(
-    fill: impl Into<gpui::Fill>,
-    label: Hsla,
-    favicon: Option<AnyElement>,
-    name: SharedString,
-) -> gpui::Div {
+/// A chip before the input: a mode's, in `fill`.
+fn mode_chip(fill: impl Into<gpui::Fill>, label: Hsla, name: SharedString) -> gpui::Div {
     div()
         .flex_none()
         .max_w(px(CHIP_MAX))
@@ -1506,7 +1491,6 @@ fn mode_chip(
         .bg(fill)
         .text_color(label)
         .text_size(px(text::BODY))
-        .children(favicon)
         .child(div().min_w_0().truncate().child(name))
 }
 
@@ -2255,16 +2239,10 @@ impl CommandBar {
     }
 
     /// ⌫, ⌘⌫ or ⌥⌫ with the caret at the start of a site search's input, or the commands-only
-    /// list's, leaves it. In an ask it takes the page's chip off first, then leaves.
+    /// list's, or an ask's, leaves it.
     fn leave_at_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).selection() != (0..0) {
             return;
-        }
-        if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
-            log!("browser: command bar ask without its page");
-            ask.page = None;
-            cx.notify();
-            return cx.stop_propagation();
         }
         if self.leave_site(window, cx)
             || self.leave_commands(window, cx)
@@ -2313,28 +2291,15 @@ impl CommandBar {
         }
     }
 
-    /// ⇥: what's typed becomes a thread's, with the page the user is on as a chip before it, and
-    /// the rows give way to the composer's choices, which open as it last started a thread in the
+    /// ⇥: what's typed becomes a thread's, and the rows give way to the composer's choices, which open as it last started a thread in the
     /// profile.
     fn enter_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // check.sh reads this line.
         log!("browser: command bar asks an agent");
         let typed = self.typed(cx);
-        // At rest the Space shows no page to ask over.
-        let page = match self.surface {
-            Surface::Window => self.host.task_page(cx),
-            Surface::InPlace => None,
-        };
-        if let Some((url, _)) = &page
-            && !self.favicons.contains_key(url.as_ref())
-        {
-            self.favicons.insert(url.to_string(), None);
-            self.host.page_favicon(url);
-        }
         let last = self.host.composer_last(cx);
         let picked = Picked::default();
         self.ask = Some(Ask {
-            page,
             tier: last.tier,
             model: last.model,
             effort: last.effort,
@@ -2433,8 +2398,7 @@ impl CommandBar {
     /// the level and on the model its menus hold. Nothing with no words or no assistant ready.
     fn run_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = self.ask.as_ref() else { return };
-        let (page, tier, effort, files) =
-            (ask.page.clone(), ask.tier, ask.effort, ask.picked.clone());
+        let (tier, effort, files) = (ask.tier, ask.effort, ask.picked.clone());
         let asked = self.input.read(cx).text().trim().to_string();
         if asked.is_empty() {
             return;
@@ -2457,7 +2421,7 @@ impl CommandBar {
         if self.surface == Surface::Window {
             return self
                 .host
-                .run_task(&id, &asked, page, tier, model, effort, files, cx);
+                .run_task(&id, &asked, tier, model, effort, files, cx);
         }
         // At rest the bar stays, empty for the next, as the thread's view takes the page's place.
         self.asked.clear();
@@ -3829,17 +3793,11 @@ impl CommandBar {
         }
     }
 
-    /// What the chip before the input names: the site search's engine, the commands-only list, or
-    /// in an ask, the page that goes with it.
+    /// What the chip before the input names: the site search's engine or the commands-only list.
+    /// An ask has none.
     fn mode_name(&self) -> Option<SharedString> {
-        if let Some(ask) = &self.ask {
-            return ask
-                .page
-                .as_ref()
-                .map(|(url, title)| match title.is_empty() {
-                    true => SharedString::from(crate::agents::site(url)),
-                    false => title.clone(),
-                });
+        if self.ask.is_some() {
+            return None;
         }
         match (&self.site, self.commands) {
             (Some(site), _) => Some(site.name.clone()),
@@ -4381,14 +4339,7 @@ impl CommandBar {
     /// The chip before the input that names the mode it's in, if it's in one (`mode_name`).
     fn mode_chip(&self, palette: &palette::Palette) -> Option<gpui::Div> {
         let name = self.mode_name()?;
-        let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
-        let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
-        Some(mode_chip(
-            palette.plate(CHIP),
-            palette.ink.into(),
-            favicon,
-            name,
-        ))
+        Some(mode_chip(palette.plate(CHIP), palette.ink.into(), name))
     }
 
     /// The rows, `top` under the input's row, as many as show before the list scrolls.

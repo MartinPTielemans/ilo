@@ -2227,15 +2227,10 @@ impl command_bar::Host for PreviewBar {
 
     fn asking(&self, _: bool, _: &mut App) {}
 
-    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
-        None
-    }
-
     fn run_task(
         &self,
         _: &str,
         _: &str,
-        _: Option<(SharedString, SharedString)>,
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
@@ -3328,7 +3323,7 @@ fn main() {
                             shell.onboarding_show_assistants(rows, cx);
                         }
                         // PREVIEW_ONBOARDING_PICK=<n> picks the nth palette at the Space step.
-                        let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
+                        let pick = states::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
                             shell.onboarding_pick_palette(index, cx);
                         }

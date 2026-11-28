@@ -5,7 +5,8 @@
 # the bar's arrows go through the matches, from the bar and from the page. A text the page doesn't have shows NOT FOUND. A click
 # on the page leaves the bar open, and the bar keeps its place through a resize and full screen.
 # Each tab has its own find, which a new tab starts from the text found last; escape and the bar's
-# close button close it, and so does another page. ⌘J from the page and Edit › Find › Jump to
+# close button close it and give its page the keyboard, though the sidebar had it before ⌘F, and
+# so does another page. ⌘J from the page and Edit › Find › Jump to
 # Selection scroll the page back to the match a find left selected. ⌘0 and ⌘- from the page and the
 # View menu's Zoom In zoom the page, and the zoom HUD shows the percent under the find bar for a
 # moment, and goes at once when another tab shows. ⌥⌘I from the page docks DevTools in the card,
@@ -32,6 +33,7 @@ let unzoomed = devicePixelRatio;
 onclick = () => { unzoomed = devicePixelRatio; };
 onresize = () => document.title = "zoom " + Math.round(100 * devicePixelRatio / unzoomed);
 onscroll = () => document.title = "scrolled " + Math.round(scrollY);
+onkeydown = e => { if (e.key.length == 1 && !e.metaKey && !e.ctrlKey) document.title = "typed " + e.key; };
 </script>'
 serve
 log="$out/find.log"
@@ -238,6 +240,8 @@ else
   expect '^browser: find bar hidden$' "escape didn't hide the find bar"
   send state
   in_browser RenderWidgetHostViewCocoa "after escape closed the find bar"
+  send type k
+  expect '^browser: title [0-9]* typed k$' "the page didn't get a key typed after escape closed the find bar"
   send key 1 cmd
   expect '^browser: find bar shown$' "the second tab didn't show its find"
   expect '^browser: find bar drew "One" 1/' "the second tab didn't show its own find"
@@ -255,6 +259,18 @@ else
   expect '^browser: find bar hidden$' "a click on the find bar's close button didn't hide it"
   send state
   in_browser RenderWidgetHostViewCocoa "after a click on the find bar's close button"
+  # Escape gives the page the keyboard too when the UI had it before ⌘F, as Chrome's and Arc's do
+  # (#4489).
+  send click $sidebar_point
+  send key f cmd
+  expect '^browser: command find via ui$' "⌘F with the sidebar focused didn't reach the UI"
+  expect '^browser: find bar drew "日本語" 0/1$' "⌘F from the sidebar didn't open the find"
+  send key escape
+  expect_find "$first" "closed" "escape didn't close the find ⌘F opened from the sidebar"
+  expect '^browser: find bar hidden$' "escape didn't hide the find bar ⌘F opened from the sidebar"
+  send type j
+  expect '^browser: title [0-9]* typed j$' \
+    "the page didn't get a key typed after escape closed the find ⌘F opened from the sidebar"
   send key f cmd
   expect '^browser: find bar shown$' "⌘F after the close button didn't open the find bar again"
 

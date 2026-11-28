@@ -316,7 +316,7 @@ fn a_folder_swapped_since_the_pick_is_not_the_one_picked() {
     std::fs::remove_dir_all(made).unwrap();
 }
 
-/// The system's panel is the one way a folder is granted, from the composer's plus, so no other
+/// The system's panel is the one way a folder is granted, through `files::grant`, so no other
 /// source file makes one.
 #[test]
 fn only_the_folder_panel_grants_a_folder() {
@@ -335,7 +335,8 @@ fn only_the_folder_panel_grants_a_folder() {
             }
         }
     }
-    // The composer's plus, and this file's tests.
+    // The one road a pick is granted by (files::grant: the composer's plus and Settings ›
+    // Agents › Folders), and this file's tests.
     makers.sort();
-    assert_eq!(makers, ["command_bar.rs", "tests.rs"]);
+    assert_eq!(makers, ["files.rs", "tests.rs"]);
 }

@@ -160,6 +160,10 @@ jobs:
       # and every other build is without cfg(test), so the Browser binary's test build broke unseen
       # once. Building it would link the engine, which isn't here, so it is checked.
       - run: cargo check --release --tests
+      # The preview's own tests, which the library's don't reach: its table of made-up states among
+      # them, so a state read without its row fails here (#4478). The preview needs no engine, so
+      # they run.
+      - run: cargo test --release --bin preview
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
         with:

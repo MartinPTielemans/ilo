@@ -47,13 +47,26 @@ pub(super) const END: &str = r#"{"end":true}"#;
 pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
 /// The user's two switches, which the UI thread sets as the user does and the server's threads
-/// read (#4260): neither touches the other.
-#[derive(Clone, Default)]
+/// read (#4260): neither touches the other. Under the inside one, whether its threads may see the
+/// user's open tabs (#4403).
+#[derive(Clone)]
 pub struct Switches {
     /// The product's own threads, each connecting with its task's token.
     pub threads: Arc<AtomicBool>,
     /// Other apps' agents, each connecting with the token of an app the user connected.
     pub others: Arc<AtomicBool>,
+    /// Threads' tools that list the user's open tabs and copy one, on until the user turns it off.
+    pub your_tabs: Arc<AtomicBool>,
+}
+
+impl Default for Switches {
+    fn default() -> Self {
+        Self {
+            threads: Arc::default(),
+            others: Arc::default(),
+            your_tabs: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 /// Which kind of agent a connection is, told by its token alone: by the agent id the app wrote
@@ -714,7 +727,10 @@ fn message(shared: &Shared, number: u64, agent: &str, line: &str) -> Option<Valu
     let result = match method {
         "initialize" => initialize(shared, number, agent, &params),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools::list(agent) }),
+        "tools/list" => {
+            let your_tabs = shared.switches.your_tabs.load(Ordering::SeqCst);
+            json!({ "tools": tools::listed(agent, your_tabs) })
+        }
         "tools/call" => {
             let name = params
                 .get("name")

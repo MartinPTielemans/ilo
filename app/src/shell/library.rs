@@ -5,7 +5,8 @@
 
 use std::time::Instant;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
+    collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
@@ -2382,6 +2383,7 @@ impl Shell {
                     shell.space_menu(id, event.position, cx)
                 }),
             )
+            .child(self.said_place("more", id))
             .child(
                 svg()
                     .path("icons/ellipsis.svg")
@@ -2430,11 +2432,37 @@ impl Shell {
                             .border_color(palette.accent)
                     }),
             )
+            .child(self.said_place("card", id))
             .child(field)
             .child(div().children(rows))
             .child(more)
             .child(self.card_handle(id, &palette, cx));
         self.card_keyed(card, id, space.name.clone())
+    }
+
+    /// Over its parent, says where `what` of `space`'s card is drawn, once the column is at rest
+    /// and again when it moves: check.sh points there, never where it sums the layout to be, and
+    /// the lib tests hold the layout.
+    fn said_place(&self, what: &'static str, space: u64) -> impl IntoElement + use<> {
+        let places = self.card_places.clone();
+        let at_rest = !self.library_moving() && self.library_resize.is_none();
+        canvas(
+            move |bounds, _, _| {
+                if at_rest && places.borrow_mut().insert((what, space), bounds) != Some(bounds) {
+                    // check.sh reads this line.
+                    log!(
+                        "browser: library {what} {space} at {} {} {} {}",
+                        f32::from(bounds.origin.x).round(),
+                        f32::from(bounds.origin.y).round(),
+                        f32::from(bounds.size.width).round(),
+                        f32::from(bounds.size.height).round(),
+                    );
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
     }
 
     /// The handle at the card's foot, on the •••'s line and as far in from the card's left (Arc),
@@ -2468,6 +2496,7 @@ impl Shell {
                 let grab = CARD_MORE_X - half + f32::from(grab.x);
                 Shell::start_space_drag(&shell, id, CARD_WIDTH, grab, cx)
             })
+            .child(self.said_place("handle", id))
             .child(
                 svg()
                     .path("icons/grip-vertical.svg")
@@ -2555,6 +2584,7 @@ impl Shell {
                     })
                     .child(dashed_square(palette.glyph(CARD_SLOT_DASH)).size_full()),
             )
+            .child(self.said_place("slot", id))
             .child(icon);
         let name = match renaming {
             // A click in the field places the caret, and mustn't reach the card.
@@ -2576,6 +2606,8 @@ impl Shell {
                     cx.stop_propagation();
                     shell.rename_space_in_card(id, window, cx);
                 }))
+                .relative()
+                .child(self.said_place("name", id))
                 .child(div().truncate().child(space.name.clone())),
         };
         let brushes = self.brush_frames.clone();
@@ -2607,6 +2639,7 @@ impl Shell {
                     shell.edit_space_theme_in_card(id, cx);
                 }
             }))
+            .child(self.said_place("brush", id))
             .child(
                 canvas(
                     move |bounds, _, _| {
@@ -2664,6 +2697,7 @@ impl Shell {
                     .text_size(px(text::BODY))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(log_drawn)
+                    .child(self.said_place("field", id))
                     .child(slot)
                     .child(name)
                     .child(brush),
@@ -4630,6 +4664,9 @@ fn card_row(depth: usize, plate: impl IntoElement) -> AnyElement {
         .child(plate)
         .into_any_element()
 }
+
+/// Where each part of each Space card was last drawn at rest, by its name and the card's Space.
+pub(super) type Places = Rc<RefCell<HashMap<(&'static str, u64), Bounds<Pixels>>>>;
 
 /// Where a card's left edge is in the Spaces section, the `index`th from the Library's left.
 fn card_x(index: usize) -> f32 {

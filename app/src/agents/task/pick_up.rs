@@ -1005,6 +1005,7 @@ impl Task {
             told: None,
             helpers: Helpers::default(),
             files: crate::agents::files::Given::default(),
+            seen_tabs: Vec::new(),
             ran_boxed: Vec::new(),
             copying: false,
             names: crate::agents::files::Names::default(),

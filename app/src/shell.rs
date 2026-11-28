@@ -73,6 +73,8 @@ mod copy_tests;
 mod display_face;
 mod drag;
 mod drm_note;
+#[cfg(test)]
+mod edge_cursor_tests;
 mod edge_knot;
 #[cfg(test)]
 mod edge_knot_tests;
@@ -1490,6 +1492,8 @@ pub struct Shell {
     card_press_closes: bool,
     /// Whether each Space card's field was last drawn with its plate, for its log lines.
     fields_drawn: Rc<RefCell<HashMap<u64, bool>>>,
+    /// Where each part of each Space card was last drawn at rest, for its log line.
+    card_places: library::Places,
     /// Where the Library's empty line was last laid out, for its log line.
     empty_drawn: Rc<RefCell<String>>,
     /// Where each of the Library's section buttons was last drawn, for its log line.
@@ -2213,6 +2217,7 @@ impl Shell {
             brush_frames: Rc::default(),
             card_press_closes: false,
             fields_drawn: Rc::default(),
+            card_places: Rc::default(),
             empty_drawn: Rc::default(),
             buttons_drawn: Rc::default(),
             top_edge: Default::default(),
@@ -3412,6 +3417,13 @@ impl Shell {
                 log!("browser: iconed folder {folder} {icon}");
             }
         }
+        // A folder without an icon isn't in `icons`, so one taken away is said as none.
+        for folder in entry.folders.icons.keys() {
+            if folders.folders.contains_key(folder) && !folders.icons.contains_key(folder) {
+                // check.sh waits for this line.
+                log!("browser: iconed folder {folder} none");
+            }
+        }
         let dotted = |space: &Space| {
             space
                 .dotted()
@@ -4553,7 +4565,7 @@ impl Shell {
         let reveal = self.sidebar_hidden
             && !self.page_fullscreen
             && self.little.is_none()
-            && self.from_side(x) < EDGE_STRIP;
+            && self.at_edge(x);
         let band = cfg!(target_os = "linux")
             && !self.maximized
             && !self.full_screen

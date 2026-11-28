@@ -9,7 +9,8 @@ use crate::product::PRODUCT;
 pub const ACCESS: &str = "Access";
 
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
-pub const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
+pub const NEVER_GETS: &str =
+    "A thread never gets passwords or cookies, and sees your open tabs only as titles and sites.";
 
 /// A task's access, lowest first, which their order follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
