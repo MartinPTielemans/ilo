@@ -796,8 +796,14 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
 # The × chip is 31 wide, 13.5 in from the toast's edge, 18 in from the window's, and View
 # Archive's about 98, 8 before it. Both centred 41 down.
 view_archive="$((${content%x*} - 18 - 13 - 31 - 8 - 49)) 41"
-send move $view_archive
-send click $view_archive
+if real_pointer; then
+  # A hand's click, with no move onto the note first: the window server picks the window it goes
+  # to, and the note's button takes it, not the page under it (#3611).
+  real click $view_archive
+else
+  send move $view_archive
+  send click $view_archive
+fi
 expect '^browser: toast button view archive$' "View Archive wasn't pressed at $view_archive"
 expect '^browser: command view-archive via archive note$' "View Archive didn't run"
 expect '^browser: library shown$' "View Archive didn't open the Library"

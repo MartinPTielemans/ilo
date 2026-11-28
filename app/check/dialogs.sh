@@ -26,6 +26,7 @@
 # An alert that comes while the user types in the command bar waits, every key going to the bar,
 # and shows once the bar closes. A key the page answers only after its alert, once the command bar
 # has opened, never reaches the bar (#3791).
+# On the Mac, a page's alert over ⇧⌘C's toast takes a click where it covers the toast's plate.
 
 serve
 log="$out/dialogs.log"
@@ -1017,6 +1018,45 @@ since $aged | grep -q "browser: tab $asking without its page\$" ||
 expect "^browser: page $asking unloaded 1\$" "the row of the tab let go didn't show it without its page"
 # Still running, which a page deleted with its alert held ended (#3549).
 send move $page_point
+# On the Mac, a page's alert over a toast with buttons takes a press where it covers the toast's
+# plate: the plate's window stays just under the overlays shown after it, as the toast's own is.
+# ⇧⌘C's toast, with Share, is held by the pointer on its plate, which stays on it as the alert
+# comes. Last, as a driven pointer leaves no toast it was on.
+if [ "$(uname)" = Darwin ]; then
+  open_from_bar "${site}dialogs.html"
+  page=$tab
+  expect "^browser: title $page ready\$" "the second dialogs page didn't draw"
+  send click $page_point
+  send key c cmd shift
+  expect "$url_toast" "⇧⌘C on the second dialogs page showed no toast with Share"
+  toast_up=$step
+  expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+    "⇧⌘C's toast didn't tell where its plate is"
+  set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  send layout
+  toast_at=$(since | grep "^browser: layout child [0-9-]*,[0-9-]* $5x$6\$" | tail -1 |
+    sed 's/^browser: layout child \([0-9-]*\),\([0-9-]*\) .*/\1 \2/')
+  [ -n "$toast_at" ] || fail "no child window the toast's size, $5x$6, over the browser window"
+  plate_point="$((${toast_at% *} + $1 + 16)) $((${toast_at#* } + $2 + $4 / 2))"
+  send move $plate_point
+  first_move=$step
+  send move $plate_point
+  expect '^browser: toast hovered true$' "the pointer at $plate_point wasn't on ⇧⌘C's toast" \
+    "$first_move"
+  ask a Alert alert-over-toast
+  send click $plate_point
+  went=$(since | grep '^browser: drive click went to ' | tail -1)
+  case $went in
+    '') fail "a click on the alert over the toast's plate went to the browser window" ;;
+    *' HostPlateWindow '*)
+      fail "a click on the alert over the toast's plate went to the plate: $went" ;;
+  esac
+  # The press on the alert takes the pointer off the toast, which then goes, its time run out.
+  ! since "$toast_up" | sed '/^browser: drive click went to /q' | grep -q '^browser: toast hidden$' ||
+    fail "the toast went before the click on the alert over it, so the step showed nothing"
+  over_toast=${went#browser: drive click went to }
+  answer return accept alerted
+fi
 exec 3>&-
 quit
 echo "ok: a page's alert, confirm and prompt ask over its card, answer with ↩ and Esc, and an alert"
@@ -1046,6 +1086,8 @@ echo "  tab is let go by the idle check after 2 hours unseen, and ilo goes on (#
 [ -z "$closed_dialog" ] || echo "  Alt+F4 in a page's dialog cancels it as Esc does, and the" \
   "dialog asks again, with no caption of Windows' behind the window buttons:" \
   "$out/dialog-after-close.png"
+[ -z "${over_toast:-}" ] || echo "  A page's alert over ⇧⌘C's toast took a click on the" \
+  "toast's plate: $over_toast, $out/dialog-alert-over-toast.png"
 [ -z "$two_windows" ] || echo "  With two windows side by side, a row of the one behind shows its" \
   "card over that window, and a row of the one in front over the one in front:" \
   "$out/hover-card-window-behind.png"

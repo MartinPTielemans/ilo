@@ -508,11 +508,29 @@ fi
 # records, and the command bar then offers to stop it in its place. Stop asks where to save it, and
 # the file is Chromium's trace. The toast's Stop is about 38 in from its right edge, 18 from the
 # window's, and 41 down.
+send layout
+width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+  sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+stop="$((width - 18 - 38)) 41"
+# With the real pointer, the toast comes up under it, at rest where Stop will be, and is hovered as
+# it draws: the window over its plate is placed under the pointer, with no edge crossed.
+! real_pointer || real move $stop
 send menu "Record a Trace"
 expect '^browser: command record-trace via ui$' "Record a Trace didn't reach the UI"
 expect '^browser: trace recording$' "Record a Trace didn't start a trace"
 expect '^browser: toast shown Recording a trace \[stop\]$' "no toast said a trace was recording"
 expect '^browser: toast settled$' "the trace's toast didn't settle"
+if real_pointer; then
+  expect '^browser: toast hovered true$' \
+    "the trace's toast, come up under the real pointer, isn't hovered"
+  # Held there over a second, Stop keeps its hover fill, as the window over the toast's plate
+  # never puts the toast out of sight to AppKit, which would stop it drawing (#3644).
+  held=$step
+  sleep 1.2 # The hold itself, not a wait for the app.
+  ../tools/window-screenshot.sh "$pid" "$out/trace-hovered.png" || fail "no window to capture"
+  none_since '^browser: toast window out of sight$' "$held" ||
+    fail "the trace's toast went out of sight to AppKit with the real pointer held on its Stop"
+fi
 ../tools/window-screenshot.sh "$pid" "$out/trace.png" || fail "no window to capture"
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
@@ -523,12 +541,20 @@ grep '^browser: command bar commands "trace": ' "$log" | grep -q 'Record a Trace
   fail "the command bar offered to record a trace while one was recording"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
-send layout
-width=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
-  sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
-send move $((width - 18 - 38)) 41
-send click $((width - 18 - 38)) 41
-expect '^browser: toast button stop$' "Stop wasn't pressed at $((width - 18 - 38)) 41"
+if real_pointer; then
+  # The real pointer off the toast's plate, onto the page under it, lets it go: its window hears
+  # the exit, which no driver's move brings, though the pointer came onto it with no enter. Then a
+  # hand's click on Stop from there, with no move onto the plate first: the window server picks
+  # the window it goes to, and Stop takes it, not the page under it (#3611).
+  real move $((width - 18 - 38)) 160
+  expect '^browser: toast hovered false$' \
+    "the real pointer leaving the trace's toast kept it hovered"
+  real click $stop
+else
+  send move $stop
+  send click $stop
+fi
+expect '^browser: toast button stop$' "Stop wasn't pressed at $stop"
 expect '^browser: trace stopped$' "Stop didn't stop the trace"
 await '^browser: trace recorded [1-9][0-9]* bytes$' || fail "the core didn't give the trace back"
 expect '^browser: trace save panel shown$' "Stop didn't ask where to save the trace"

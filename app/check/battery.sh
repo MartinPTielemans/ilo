@@ -75,10 +75,46 @@ expect '^browser: battery saver leaf hidden$' "the leaf stayed with Battery Save
 eighteen=$((step + 1))
 send battery 18 unplugged
 send battery 18 plugged
+# Its toast shows with the window minimized, there for the 17% that brings it back: nothing of the
+# app's is then on screen for other apps' clicks to land on, the window over the toast's plate that
+# takes its clicks included (#3644). With the window back, the toast's time runs out, as the real
+# pointer is on the page, and that window goes with it. The Mac's, where other apps' view of the
+# screen is read.
+seen_until() {
+  for _ in $(seq 100); do
+    [ "$(windows_seen | grep -c .)" "$1" 0 ] && return 0
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  return 1
+}
+if real_pointer; then
+  real move $page_point
+  send minimize
+  seen_until -eq || fail "the window minimized left on screen: $(windows_seen | tr '\n' ';')"
+fi
+seventeen=$((step + 1))
 send battery 17 unplugged
 expect 'browser: battery saver on at 17%$' "plugged in and out again, Battery Saver didn't come back"
 none_since 'browser: battery saver on at 18%' "$eighteen" ||
   fail "Battery Saver came back on, turned off for now"
+if real_pointer; then
+  expect '^browser: toast shown Battery Saver is on at 17% \[turn off battery saver\]$' \
+    "the toast didn't say Battery Saver is on, with Turn Off, with the window minimized"
+  seen=$(windows_seen)
+  [ -z "$seen" ] || fail "with the window minimized, its toast put windows on screen: $seen"
+  expect '^browser: plate window toast at ' \
+    "the toast shown with the window minimized put no window over its plate" "$seventeen"
+  plate=$(sed -n "/^browser: drive $seventeen: /,\$p" "$log" |
+    grep -m1 '^browser: plate window toast at ' | cut -d' ' -f7 | tr -d , | tr x ' ')
+  send minimize
+  seen_until -gt || fail "the minimized window didn't come back"
+  expect '^browser: toast hidden$' "with its window back, the toast stayed past its time" \
+    "$seventeen"
+  seen=$(windows_seen)
+  echo "$seen" | grep -q " $plate\$" &&
+    fail "with the toast gone, the window over its plate, $plate, stayed on screen: $seen"
+fi
 
 # Settings' Battery Saver switch: off, it goes at once and stays off lower still; on again, it's
 # back, below 20% on battery.

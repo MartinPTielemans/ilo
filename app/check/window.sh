@@ -476,6 +476,45 @@ else
     *) fail "a drag at the window's edge left it $width wide, neither 1000 nor 1100" ;;
   esac
 fi
+# On the Mac, a toast with buttons takes the mouse through a window of its own over its plate
+# (#3611). The host's last line for it says where the window is and where the toast drew its plate,
+# unrounded: the window holds the plate in the whole points around it and no more, as the plate
+# can sit at half a point. Among the browser window's children, the plate window is exactly there,
+# and the toast's window, as big as the toast's last plate line says, has the plate where that line
+# puts it, within the half point that line rounds to.
+plate_holds() {
+  echo "$1" | sed 's/, its plate at / /; s/[,x]/ /g' | awk '
+    function holds(lo, size, at, width) {
+      return lo <= at && at - lo < 1 && lo + size >= at + width && lo + size - at - width < 1
+    }
+    { exit !(holds($1, $3, $5, $7) && holds($2, $4, $6, $8)) }'
+}
+plate_window_over() {
+  [ "$(uname)" = Darwin ] || return 0
+  local plate placed children
+  plate=$(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  placed=$(grep '^browser: plate window toast at ' "$log" | tail -1 |
+    sed 's/^browser: plate window toast at //')
+  plate_holds "$placed" ||
+    fail "$1, the toast's plate window doesn't hold its plate in the whole points round it: $placed"
+  send layout
+  children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: layout child //p')
+  { echo "$plate"; echo "$placed" | sed 's/, its plate at / /; s/[,x]/ /g'; echo "$children"; } |
+    awk '
+    function near(a, b) { return a - b >= -0.5 && a - b <= 0.5 }
+    NR == 1 { split($0, p, " "); next }
+    NR == 2 { split($0, w, " "); next }
+    {
+      split($1, at, ","); split($2, size, "x")
+      if (size[1] == p[5] && size[2] == p[6]) { tx = at[1]; ty = at[2]; toast = 1 }
+      if (at[1] == w[1] && at[2] == w[2] && size[1] == w[3] && size[2] == w[4]) window = 1
+    }
+    END {
+      exit !(toast && window && near(w[5], tx + p[1]) && near(w[6], ty + p[2]) &&
+        near(w[7], p[3]) && near(w[8], p[4]))
+    }' ||
+    fail "$1, the toast's plate window isn't over its plate, $plate in the toast's window, as the host placed it, $placed: the window's children are $(echo "$children" | tr '\n' ';')"
+}
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen"
 # Once there, it says how to leave, at the card's top right, as Arc's does, in Chrome's words off the
@@ -509,8 +548,53 @@ expect '^browser: menu closed$' "escape didn't close the +'s menu in full screen
 send click $page_point
 send state
 in_browser RenderWidgetHostViewCocoa "after a click on the page under the closed +'s menu"
+# On the Mac, a toast's button takes a click in full screen, and a toast held as the window leaves
+# full screen takes one after it: the trace's toast, which stays while it records. Going full
+# screen puts the note on how to leave in place of any toast, so none is held into it. Stop is 38 in
+# from the right end of the plate, which the app logs in the toast's window, as wide as the page
+# ending at the content's right edge. The real pointer's click has no move before it (#3611).
+stop_trace() {
+  expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+    "$1, the trace's toast didn't tell where its plate is" "$2"
+  local when=$1 content at
+  set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  send layout
+  content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+  at="$((content - $5 + $1 + $3 - 38)) $(($2 + $4 / 2))"
+  if real_pointer; then
+    real click $at
+  else
+    send move $at
+    send click $at
+  fi
+  expect '^browser: toast button stop$' "$when, Stop on the trace's toast wasn't pressed at $at"
+  expect '^browser: trace stopped$' "$when, Stop didn't stop the trace"
+  expect_late '^browser: trace save panel shown$' "$when, Stop didn't ask where to save the trace"
+  send savecancel
+  expect '^browser: save panel cancelled$' "$when, the trace's save panel didn't cancel"
+  # The real pointer goes on to the page, off the toasts to come, which it would hover as they drew.
+  ! real_pointer || real move $page_point
+}
+record_trace() {
+  send menu "Record a Trace"
+  recording=$step
+  expect '^browser: trace recording$' "$1, Record a Trace didn't start a trace"
+  expect '^browser: toast shown Recording a trace \[stop\]$' \
+    "$1, no toast said a trace was recording"
+}
+if [ "$(uname)" = Darwin ]; then
+  record_trace "in full screen"
+  stop_trace "in full screen" "$recording"
+  record_trace "in full screen again"
+fi
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
+if [ "$(uname)" = Darwin ]; then
+  none_since '^browser: toast hidden$' "$recording" ||
+    fail "the trace's toast went as the window left full screen"
+  stop_trace "after leaving full screen" "$recording"
+fi
 check_layout "after full screen"
 check_buttons "after full screen"
 
@@ -1524,9 +1608,8 @@ fi
 # Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is logged
 # in the toast's window, whose width comes after it, at the content's right. The pointer goes on it
 # before the recording's end is waited for, which outlasts the toast's 4.8 s, as a toast with the
-# pointer on its buttons stays past its time; the window is captured with it there. The toast's
-# window lets the pointer through until a move over its plate, which goes to the window under it,
-# so the first move has it take the pointer and the toast hears the second, as a real one's next.
+# pointer on its buttons stays past its time; the window is captured with it there. It moves there
+# twice, and the toast hears the first or the second, wherever its window takes the pointer from.
 expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
   "the new tab's toast didn't tell where its plate is" "$toast_step"
 set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
@@ -1534,6 +1617,24 @@ send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
 show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
+# On the Mac its plate window stays over its plate as the window moves, narrows and widens back.
+# That's within the toast's time and before the pointer goes on it: a window moved takes the toast
+# off the pointer, and a toast past its time leaves with its plate window as the pointer does.
+if [ "$(uname)" = Darwin ]; then
+  plate_window_over "with the new tab's toast up"
+  send order
+  set -- $(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+  send place $(($1 + 40)) $(($2 + 30)) $3 $4
+  plate_window_over "with the window moved under the new tab's toast"
+  send place $(($1 + 40)) $(($2 + 30)) $(($3 - 120)) $4
+  expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+    "narrowed, the window's toast didn't tell where its plate is now"
+  plate_window_over "with the window narrowed under the new tab's toast"
+  send place $1 $2 $3 $4
+  expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
+    "widened back, the window's toast didn't tell where its plate is now"
+  plate_window_over "with the window back where it was under the new tab's toast"
+fi
 send move $show
 first_move=$step
 send move $show

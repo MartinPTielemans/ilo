@@ -224,14 +224,19 @@ EOF
   fail "$3: $(grep '^browser: mini bar at ' "$log" | tail -1)"
 }
 # Presses the mini bar's first button, or its last with $1 "last": 10 into it past the bar's 3 pt
-# inset. The pointer goes onto the bar first, as the Mac's bar window takes the mouse only on the
-# bar where the pointer is.
+# inset. With the real pointer, a hand's click with no move onto the bar first: the window server
+# picks the window it goes to, and the bar takes it, not the page under it (#3611). Else the
+# driver's pointer goes onto the bar first, then clicks.
 press_mini_bar() {
   mini_bar "the mini bar to press $2"
   x=$((mx + 13))
   [ "${1:-}" = last ] && x=$((mx + mw - 13))
-  send move $x $((my + mh / 2))
-  send click $x $((my + mh / 2))
+  if real_pointer; then
+    real click $x $((my + mh / 2))
+  else
+    send move $x $((my + mh / 2))
+    send click $x $((my + mh / 2))
+  fi
   expect "^browser: mini bar $2 pressed\$" "a click on the mini bar's $2 didn't press it"
 }
 # The mini bar went after $1, as the Mac's and Linux's hosts say. Windows' prints no line as it
@@ -562,6 +567,10 @@ send release $(slot 3)
 send key escape
 expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
+# The press where Wide is drawn picked it, so the page's title has it floated until the page writes
+# the title again for the mode's end, which can come after the core's line (#3909).
+expect "^browser: title $tab col [^ ]* side .* float - at " \
+  "with the mode ended, the page's title still had a thing floated"
 kept_column=$(said | sed 's/^col \([^ ]*\) .*/\1/')
 
 # Reloaded, the page places the arrangement as it loads. The run measures, and says, whether the

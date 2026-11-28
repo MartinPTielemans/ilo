@@ -1625,6 +1625,18 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  // Before the window's lookup, which finds no window out of sight: the battery's level comes
+  // with the window minimized too, as battery.sh has it for the toast it brings.
+  if (action == "battery") {
+    int percent;
+    std::string power;
+    if (!(words >> percent >> power) || (power != "plugged" && power != "unplugged")) {
+      return false;
+    }
+    bc_battery_for_testing(percent, power == "plugged");
+    done();
+    return true;
+  }
   // Before the window's lookup, which finds no window out of sight.
   if (action == "minimize") {
     NSWindow* driven = (__bridge NSWindow*)host_browser_window(g_driven);
@@ -2170,16 +2182,6 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     bc_age_tabs_for_testing(seconds);
-    done();
-    return true;
-  }
-  if (action == "battery") {
-    int percent;
-    std::string power;
-    if (!(words >> percent >> power) || (power != "plugged" && power != "unplugged")) {
-      return false;
-    }
-    bc_battery_for_testing(percent, power == "plugged");
     done();
     return true;
   }
