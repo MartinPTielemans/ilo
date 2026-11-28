@@ -1148,6 +1148,7 @@ fn clear_archive_leaves_the_tasks_view(cx: &mut TestAppContext) {
             title: "A".into(),
             archived: 1000.,
             little: false,
+            space: 0,
         };
         shell.set_archive(vec![tab], cx);
         shell.run(Command::ClearArchive, "ui", cx);

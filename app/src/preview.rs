@@ -287,6 +287,8 @@ fn opening_tab(shell: &Shell) -> u64 {
 
 impl Fake {
     fn report_archive(&self, cx: &mut App) {
+        // Each closed in the first Space, so an empty window of its profile lists the latest.
+        let space = self.spaces.borrow().first().map_or(0, |space| space.0);
         let archive = self
             .archive
             .borrow()
@@ -298,6 +300,7 @@ impl Fake {
                 archived,
                 // Every fourth, so the archive's filter shows (Little ilo).
                 little: id % 4 == 0,
+                space,
             })
             .collect();
         self.later(cx, move |shell, cx| shell.set_archive(archive, cx));

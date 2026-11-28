@@ -1007,6 +1007,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little: false,
+            space: 0,
         };
         let tabs = ids.iter().map(|id| tab(*id)).collect();
         shell.update(cx, |shell, cx| shell.set_archive(tabs, cx));

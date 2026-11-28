@@ -53,6 +53,7 @@ fn closed(id: u64, name: &str, archived: f64, little: bool) -> Archived {
         title: name.to_string().into(),
         archived,
         little,
+        space: 0,
     }
 }
 
@@ -384,17 +385,17 @@ fn task() -> crate::agents::task::ArchivedTask {
         about: format!("{PRODUCT} · Done").into(),
         ended: at(9, 13),
         pages: "1 page".into(),
+        home: 0,
     }
 }
 
-/// After a quit and a launch, the composer's Latest tasks lists the task that run left (#4105), in
-/// the Spaces of its own profile and no other's, with no card at the sidebar's foot. A click on
-/// it opens its conversation, which has ilo's one line and the reply field, and from then it's a
-/// card at the foot as any task opened in this run. The click is made by the card's own call:
-/// the composer keeps no record of where a card is drawn.
+/// After a quit and a launch, the empty window's recents list the task that run left (#4105,
+/// #4140), in the Spaces of its own profile and no other's, with no card at the sidebar's foot. Its
+/// row opens its conversation, which has ilo's one line and the reply field, and from then it's a
+/// card at the foot as any task opened in this run. The open is made by the row's own call.
 #[cfg(unix)]
 #[gpui::test]
-fn latest_tasks_lists_a_task_a_run_before_left(cx: &mut TestAppContext) {
+fn the_recents_list_a_task_a_run_before_left(cx: &mut TestAppContext) {
     use crate::agents::task::{Line, TaskAction};
     use crate::agents::tests::kept::past::after_a_quit;
 
@@ -427,12 +428,18 @@ fn latest_tasks_lists_a_task_a_run_before_left(cx: &mut TestAppContext) {
         });
         cx.run_until_parked();
     };
-    // What the composer lists, by the tasks' ids.
+    // The threads the recents list, by the tasks' ids.
+    host.threads.set(Some(true));
     let listed = |cx: &mut VisualTestContext| {
-        let cards = shell.read_with(cx, |shell, _| shell.latest_tasks(3));
-        (cards.into_iter().map(|card| card.agent)).collect::<Vec<_>>()
+        let recents = shell.update(cx, |shell, cx| shell.recents(cx));
+        (recents.into_iter())
+            .filter_map(|recent| match recent {
+                crate::shell::empty::recents::Recent::Thread { agent, .. } => Some(agent),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
     };
-    // The composer draws without it, and its card comes in as the agents send it.
+    // The page draws without it, and its row comes in as the agents send it.
     assert!(listed(cx).is_empty());
     give(cx);
     assert_eq!(listed(cx), [past.as_str()]);
@@ -445,10 +452,10 @@ fn latest_tasks_lists_a_task_a_run_before_left(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(listed(cx), [past.as_str()]);
 
-    // The card's click.
+    // The row's ↩ or click.
     made(&host);
     let agent: gpui::SharedString = past.clone().into();
-    shell.update(cx, |shell, cx| shell.open_latest(agent, cx));
+    shell.update(cx, |shell, cx| shell.restore_archived_task(agent, cx));
     let asked = made(&host);
     assert!(asked.contains(&format!("task {past} Restore")), "{asked:?}");
     agents.update(cx, |agents, cx| {

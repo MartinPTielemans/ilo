@@ -225,13 +225,16 @@ pub struct Archived {
     pub archived: f64,
     /// Whether it closed in a Little ilo window, which the archive's filter picks out (Arc).
     pub little: bool,
+    /// The Space it closed in, or 0 once that Space is gone: its profile's empty window lists it.
+    pub space: u64,
 }
 
 mod board_list;
 mod history_list;
 pub(super) mod keys;
 pub use history_list::Visited;
-use history_list::{History, Pointed, history_time, history_when};
+pub(in crate::shell) use history_list::history_when;
+use history_list::{History, Pointed, history_time};
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
 /// its first.
@@ -5082,6 +5085,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little: false,
+            space: 0,
         };
         shell.update(cx, |shell, cx| shell.set_archive(vec![tab], cx));
         assert_eq!(menu(cx), [("Clear Archive".into(), true)]);
@@ -5183,6 +5187,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little,
+            space: 0,
         };
         shell.update(cx, |shell, cx| {
             shell.section = Section::Archive;
