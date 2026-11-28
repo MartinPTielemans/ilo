@@ -111,7 +111,7 @@ const TYPES: &[(&str, &str)] = &[
 
 /// Where `line`'s options start, as uBlock Origin's indexOfNetAnchor finds it: the last `$` an
 /// option's name follows, as a regular expression's own `$` can come later.
-fn options_at(line: &str) -> Option<usize> {
+pub(super) fn options_at(line: &str) -> Option<usize> {
     let mut end = line.len();
     while let Some(at) = line[..end].rfind('$') {
         if starts_with_option(&line[at + 1..]) {
@@ -154,7 +154,7 @@ fn option_follows(text: &str) -> bool {
 
 /// The options in `text`, after the anchor's `$`, each `~name` or `name=value`, whose value runs
 /// to the next comma an option follows.
-fn options(text: &str) -> Vec<&str> {
+pub(super) fn options(text: &str) -> Vec<&str> {
     let mut found = Vec::new();
     let mut start = 0;
     while start <= text.len() {
@@ -170,13 +170,13 @@ fn options(text: &str) -> Vec<&str> {
 
 /// Domains an option names, `a.com|~b.com`: where none it names but a `~` one is, any.
 #[derive(Default)]
-struct Domains {
-    yes: Vec<String>,
-    no: Vec<String>,
+pub(super) struct Domains {
+    pub(super) yes: Vec<String>,
+    pub(super) no: Vec<String>,
 }
 
 impl Domains {
-    fn parse(value: &str) -> Result<Self, NotHonoured> {
+    pub(super) fn parse(value: &str) -> Result<Self, NotHonoured> {
         let mut domains = Self::default();
         for entry in value.split('|') {
             let (not, entry) = match entry.strip_prefix('~') {

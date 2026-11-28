@@ -21,6 +21,7 @@ use std::time::Instant;
 pub mod choice;
 mod responses;
 mod scriptlets;
+pub mod webkit;
 
 /// What the engine blocks with, as the core gives it (bc_host's ad_block_use).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
