@@ -73,6 +73,8 @@ mod copy_tests;
 mod display_face;
 mod drag;
 mod drm_note;
+#[cfg(test)]
+mod edge_cursor_tests;
 mod edge_knot;
 #[cfg(test)]
 mod edge_knot_tests;
