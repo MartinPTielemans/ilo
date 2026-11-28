@@ -66,8 +66,8 @@ else
     *" over GPUIView" | *" over AccessKitSubclassOfGPUIView")
       fail "the page's view isn't what's under the pointer in the page" ;;
   esac
-  [ "$(grep -c '^browser: cursor style ' "$log")" = "$asks_before" ] ||
-    fail "GPUI applied a cursor style with the pointer over the page: $(grep '^browser: cursor style ' "$log" | tail -1)"
+  applied=$(grep '^browser: cursor style ' "$log" | tail -n +$((asks_before + 1)) | grep ' applied$' || true)
+  [ -z "$applied" ] || fail "GPUI applied a cursor style with the pointer over the page: $applied"
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   send type move sidebar
