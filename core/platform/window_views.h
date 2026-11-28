@@ -129,6 +129,15 @@ void DrawPageIn(views::Widget* widget,
 // accept_events does it on the Mac and Wayland, but not on X11 or Windows.
 void PassPointerThrough(views::Widget* widget);
 
+// Makes |widget|'s window, which must never yet have shown, one macOS keeps on the Space it
+// shows on even when that Space is another app's full screen: the joining bits are set and, on
+// the Mac, the window is marked so AppKit counts it a non-activating panel, which is what
+// macOS asks of a regular app's window before it lets it onto another app's full-screen Space
+// (a regular window is kept off whatever bits it carries, and the marking, like the bits,
+// only works while the window has never shown). No other desktop keeps a window off the
+// workspace it shows on, so there it does nothing.
+void JoinSpacesBeforeFirstShow(views::Widget* widget);
+
 // Runs |moved| with each origin, in DIPs, that a move loop on |widget| proposes while the system
 // moves only an outline of the window and the window itself only at the release: Windows does so
 // with "Show window contents while dragging" off. Until the runner it returns goes. Where the

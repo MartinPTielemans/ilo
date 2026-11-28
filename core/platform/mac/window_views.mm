@@ -2,6 +2,7 @@
 
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
 
 #include <cmath>
 #include <cstdio>
@@ -240,6 +241,57 @@ void Unhide(NSView* view, bool hidden) {
   // Clipped by Core Animation, which rounds the compositor's layers under it without redrawing
   // them.
   view.wantsLayer = YES;
+}
+
+// The windows JoinSpacesBeforeFirstShow has marked. macOS keeps a regular app's window off
+// another app's full-screen Space whatever collection bits it carries, unless AppKit counts the
+// window a non-activating panel, which only a panel's own class answers and no public API can
+// make a window: Arc's floating video and Safari's PiP are panels, and Ardia's PiP joins other
+// apps' full screens by swizzling this very answer (ArdiaPiPController+Workspaces.mm, measured
+// by them: the bits set after the window shows, or its activation held off through Chromium's
+// public seam, all keep it off). The answer is only asked while the window has never shown, so
+// the mark and the bits are planted before its first show and both stay.
+const void* const kJoinsFullScreenSpacesKey = &kJoinsFullScreenSpacesKey;
+
+// AppKit's question of whether the window is a non-activating panel, answered for the windows
+// the core marked before their first show. Swizzled on NSWindow itself, as the window's own class
+// inherits the answer, once; Ardia swizzles the same selector the same way. Asked for as a widget
+// is made, on the UI thread: Chromium makes every widget there, and on the Mac that thread is the
+// one AppKit asks its questions on, so the install and AppKit's own reads are ordered by one
+// thread, which is why the plain IMP global needs no atomics. Returns whether the answer is in
+// place, as a macOS that renames its private question leaves no mark on a window its answer
+// couldn't back; the check's gate reads the line.
+IMP g_is_nonactivating_panel = nullptr;
+
+BOOL MarkedNonactivatingPanel(id window) {
+  return objc_getAssociatedObject(window, kJoinsFullScreenSpacesKey) != nil ||
+         (g_is_nonactivating_panel &&
+          reinterpret_cast<BOOL (*)(id, SEL)>(g_is_nonactivating_panel)(
+              window, @selector(_isNonactivatingPanel)));
+}
+
+bool AnswerNonactivatingPanel() {
+  static dispatch_once_t once;
+  // Static, so every caller reads the one install's answer; a __block local would read its own
+  // false once the first call's block had run.
+  static bool installed = false;
+  dispatch_once(&once, ^{
+    Method method = class_getInstanceMethod(NSWindow.class, @selector(_isNonactivatingPanel));
+    if (!method) {
+      fprintf(stderr, "browser: no _isNonactivatingPanel to answer for the Mini Player\n");
+      return;
+    }
+    g_is_nonactivating_panel = method_getImplementation(method);
+    IMP marked = imp_implementationWithBlock(^BOOL(NSWindow* window) {
+      return MarkedNonactivatingPanel(window);
+    });
+    if (!class_addMethod(NSWindow.class, @selector(_isNonactivatingPanel), marked,
+                         method_getTypeEncoding(method))) {
+      method_setImplementation(method, marked);
+    }
+    installed = true;
+  });
+  return installed;
 }
 
 // On the continuous curve the Mac rounds its windows with, so the card's corners, the window's
@@ -588,6 +640,23 @@ bool FocusSettledOnActivation() {
 
 void PassPointerThrough(views::Widget*) {
   // Views' accept_events makes the window ignore mouse events.
+}
+
+void JoinSpacesBeforeFirstShow(views::Widget* widget) {
+  NSWindow* window = widget->GetNativeWindow().GetNativeNSWindow();
+  if (window.visible) {
+    return;
+  }
+  // Only a window whose answer is in place is marked: a mark with no answer behind it promises
+  // the joining bits a macOS that won't keep them.
+  if (!AnswerNonactivatingPanel()) {
+    return;
+  }
+  objc_setAssociatedObject(window, kJoinsFullScreenSpacesKey, @YES,
+                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // The public form of the joining bits, which clears Primary and FullScreenPrimary and sets
+  // FullScreenAuxiliary beside the CanJoinAllSpaces Init already set.
+  widget->SetCanAppearInExistingFullscreenSpaces(true);
 }
 
 base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,

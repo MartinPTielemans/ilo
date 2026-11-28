@@ -114,6 +114,32 @@ void GiveKeyboardBack(views::Widget* window) {
 }
 #endif
 
+#if BUILDFLAG(IS_MAC)
+// Brings |window| to the Space active as a task of its own, after the show that made it: in the
+// show's task the move's MoveToActiveSpace would meet the show's own SetVisibleOnAllWorkspaces
+// setting CanJoinAllSpaces, a pair AppKit throws on. A weak pointer, so a window that closed
+// before the task moves nothing.
+void WidgetMoveToActiveFullscreenSpace(base::WeakPtr<views::Widget> window) {
+  if (window) {
+    window->MoveToActiveFullscreenSpace();
+  }
+}
+
+// Brings |window| back after a Space change left it off the Space the user is on, which the
+// window server does to a shown window only rarely, and the panel answer can't help once the
+// window has shown (Ardia's activeSpaceChanged waits as long for theirs and only notes it). The
+// gate re-reads the two visibilities as the task runs: a window hidden meanwhile (the app, with
+// ⌘H, or the window itself) is left hidden, and one already carried to the Space by the window
+// server in the wait's course needs no move. So reads live in the task, not at the switch.
+void WidgetMoveIfLeftBehind(base::WeakPtr<views::Widget> window) {
+  if (window && window->IsVisible() && !window->IsVisibleOnScreen()) {
+    window->MoveToActiveFullscreenSpace();
+    // check.sh reads this line.
+    fprintf(stderr, "browser: mini player brought back to the active Space\n");
+  }
+}
+#endif
+
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
 // that let it go asked whether it had (MiniPlayerHasKeyboard). And logs it showing, and its first
 // frame on screen, on the clock of the tab switch that floated it (LogHandover).
@@ -124,10 +150,52 @@ class MiniPlayerWatch : public views::WidgetObserver {
     observation_.Observe(widget);
   }
 
+#if BUILDFLAG(IS_MAC)
+  // The joining bits and the Mac's panel answer, while the window is still unshown: AppKit takes
+  // a window onto another app's full-screen Space only as it first shows, so a window counted a
+  // non-activating panel and carrying the joining bits (CanJoinAllSpaces from Init, the rest
+  // from the platform seam) gets taken onto the Space; a window born without either is kept off,
+  // and a call after its first show comes too late. OnWidgetCreated is the earliest point the
+  // core sees the widget, inside Init and after its window exists, before any show.
+  void OnWidgetCreated(views::Widget* widget) override {
+    platform::JoinSpacesBeforeFirstShow(widget);
+  }
+
+  // The Space changed under a shown player, the rare race the window server leaves it on the
+  // Space it left (Ardia's activeSpaceChanged waits the same 0.6 s for theirs; they only note
+  // it, while this brings the player to the Space the user is on). Not at once: a Space's own
+  // animation takes a moment, and a window that comes back in that moment flickers.
+  void OnWidgetVisibilityOnScreenChanged(views::Widget* widget, bool visible) override {
+    if (visible || !widget->IsVisible()) {
+      return;
+    }
+    // One 600 ms task per off-screen change, one-shot and re-read inside the task: no repeating
+    // timer, and an idle shown player wakes only on the Space change that leaves it off-screen.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, base::BindOnce(&WidgetMoveIfLeftBehind, widget->GetWeakPtr()),
+        base::Milliseconds(600));
+  }
+#endif
+
   void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override {
     if (!visible) {
       return;
     }
+#if BUILDFLAG(IS_MAC)
+    // Over another app's window in full screen, as Arc's is. The Mac keeps a window to the Space
+    // it was born on, and off one another app has made full screen, unless it may join one
+    // (SetCanAppearInExistingFullscreenSpaces) and is on every Space at all: the PiP window's
+    // InitParams set visible_on_all_workspaces, but only the Aura native widget reads it, so the
+    // Mac's window gets the joining bits from its own show instead. Bits only let it stay; a
+    // window born while another app holds the active Space needs a move to land there, so one
+    // comes after the show's task. Not in it: the move holds MoveToActiveSpace until a later
+    // task restores the bits, and the show's own SetVisibleOnAllWorkspaces inside the same task
+    // would put CanJoinAllSpaces beside it, a pair AppKit refuses outright.
+    widget->SetCanAppearInExistingFullscreenSpaces(true);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WidgetMoveToActiveFullscreenSpace,
+                                  widget->GetWeakPtr()));
+#endif
     // check.sh reads these lines.
     LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
     if (ui::Compositor* compositor = widget->GetCompositor()) {

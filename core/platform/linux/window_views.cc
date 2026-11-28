@@ -1827,6 +1827,10 @@ void PassPointerThrough(views::Widget* widget) {
   }
 }
 
+void JoinSpacesBeforeFirstShow(views::Widget* widget) {
+  // No window manager keeps a window off the workspace it shows on, so there is nothing to join.
+}
+
 base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,
                                             base::RepeatingCallback<void(const gfx::Point&)>) {
   // The window manager or compositor moves a window, and the core runs no move loop of its own.
