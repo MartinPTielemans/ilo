@@ -1,7 +1,8 @@
 # The browser on the Mac, run and checked by app/check.sh (AGENTS.md, Verifying), on the Mac engine
 # built from this commit's core, on GitHub's hosted Apple silicon runners, which are free for a
 # public repository. It runs on main each night and by hand, which the integrator does on main
-# after each merge train (#871): never a pull request. It never builds an engine: it takes the
+# after each merge train (#871) and on each build of the rework line at its cut
+# (tools/cut-checks.sh): never a pull request. It never builds an engine: it takes the
 # newest engine-mac release in this commit's history (engine/fetch.sh), which the owner's Mac
 # publishes each night main's core or engine changed (tools/mac-nightly.sh). A commit whose
 # core/public/browser_core.h no published engine has fails, saying so, as nothing can run it, and
@@ -40,6 +41,13 @@ on:
       runs:
         description: The runs to do, such as "load tabs", or "all"; empty for the ones the Mac runner passes
         default: ''
+      kind:
+        description: >-
+          The build's kind: look, or full, under which a run whose engine lacks what it checks
+          fails rather than skips (ILO_FULL=1)
+        type: choice
+        options: [look, full]
+        default: look
       rebuild:
         description: Build the app, even if a check of this commit kept one
         type: boolean
@@ -65,9 +73,17 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The runs a release still needs from the check VM, as the header says why: one leaves the list
+  # once it passes on the runner (#2248).
+  VM_RUNS: ''
+
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
-  # no run has checked yet; a dispatched one always does.
+  # no run has checked yet; a dispatched one always does. And the runs it does, dealt by their times
+  # on this runner (.github/scripts/runs-mac.tsv) across as many check jobs as they need, up to
+  # four: a free account runs five macOS jobs at once, and an engine build holds one for hours, so a
+  # fifth waited for one of the four anyway (hosted-checks NEED 1, 11-27).
   gate:
     if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
     runs-on: ubuntu-24.04
@@ -77,14 +93,42 @@ jobs:
       actions: read
     outputs:
       check: ${{ github.event_name != 'schedule' || steps.seen.outputs.seen != 'true' }}
+      todo: ${{ steps.plan.outputs.todo }}
+      shards: ${{ steps.plan.outputs.shards }}
     steps:
+      # With app/check, whose runs check.sh lists.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            app/check.sh
+            app/check
+          sparse-checkout-cone-mode: false
       - id: seen
         env:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/main-check.sh seen
+      # The default runs, all of check.sh's, or those named, and the check jobs they're dealt
+      # across: one, unnumbered, for a list that fits in one.
+      - id: plan
+        env:
+          RUNS: ${{ inputs.runs }}
+          RUN_TIMES: .github/scripts/runs-mac.tsv
+        run: |
+          case $RUNS in
+          '')
+            todo=
+            for run in $(sh app/check.sh --runs default); do
+              case " $VM_RUNS " in *" $run "*) ;; *) todo="$todo $run" ;; esac
+            done
+            ;;
+          all) todo=$(.github/scripts/runs.sh all) ;;
+          *) todo=$RUNS ;;
+          esac
+          jobs=$(.github/scripts/runs.sh jobs 4 $todo)
+          if [ "$jobs" = 1 ]; then shards='[0]'; else shards="[$(seq -s, 1 "$jobs")]"; fi
+          echo "todo= $(echo $todo) " | tee -a "$GITHUB_OUTPUT"
+          echo "shards=$shards" | tee -a "$GITHUB_OUTPUT"
 
   # The app the check jobs run, built once for them all (#3917), or the one another check of this
   # commit kept (app-artifact.sh), once the engine it runs on is found.
@@ -221,16 +265,16 @@ jobs:
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
   check:
-    needs: build
+    needs: [gate, build]
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
     name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, strategy.job-total) || '' }}
-    # The default runs and runs=all take longer than the job's 120 minutes, so they're dealt across
-    # three jobs and four, each with its share of the runs (.github/scripts/runs.sh, #2271, #3444,
-    # #3917). Any other list is one job's.
+    # The runs are dealt across the jobs the gate says, each with its share, by their times
+    # (.github/scripts/runs.sh, #2271, #3444, #3917): round them in turn, the default runs' three
+    # jobs took 26, 44 and 52 minutes (45849137595).
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3, 4]' || inputs.runs == '' && '[1, 2, 3]' || '[0]') }}
+        shard: ${{ fromJSON(needs.gate.outputs.shards) }}
     runs-on: macos-26
     # The default runs took about 105 min here on 11-18, after about 16 of setting up, and ran out
     # the job's time unsplit (44322076346).
@@ -244,11 +288,9 @@ jobs:
       run:
         working-directory: app
     env:
-      # The runs a release still needs from the check VM, as the header says why: one leaves the
-      # list once it passes on the runner (#2248).
-      VM_RUNS: ''
-      # How many jobs the runs are dealt across, for runs.sh shard.
+      # How many jobs the runs are dealt across, and by which times, for runs.sh shard.
       SHARDS: ${{ strategy.job-total }}
+      RUN_TIMES: ../.github/scripts/runs-mac.tsv
     steps:
       # When the job started, for the Runs step's limit below.
       - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -265,22 +307,15 @@ jobs:
         run: ../.github/scripts/main-check.sh rerun
 
       # The runs this job does, and its share of check.sh's runs, each of which it gives a result
-      # line, done or skipped.
+      # line, done or skipped. A full build's runs fail where their engine lacks what they check.
       - id: runs
         env:
-          RUNS: ${{ inputs.runs }}
+          TODO: ${{ needs.gate.outputs.todo }}
           SHARD: ${{ matrix.shard }}
+          KIND: ${{ inputs.kind }}
         run: |
-          case $RUNS in
-          '')
-            todo=
-            for run in $(sh check.sh --runs default); do
-              case " $VM_RUNS " in *" $run "*) ;; *) todo="$todo $run" ;; esac
-            done
-            ;;
-          all) todo=$(../.github/scripts/runs.sh all) ;;
-          *) todo=$RUNS ;;
-          esac
+          [ "$KIND" != full ] || echo "ILO_FULL=1" | tee -a "$GITHUB_ENV"
+          todo=$TODO
           share=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS" $todo)
           runs=
           for run in $share; do
