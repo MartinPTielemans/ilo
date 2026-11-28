@@ -608,3 +608,29 @@ fn with_no_screen_reader_nothing_is_told(cx: &mut TestAppContext) {
     assert_eq!(tellings(&shell, cx), (None, None));
     assert!(cx.a11y_tree().is_none(), "a tree with nothing asking");
 }
+
+/// The window the user is in tells, as its host says it is, whatever GPUI hears of its
+/// activation: Windows never activates the UI's window inside the browser window's, and the page
+/// having the keyboard leaves the window the user's (#4244). A window the user isn't in doesn't.
+#[gpui::test]
+fn the_window_the_user_is_in_tells_whatever_gpui_hears_of_its_activation(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    needs(true, &shell, cx);
+    reader(&shell, cx);
+    cx.deactivate_window();
+    drawn(&shell, cx);
+
+    send(&shell, vec![at(Dot::Waiting)], cx);
+    assert_eq!(told(&shell, cx), ["Flight to Lisbon · Needs you"]);
+
+    send(&shell, vec![at(Dot::Working)], cx);
+    shell.update(cx, |shell, cx| shell.set_window_main(false, cx));
+    drawn(&shell, cx);
+    send(&shell, vec![at(Dot::Done)], cx);
+    assert_eq!(
+        tellings(&shell, cx).1,
+        Some((0, "Flight to Lisbon · Needs you".into())),
+        "a window the user isn't in told the task is done"
+    );
+}
