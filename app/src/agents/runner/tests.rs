@@ -757,7 +757,7 @@ fn pairs(models: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[test]
-fn claudes_models_are_its_own_and_its_default_names_one() {
+fn claudes_models_are_its_own_named_with_their_versions_and_its_default_names_one() {
     use crate::agents::ready::{Models, claude_listed};
     // Claude Code 2.1.322's answer to initialize, cut to its models.
     let answer: Value =
@@ -766,13 +766,31 @@ fn claudes_models_are_its_own_and_its_default_names_one() {
         claude_listed(&answer),
         Some(Models {
             listed: pairs(&[
-                ("opus", "Opus"),
-                ("fable", "Fable"),
-                ("sonnet", "Sonnet"),
-                ("haiku", "Haiku"),
+                ("opus", "Opus 5.5"),
+                ("fable", "Fable 5.2"),
+                ("sonnet", "Sonnet 5.5"),
+                ("haiku", "Haiku 5.5"),
             ]),
-            default: Some("Opus".into()),
+            default: Some("Opus 5.5".into()),
+            default_id: Some("opus".into()),
+            more: Vec::new(),
         })
+    );
+    // A model whose version can't be read keeps the name Claude gives it.
+    let odd = json!({ "type": "control_response", "response": {
+        "subtype": "success", "request_id": "models", "response": { "models": [
+            { "value": "big", "resolvedModel": "claude-sonnet-5-5[1m]", "displayName": "Sonnet (1M)" },
+            { "value": "bare", "resolvedModel": "claude-next" },
+        ] } } });
+    let odd = claude_listed(&odd).unwrap();
+    assert_eq!(
+        odd.listed,
+        pairs(&[("big", "Sonnet (1M)"), ("bare", "bare")])
+    );
+    assert_eq!(
+        (odd.default, odd.default_id),
+        (None, None),
+        "no default entry, none named"
     );
     // A Claude too old to list them answers without, or with an error.
     let error = json!({ "type": "control_response", "response": {
@@ -785,7 +803,31 @@ fn claudes_models_are_its_own_and_its_default_names_one() {
 }
 
 #[test]
-fn codexs_models_are_kept_without_the_hidden_ones() {
+fn a_claude_models_version_is_read_from_the_id_it_resolves_to() {
+    use crate::agents::ready::claude_version_name;
+    let named = |id| claude_version_name(id);
+    assert_eq!(named("claude-opus-5-5").as_deref(), Some("Opus 5.5"));
+    assert_eq!(named("claude-fable-5-2").as_deref(), Some("Fable 5.2"));
+    assert_eq!(named("claude-opus-5").as_deref(), Some("Opus 5"));
+    assert_eq!(
+        named("claude-haiku-4-5-20251001").as_deref(),
+        Some("Haiku 4.5"),
+        "date dropped"
+    );
+    for odd in [
+        "claude-sonnet-5-5[1m]",
+        "claude-next",
+        "claude-3-5-sonnet-20241022",
+        "gpt-6-luna",
+        "claude-opus-five",
+        "",
+    ] {
+        assert_eq!(named(odd), None, "{odd}");
+    }
+}
+
+#[test]
+fn codexs_models_are_kept_with_the_hidden_ones_apart() {
     use crate::agents::ready::{Found, Models, Ready, codex_listed};
     // Codex 0.167.1's answer to model/list, cut to what ilo reads.
     let answer: Value =
@@ -811,8 +853,10 @@ fn codexs_models_are_kept_without_the_hidden_ones() {
         Models {
             listed: pairs(&[("gpt-5-codex", "GPT-5 Codex"), ("bare", "bare")]),
             default: Some("Old".into()),
+            default_id: Some("old".into()),
+            more: pairs(&[("old", "Old")]),
         },
-        "a hidden default is still named"
+        "a hidden default is still named, and the hidden ones kept for More Models"
     );
     let found = Found {
         ready: Ready::SignedIn,
@@ -836,7 +880,7 @@ fn a_list_saved_before_the_cli_named_its_default_is_read() {
         Found::from_saved(&codex).models,
         Some(Models {
             listed: pairs(&[("gpt-5.5", "GPT-5.5")]),
-            default: None,
+            ..Models::default()
         })
     );
     let claude = json!({ "ready": "signed-in", "models": [] });
@@ -1172,7 +1216,7 @@ fn a_walled_start_carries_no_name_outside_the_list() {
         params: Vec::new(),
     };
     let names = kept(Cli::Claude);
-    let wall = Arc::new(Wall::inside(None, &rules, &names).unwrap());
+    let wall = Arc::new(Wall::inside(&rules, &names).unwrap());
     let start = Launch {
         wall: Some(wall.clone()),
         ..launch(Cli::Claude)

@@ -3892,14 +3892,20 @@ impl Settings {
             .iter()
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
-        // Under the inside switch, while it's on: what is kept of them (#4105).
+        // Under the inside switch, while it's on: whether threads see the user's tabs (#4403),
+        // then what is kept of them (#4105).
+        let your_tabs = on.then(|| self.your_tabs(agents, accent, cx));
         let keeps = on.then(|| self.kept_tasks(agents, cx));
         // And under that, each one kept, which is the list of what is.
         let kept = match on {
             true => self.kept_rows(agents, cx),
             false => Vec::new(),
         };
-        let rows = [master].into_iter().chain(keeps).chain(kept);
+        let rows = [master]
+            .into_iter()
+            .chain(your_tabs)
+            .chain(keeps)
+            .chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         // Where a new thread starts, while threads are on, as the drawing has it under the switch.
         if on {
@@ -4071,6 +4077,26 @@ impl Settings {
         };
         // S30, batch 12: off says what off does; on, the row is bare.
         let line = (!on).then(|| "Off: no app connects.".into());
+        setting(&self.look, name, line, vec![switch])
+    }
+
+    /// Whether threads may list the user's open tabs, by title and site, and open a copy of one in
+    /// a tab of their own (#4403). On until the user turns it off.
+    fn your_tabs(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
+        let name = "Let threads see your open tabs".to_string();
+        let on = agents.read(cx).your_tabs();
+        let switch = {
+            let agents = agents.clone();
+            let set = move |on, cx: &mut App| {
+                agents.update(cx, |agents, cx| agents.set_your_tabs(on, cx))
+            };
+            self.toggle("your tabs", name.clone(), on, set, accent, cx)
+        };
+        let line = Some(
+            "Only titles and sites, and a thread can open its own copy. Private windows, sensitive \
+             sites and Off limits are left out."
+                .into(),
+        );
         setting(&self.look, name, line, vec![switch])
     }
 

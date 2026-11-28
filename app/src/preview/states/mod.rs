@@ -230,7 +230,8 @@ mod tests {
     }
 
     /// The working task has a model to show, as a thread the user started does, so its composer's
-    /// row of choices carries it beside the level: its CLI's mark and its name, as the app says it.
+    /// row of choices carries it beside the level: its provider's mark and the model's own name,
+    /// as the app says it (Z54), never the assistant's default.
     #[test]
     fn the_working_task_has_a_model_for_its_row() {
         use browser::agents::runner::Cli;
@@ -238,7 +239,7 @@ mod tests {
         let Some((mark, said, _, _)) = talk.model else {
             panic!("the preview's thread has no model, so its row shows the level alone");
         };
-        assert_eq!(mark, Cli::Claude.glyph());
-        assert!(said.starts_with(Cli::Claude.name()), "{said}");
+        assert_eq!(mark, Some(Cli::Claude.caps().mark));
+        assert!(!said.is_empty() && !said.contains("default"), "{said}");
     }
 }

@@ -31,6 +31,12 @@ use crate::{
     tooltip::{Anchor, Tip},
 };
 
+use crate::model_menu::SIGN_IN;
+pub use crate::model_menu::{
+    DEFAULT_ROW, ModelPick, TaskAgent, TaskAgents, model_choices, model_words, next_model,
+    starts_on,
+};
+
 mod calculator;
 pub mod choices;
 
@@ -243,71 +249,6 @@ pub enum TaskRow {
     Thread,
 }
 
-/// An agent ⌘T's ask lists (Agent task).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TaskAgent {
-    pub id: SharedString,
-    pub name: SharedString,
-    /// Its glyph, Settings › Agents' own.
-    pub glyph: &'static str,
-    /// The model it runs tasks on, by name, or None for its own default.
-    pub model: Option<SharedString>,
-    /// That model by id, empty for its own default: Settings' Model row.
-    pub model_id: String,
-    /// Settings' name for its default, `{assistant}'s default` (Y1), which the model trigger shows
-    /// while it's picked, and which model that is where it said. The menu's row is `Default` (D3).
-    pub default_row: SharedString,
-    pub default_model: Option<SharedString>,
-    /// The models it offers after its default, as id and name: the one list Settings' Model row
-    /// is built from.
-    pub models: Vec<(String, String)>,
-    /// When its plan's limit resets, if it's at it.
-    pub resets: Option<SharedString>,
-}
-
-/// What ⌘T's ask offers, as the browser last learned it: the agents signed in, the default first,
-/// and whether it has learned which are yet.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TaskAgents {
-    pub agents: Vec<TaskAgent>,
-    pub known: bool,
-    /// The assistants installed but not signed in, by id and name, which the composer's model
-    /// menu offers to sign in.
-    pub signed_out: Vec<(SharedString, SharedString)>,
-}
-
-/// The model the next task on `agent` starts on, by id, empty for its own default: the pick for
-/// it, or Settings'. A pick it no longer offers is its default, as in Settings.
-pub fn next_model(picked: Option<&(SharedString, String)>, agent: &TaskAgent) -> String {
-    let picked = picked.filter(|(on, _)| *on == agent.id).map(|(_, id)| id);
-    let id = picked.unwrap_or(&agent.model_id);
-    match agent.models.iter().any(|(each, _)| each == id) {
-        true => id.clone(),
-        false => String::new(),
-    }
-}
-
-/// What the assistant's chip says: its name and the model the next task starts on, or its Model
-/// menu's first row for its own default.
-pub fn model_words(agent: &TaskAgent, id: &str) -> String {
-    match agent.models.iter().find(|(each, _)| each == id) {
-        Some((_, name)) => format!("{} · {name}", agent.name),
-        None => agent.default_row.to_string(),
-    }
-}
-
-/// The assistant a thread starts on: the one `picked` names, while it isn't at its limit, else the
-/// first ready.
-pub fn starts_on<'a>(
-    agents: &'a TaskAgents,
-    picked: Option<&(SharedString, String)>,
-) -> Option<&'a TaskAgent> {
-    let picked = picked.map(|(id, _)| id);
-    let mut ready = agents.agents.iter().filter(|agent| agent.resets.is_none());
-    let first = ready.clone().next();
-    ready.find(|agent| Some(&agent.id) == picked).or(first)
-}
-
 /// The level menu, as each level it offers and its items: every level, `current` checked, and the
 /// line every level holds to. Settings' `A new thread starts with` opens it too, row for row.
 pub fn level_choices(current: Tier) -> (Vec<Tier>, Vec<MenuEntry>) {
@@ -321,73 +262,6 @@ pub fn level_choices(current: Tier) -> (Vec<Tier>, Vec<MenuEntry>) {
     items.push(MenuEntry::line());
     items.push(MenuEntry::named(choices::NEVER_GETS, false));
     (tiers, items)
-}
-
-/// The model menu, as its items and what each picks: each assistant by its own name, then the
-/// models it offers, its default first and the one a thread starts on (`picked`, else Settings')
-/// checked; one at its limit says when it resets, and one not signed in has Sign In, which starts
-/// its own sign-in as Settings' does; then Settings › Agents while `to_settings`. Each assistant's
-/// heading is its name as Settings' page has it. Over them all a field narrows them as the user
-/// types: an assistant with no model matching goes, heading and all, as Sign In does, and Settings
-/// stays whatever is typed; a pick is still one of these rows. The composer and Settings'
-/// `A new thread starts with` both open it.
-pub fn model_choices(
-    agents: &TaskAgents,
-    picked: Option<&(SharedString, String)>,
-    to_settings: bool,
-) -> (Vec<MenuEntry>, Vec<ModelPick>) {
-    let (on, chosen) = match starts_on(agents, picked) {
-        Some(agent) => (Some(agent.id.clone()), Some(next_model(picked, agent))),
-        None => (None, None),
-    };
-    let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
-    let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
-    // Settings' name for the assistant, so the two never say it differently.
-    let label = |id: &SharedString, name: &SharedString| -> SharedString {
-        match crate::agents::runner::Cli::from_id(id) {
-            Some(cli) => crate::settings_rows::assistant_name(cli).into(),
-            None => name.clone(),
-        }
-    };
-    for agent in &agents.agents {
-        items.push(heading(label(&agent.id, &agent.name)));
-        picks.push(ModelPick::Nothing);
-        let at_limit = agent
-            .resets
-            .clone()
-            .map(|resets| format!("Limit resets {resets}"));
-        let checked = chosen.as_deref().filter(|_| on.as_ref() == Some(&agent.id));
-        let default = agent.default_model.as_deref();
-        let (ids, entries) = crate::agents::task::model_menu(
-            checked.unwrap_or("\0"),
-            DEFAULT_ROW,
-            default,
-            agent.models.clone(),
-        );
-        for ((id, _), entry) in ids.into_iter().zip(entries) {
-            let entry = MenuEntry {
-                enabled: at_limit.is_none(),
-                detail: at_limit.clone().map(Into::into).or(entry.detail.clone()),
-                over: false,
-                ..entry
-            };
-            items.push(entry);
-            picks.push(ModelPick::Model(agent.id.clone(), id));
-        }
-    }
-    for (id, name) in &agents.signed_out {
-        items.push(heading(label(id, name)));
-        picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SIGN_IN, true).offer().out());
-        picks.push(ModelPick::SignIn(id.clone()));
-    }
-    if to_settings {
-        items.push(MenuEntry::line());
-        picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SETTINGS, true).kept().out());
-        picks.push(ModelPick::Settings);
-    }
-    (items, picks)
 }
 
 /// The effort menu, as what each row picks and its items: Default, which leaves the level to the
@@ -419,14 +293,6 @@ fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
         .is_some_and(|(on, _)| on == id)
 }
 
-/// A heading in a menu named as written, such as an assistant's name over its models.
-fn heading(title: SharedString) -> MenuEntry {
-    MenuEntry {
-        header: true,
-        ..MenuEntry::named(title, false)
-    }
-}
-
 /// The folder the system's panel gave, its links resolved, granted for a thread, unless ilo never
 /// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
 /// and the start checks it again.
@@ -437,26 +303,6 @@ fn granted(picked: &std::path::Path) -> Option<Granted> {
     Granted::picked(root).ok()
 }
 
-/// A pick on the composer's model menu.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ModelPick {
-    /// A header or a line, which is never chosen.
-    Nothing,
-    /// A model of an assistant, by the assistant's id and the model's, empty for its default.
-    Model(SharedString, String),
-    /// Sign In under an assistant not signed in, by its id.
-    SignIn(SharedString),
-    Settings,
-}
-
-/// Words on the composer's choices, from the words table (Z9, A5).
-const SIGN_IN: &str = "Sign In";
-const SETTINGS: &str = "Settings";
-/// The model menu's search field (Z9).
-const SEARCH_MODELS: &str = "Search models";
-/// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
-/// `{assistant}'s default`.
-pub const DEFAULT_ROW: &str = "Default";
 /// The selected row's plate, the keyboard's, and its kind's ink, text-2, each the ink at its tone's.
 fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
     let kind = palette.toned(CHOSEN_KIND, LIGHT_CHOSEN_KIND);
@@ -479,10 +325,8 @@ pub const EFFORT_DEFAULT: &str = "Default";
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
 
-/// The widest the chip before the input grows, as a page's title can be long, and its favicon's
-/// size, as the chip's text is the rows' body size.
+/// The widest the chip before the input grows.
 const CHIP_MAX: f32 = 180.;
-const CHIP_FAVICON: f32 = 12.;
 /// The tile after a row's end, as Switch to Tab's: its margin from the row's end, and its glyph's
 /// box.
 const END_TILE_RIGHT: f32 = 3.;
@@ -495,10 +339,9 @@ fn bare_end() -> f32 {
     END_TILE_RIGHT + (ICON_BOX - END_GLYPH) / 2.
 }
 
-/// A task ⇥ is making of what's typed: the page that goes with it, as its address and title, which
-/// ⌫ at the field's start takes off.
+/// A task ⇥ is making of what's typed. No page of the user's goes with it: a thread never gets
+/// the tab the user is on.
 struct Ask {
-    page: Option<(SharedString, SharedString)>,
     /// The level the thread starts at: what the composer last started one with in the profile,
     /// or the user's pick on its level menu. Only these set it.
     tier: Tier,
@@ -512,6 +355,9 @@ struct Ask {
     /// The files and the folder the user added on the plus, from the system's panel alone, for
     /// this thread's start alone: they go as the level does.
     picked: Picked,
+    /// A ↩ that came before the browser had learned which agents are ready, which runs once it
+    /// has (`learned`). It goes with the ask.
+    held: Option<futures::channel::oneshot::Sender<()>>,
 }
 
 /// What the composer opens with: the level and model it last started a thread with, by the
@@ -523,10 +369,10 @@ pub struct Opens {
     pub effort: Option<&'static str>,
 }
 
-/// The effort levels the program of the assistant `id` takes, from the one list
-/// (`Cli::efforts`); none for an assistant ilo doesn't run, or one that takes none.
+/// The effort levels the program of the assistant `id` takes, as its provider says them
+/// (provider.rs); none for an assistant ilo doesn't run, or one that takes none.
 pub fn efforts_of(id: &str) -> &'static [&'static str] {
-    crate::agents::runner::Cli::from_id(id).map_or(&[], |cli| cli.efforts())
+    crate::agents::provider::caps(id).map_or(&[], |caps| caps.efforts)
 }
 
 /// A level's name on the effort menu and its trigger: the words table's for those it names (D6),
@@ -820,18 +666,14 @@ pub trait Host {
     /// learns again which agents are ready, in the background, which `agents_changed` then gives
     /// the page's bar.
     fn look_for_agents(&self, cx: &mut App);
-    /// The page the user is on, if it's a web page: its address and title, all of it that goes
-    /// with an ask, as the agent never gets the user's tab.
-    fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
-    /// Starts `asked` as a task on the agent `agent`, with `page` and the files and folder the
-    /// user added on the plus, from the Space the bar shows over, and hides the bar by folding it
+    /// Starts `asked` as a task on the agent `agent`, with the files and folder the user added on
+    /// the plus, from the Space the bar shows over, and hides the bar by folding it
     /// into the ask's slot, which its card takes, or where the window shows no slot, as `hide`
     /// does.
     fn run_task(
         &self,
         agent: &str,
         asked: &str,
-        page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
         effort: Option<&'static str>,
@@ -1606,7 +1448,7 @@ pub fn task_agents_changed(cx: &mut App) {
             if agents == bar.task_agents {
                 return;
             }
-            bar.task_agents = agents;
+            bar.learned(agents);
             if bar.ask.is_some() {
                 bar.log_agents();
                 bar.show_placeholder(cx);
@@ -1640,13 +1482,8 @@ pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
         .ok();
 }
 
-/// A chip before the input: a mode's or a page's, with the page's favicon, in `fill`.
-fn mode_chip(
-    fill: impl Into<gpui::Fill>,
-    label: Hsla,
-    favicon: Option<AnyElement>,
-    name: SharedString,
-) -> gpui::Div {
+/// A chip before the input: a mode's, in `fill`.
+fn mode_chip(fill: impl Into<gpui::Fill>, label: Hsla, name: SharedString) -> gpui::Div {
     div()
         .flex_none()
         .max_w(px(CHIP_MAX))
@@ -1659,7 +1496,6 @@ fn mode_chip(
         .bg(fill)
         .text_color(label)
         .text_size(px(text::BODY))
-        .children(favicon)
         .child(div().min_w_0().truncate().child(name))
 }
 
@@ -2412,16 +2248,10 @@ impl CommandBar {
     }
 
     /// ⌫, ⌘⌫ or ⌥⌫ with the caret at the start of a site search's input, or the commands-only
-    /// list's, leaves it. In an ask it takes the page's chip off first, then leaves.
+    /// list's, or an ask's, leaves it.
     fn leave_at_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).selection() != (0..0) {
             return;
-        }
-        if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
-            log!("browser: command bar ask without its page");
-            ask.page = None;
-            cx.notify();
-            return cx.stop_propagation();
         }
         if self.leave_site(window, cx)
             || self.leave_commands(window, cx)
@@ -2473,15 +2303,14 @@ impl CommandBar {
         // check.sh reads this line.
         log!("browser: command bar asks an agent");
         let typed = self.typed(cx);
-        let page = None;
         let last = self.host.composer_last(cx);
         let picked = Picked::default();
         self.ask = Some(Ask {
-            page,
             tier: last.tier,
             model: last.model,
             effort: last.effort,
             picked,
+            held: None,
         });
         self.completion.clear();
         self.asked = typed.clone();
@@ -2571,15 +2400,14 @@ impl CommandBar {
     /// the level and on the model its menus hold. Nothing with no words or no assistant ready.
     fn run_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = self.ask.as_ref() else { return };
-        let (page, tier, effort, files) =
-            (ask.page.clone(), ask.tier, ask.effort, ask.picked.clone());
+        let (tier, effort, files) = (ask.tier, ask.effort, ask.picked.clone());
         let asked = self.input.read(cx).text().trim().to_string();
-        let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
-            return;
-        };
         if asked.is_empty() {
             return;
         }
+        let (Some(agent), Some(model)) = (self.composer_assistant(), self.composer_model()) else {
+            return self.hold_ask(by, window, cx);
+        };
         let id = agent.id.clone();
         // Settings' model unless the user picked one for this assistant, here or last time.
         let picked = ask_model_on(self.ask.as_ref(), &id);
@@ -2595,7 +2423,7 @@ impl CommandBar {
         if self.surface == Surface::Window {
             return self
                 .host
-                .run_task(&id, &asked, page, tier, model, effort, files, cx);
+                .run_task(&id, &asked, tier, model, effort, files, cx);
         }
         // At rest the bar stays, empty for the next, as the thread's view takes the page's place.
         self.asked.clear();
@@ -2604,6 +2432,35 @@ impl CommandBar {
         self.set_rows(String::new(), Vec::new(), window, cx);
         self.host
             .run_task_at_rest(&id, &asked, tier, model, effort, files, cx);
+    }
+
+    /// ↩ with no agent to start on, while the browser hasn't learned which are ready, as on the
+    /// first ask of a run: it runs once the browser has, unless the ask goes first. Nothing wakes
+    /// for it meanwhile: the look the ask started ends it.
+    fn hold_ask(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
+        let unknown = (self.task_agents.as_ref()).is_some_and(|agents| !agents.known);
+        let Some(ask) = self.ask.as_mut().filter(|_| unknown) else {
+            return;
+        };
+        let (held, learned) = futures::channel::oneshot::channel();
+        ask.held = Some(held);
+        log!("browser: command bar holds ↩ until the agents are learned");
+        cx.spawn_in(window, async move |bar, cx| {
+            if learned.await.is_ok() {
+                _ = bar.update_in(cx, |bar, window, cx| bar.run_ask(by, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// The agents ⇥ asks changed to `agents`: once the browser has learned them, a held ↩ runs.
+    fn learned(&mut self, agents: Option<TaskAgents>) {
+        self.task_agents = agents;
+        if (self.task_agents.as_ref()).is_some_and(|agents| agents.known)
+            && let Some(held) = self.ask.as_mut().and_then(|ask| ask.held.take())
+        {
+            _ = held.send(());
+        }
     }
 
     /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's
@@ -3928,17 +3785,11 @@ impl CommandBar {
         }
     }
 
-    /// What the chip before the input names: the site search's engine, the commands-only list, or
-    /// in an ask, the page that goes with it.
+    /// What the chip before the input names: the site search's engine or the commands-only list.
+    /// An ask has none.
     fn mode_name(&self) -> Option<SharedString> {
-        if let Some(ask) = &self.ask {
-            return ask
-                .page
-                .as_ref()
-                .map(|(url, title)| match title.is_empty() {
-                    true => SharedString::from(crate::agents::site(url)),
-                    false => title.clone(),
-                });
+        if self.ask.is_some() {
+            return None;
         }
         match (&self.site, self.commands) {
             (Some(site), _) => Some(site.name.clone()),
@@ -4137,7 +3988,7 @@ impl CommandBar {
         let (mark, said) = match self.composer_assistant() {
             Some(agent) => {
                 let model = self.composer_model().unwrap_or_default();
-                (Some(agent.glyph), model_words(agent, &model))
+                (crate::model_menu::mark(agent), model_words(agent, &model))
             }
             None => (None, SIGN_IN.to_string()),
         };
@@ -4170,6 +4021,7 @@ impl CommandBar {
         choices::row(choices::Row {
             form: choices::Form::BAR,
             inks: choices::Inks {
+                light: palette.tone == palette::Tone::Light,
                 text: palette.on_overlay(TITLE),
                 dim: palette.on_overlay(DIM),
                 plate: palette.plate(CHIP),
@@ -4475,14 +4327,7 @@ impl CommandBar {
     /// The chip before the input that names the mode it's in, if it's in one (`mode_name`).
     fn mode_chip(&self, palette: &palette::Palette) -> Option<gpui::Div> {
         let name = self.mode_name()?;
-        let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
-        let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
-        Some(mode_chip(
-            palette.plate(CHIP),
-            palette.ink.into(),
-            favicon,
-            name,
-        ))
+        Some(mode_chip(palette.plate(CHIP), palette.ink.into(), name))
     }
 
     /// The rows, `top` under the input's row, as many as show before the list scrolls.
@@ -4560,7 +4405,7 @@ impl CommandBar {
         if agents == self.task_agents {
             return false;
         }
-        self.task_agents = agents;
+        self.learned(agents);
         if self.ask.is_some() {
             self.log_agents();
             self.show_placeholder(cx);

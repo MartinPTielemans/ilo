@@ -1,9 +1,7 @@
 //! ilo's lines of what happened to a task (#4086 step 3): each refusal, each step that's the
 //! user's, each time an agent asks for a tab back, each change of the task's access, each time the
-//! user stops it, and each wall
-//! around its files that ilo couldn't put up, with what a run inside one left running (#4101,
-//! rewall.rs). The app
-//! makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
+//! user stops it, each folder it wasn't given, and each time ilo ended what a run before left
+//! running (#4101). The app makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
 //! and no page's text makes one, names its buttons or gives it a link.
 
 use std::time::Instant;
@@ -12,9 +10,8 @@ use gpui::{App, Context, SharedString};
 
 use super::files::{Given, Names};
 use super::held;
-use super::task::ilo::{IloKind, IloLine, LeftOut, Reach};
-use super::task::rewall::Rewalled;
-use super::task::{Mark, Task, Who};
+use super::task::ilo::{IloKind, IloLine, LeftOut, NotGiven};
+use super::task::{Mark, Task};
 use super::tier::{self, Tier};
 use super::{Agents, site};
 
@@ -22,10 +19,6 @@ use super::{Agents, site};
 /// keys of its steps below and of the helpers' and the kept task's lines above.
 const STOPS: usize = usize::MAX / 8;
 const PLACED: usize = usize::MAX / 4;
-/// Where the keys of the lines of the walls that weren't put up start: two to each, as a start
-/// without a folder and without attached files says each on a line.
-const REWALLED: usize = usize::MAX / 8 * 3;
-
 /// What the user gave a task as a line names it: the folder, and each file they attached.
 #[derive(Default)]
 struct Shown {
@@ -56,47 +49,6 @@ fn left_out(names: &Names, files: &Given) -> impl Iterator<Item = LeftOut> {
     folder.map(LeftOut::Folder).into_iter().chain(attached)
 }
 
-/// The lines of one wall that wasn't put up, or of what a run left running: none where a line
-/// would have no name to say.
-fn rewalled(came: &Rewalled, names: &Names) -> Vec<IloKind> {
-    match came {
-        Rewalled::Stays { at, refused, files } => (shown(names, files).folder.into_iter())
-            .map(|folder| IloKind::KeptAt {
-                at: *at,
-                refused: *refused,
-                folder,
-            })
-            .collect(),
-        Rewalled::SetBack { at, refused, files } => (shown(names, files).folder.into_iter())
-            .map(|folder| IloKind::SetBack {
-                at: *at,
-                refused: *refused,
-                folder,
-            })
-            .collect(),
-        Rewalled::WithoutFiles { files } => (left_out(names, files))
-            .map(|left| IloKind::StartedWithout { left })
-            .collect(),
-        Rewalled::Stopped { files } => (left_out(names, files))
-            .map(|left| IloKind::NotRestarted { left })
-            .collect(),
-        Rewalled::NotRaised { refused } => vec![IloKind::NotRaised { refused: *refused }],
-        Rewalled::LeftRunning { files } => {
-            // The files the user attached are said as the task's, so need no name.
-            let reach = match (shown(names, files).folder, files.attached.is_some()) {
-                (Some(folder), true) => Some(Reach::Both(folder)),
-                (Some(folder), false) => Some(Reach::Folder(folder)),
-                (None, true) => Some(Reach::Files),
-                (None, false) => None,
-            };
-            (reach.into_iter())
-                .map(|reach| IloKind::LeftRunning { reach })
-                .collect()
-        }
-        Rewalled::EndedLeft => vec![IloKind::EndedLeft],
-    }
-}
-
 /// One of a task's lines other than a refusal, which a refusal's count keeps in `Task::stops`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
@@ -120,11 +72,14 @@ pub enum Happened {
     TierChanged { from: Tier, to: Tier },
     /// The user revoked the task's folder, `files` (J2).
     Revoked { files: Given },
-    /// The task's folder, `files`, was no longer where it was, so ilo ended its grant (J6).
-    FolderGone { files: Given },
     /// ilo couldn't copy the files the user attached, so the task started without them. `files`
     /// is where the copies were to be.
     NotCopied { files: Given },
+    /// The folder the user picked, `files`, wasn't given, for `why`, so the task started without
+    /// it (X6).
+    NotGiven { files: Given, why: NotGiven },
+    /// A later sweep ended what a run of the task's had left running (wall/leftovers.rs).
+    EndedLeft,
     /// The user stopped the task, which held `pages` pages then.
     YouStopped { pages: usize },
     /// ilo ended the task's run, as its assistant started with a tool that isn't ilo's own.
@@ -139,17 +94,11 @@ impl Happened {
             | Happened::YouStopped { .. }
             | Happened::NotOurTools
             | Happened::Revoked { .. }
-            | Happened::FolderGone { .. }
-            | Happened::NotCopied { .. } => None,
+            | Happened::NotCopied { .. }
+            | Happened::NotGiven { .. }
+            | Happened::EndedLeft => None,
         }
     }
-}
-
-/// The turn of `task` under way, as its user's messages count it.
-pub(super) fn turn(task: &Task) -> usize {
-    (task.messages.iter())
-        .filter(|m| m.who == Who::User)
-        .count()
 }
 
 impl Agents {
@@ -185,8 +134,9 @@ impl Agents {
                 | Happened::YouStopped { .. }
                 | Happened::NotOurTools
                 | Happened::Revoked { .. }
-                | Happened::FolderGone { .. }
                 | Happened::NotCopied { .. }
+                | Happened::NotGiven { .. }
+                | Happened::EndedLeft
         );
         task.placed.push(Placed {
             kind: made,
@@ -308,14 +258,15 @@ impl Agents {
                     Some(folder) => IloKind::Revoked { folder },
                     None => continue,
                 },
-                Happened::FolderGone { files } => match shown(&task.names, files).folder {
-                    Some(folder) => IloKind::FolderGone { folder },
-                    None => continue,
-                },
                 Happened::NotCopied { files } => match left_out(&task.names, files).next() {
                     Some(left) => IloKind::NotCopied { left },
                     None => continue,
                 },
+                Happened::NotGiven { files, why } => match shown(&task.names, files).folder {
+                    Some(folder) => IloKind::StartedWithout { folder, why: *why },
+                    None => continue,
+                },
+                Happened::EndedLeft => IloKind::EndedLeft,
                 Happened::YouStopped { pages } => IloKind::YouStopped { pages: *pages },
                 Happened::NotOurTools => IloKind::NotOurTools,
             };
@@ -336,23 +287,6 @@ impl Agents {
                 line,
             };
             made.push((placed.appeared, mark));
-        }
-        // What came of a wall stands where it came, as the rest does: after the messages and
-        // steps the task had then.
-        for (index, came) in task.rewalled.iter().enumerate() {
-            for (nth, kind) in rewalled(&came.what, &task.names).into_iter().enumerate() {
-                let line = IloLine {
-                    key: REWALLED + 2 * index + nth,
-                    kind,
-                    settled: true,
-                };
-                let mark = Mark {
-                    after: came.after,
-                    traced: came.traced,
-                    line,
-                };
-                made.push((came.appeared, mark));
-            }
         }
         made.sort_by_key(|(appeared, mark)| (mark.after, mark.traced, *appeared));
         made.into_iter().map(|(_, mark)| mark).collect()

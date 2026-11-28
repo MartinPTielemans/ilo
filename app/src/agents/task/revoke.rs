@@ -1,11 +1,10 @@
 //! A live task's folder goes (#4101): the user revokes it, on Settings › Agents › Folders in use,
 //! or ilo does, when the folder is no longer where it was. Either way the task goes on without
-//! it, its assistant started again outside any wall for it (rewall.rs), and its conversation says
-//! so by the folder's name; nothing else does. No agent tool reaches any of this.
+//! it, its assistant told so, and its conversation says so by the folder's name; nothing else
+//! does. No agent tool reaches any of this.
 
 use gpui::{Context, SharedString};
 
-use super::rewall::Change;
 use crate::agents::Agents;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
@@ -84,38 +83,11 @@ impl Agents {
             folder: Some(folder),
             attached: None,
         };
-        self.place_in(
-            agent,
-            Happened::Revoked {
-                files: files.clone(),
-            },
-        );
+        self.place_in(agent, Happened::Revoked { files });
         self.note_on(agent, 0, ACCESS_ACTION, "", REVOKED_LOGGED, "");
         if runs {
-            self.rewall(
-                agent,
-                Change::TookBack(files),
-                revoked_told(true, attached),
-                cx,
-            );
+            self.tell_task(agent, revoked_told(true, attached), false, cx);
         }
         cx.notify();
-    }
-
-    /// `agent`'s folder is no longer where it was, moved, renamed, deleted or on a disk gone, as
-    /// the wall found at its start: ilo ends the grant and the task goes on, started by the
-    /// caller (J6).
-    pub(super) fn folder_gone(&mut self, agent: &str) {
-        let Some(task) = self.task_mut(agent) else {
-            return;
-        };
-        let Some(folder) = task.files.folder.take() else {
-            return;
-        };
-        let files = Given {
-            folder: Some(folder),
-            attached: None,
-        };
-        self.place_in(agent, Happened::FolderGone { files });
     }
 }

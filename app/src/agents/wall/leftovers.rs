@@ -362,7 +362,7 @@ pub struct Cleaned {
     /// Places kept, as a sweep wasn't clean: the next launch tries again.
     pub kept: usize,
     /// Each place whose mark was swept clean, by its name, with how many that sweep ended: what
-    /// a kept task whose run left that place says it ended (rewall.rs).
+    /// a kept task whose run left that place says it ended (task/boxed.rs).
     pub clean: Vec<(String, usize)>,
 }
 

@@ -54,7 +54,7 @@ fn a_hand_off_fits_up_to_the_cap_and_not_a_byte_over() {
     assert_eq!(handoff(&rules_of(HANDOFF_MAX + 1), &[]), None);
     // Refused where the wall is made, so nothing is ever started for it.
     assert_eq!(
-        Wall::inside(None, &rules_of(HANDOFF_MAX + 1), &[]).unwrap_err(),
+        Wall::inside(&rules_of(HANDOFF_MAX + 1), &[]).unwrap_err(),
         WallRefused::Failed(TOO_LONG.into())
     );
 }
@@ -133,13 +133,12 @@ mod walled {
                 .map(|(key, path)| (*key, path.to_path_buf()))
                 .collect(),
         };
-        Wall::inside(None, &rules, kept).unwrap()
+        Wall::inside(&rules, kept).unwrap()
     }
 
     /// A wall whose launcher is `program`, handed `handoff` as it is.
     fn wall_with(program: PathBuf, handoff: Vec<u8>) -> Wall {
         Wall {
-            folder: None,
             started: SystemTime::now(),
             launcher: Some(Launcher { program, handoff }),
             tmp: None,
@@ -511,7 +510,7 @@ mod walled {
 
     #[test]
     fn a_hand_off_at_the_cap_is_given_whole_without_a_wait() {
-        let wall = Wall::inside(None, &rules_of(HANDOFF_MAX), &[]).unwrap();
+        let wall = Wall::inside(&rules_of(HANDOFF_MAX), &[]).unwrap();
         let ran = run(&wall, "/bin/sh", &["-c", "echo ran"]);
         assert_eq!((ran.risen, ran.out.as_str()), (Ok(()), "ran\n"));
         // More than any pipe takes at once isn't waited for: the launcher is ended, unstarted.

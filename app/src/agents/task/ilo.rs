@@ -87,32 +87,8 @@ pub enum IloKind {
     /// ilo ended the task's run before its first answer, as its assistant started with a tool
     /// that isn't ilo's own (AP17). It's what happened, so it needs nothing of the user.
     NotOurTools,
-    /// The task started, or went on, without files the user gave it, as ilo couldn't limit its
-    /// assistant to them (#4101).
-    StartedWithout { left: LeftOut },
-    /// The task stays at `at`, as ilo couldn't limit its assistant to `folder` at `refused`, the
-    /// level the user asked for, which it never had.
-    KeptAt {
-        at: Tier,
-        refused: Tier,
-        folder: SharedString,
-    },
-    /// The same once the task had been at `refused`, under the line that says the user set it:
-    /// ilo set it back to `at`.
-    SetBack {
-        at: Tier,
-        refused: Tier,
-        folder: SharedString,
-    },
-    /// The task stopped, as ilo couldn't start its assistant again without what the user took
-    /// back.
-    NotRestarted { left: LeftOut },
-    /// The task stopped, as ilo couldn't start its assistant again at `refused`, the level the
-    /// user raised it to.
-    NotRaised { refused: Tier },
-    /// ilo couldn't end everything the assistant had started, which can still reach what the
-    /// task was given.
-    LeftRunning { reach: Reach },
+    /// The task started without the folder the user picked, for `why` (X6).
+    StartedWithout { folder: SharedString, why: NotGiven },
     /// ilo later ended what the assistant had left running.
     EndedLeft,
     /// The user revoked the task's folder; it goes on without it (J2).
@@ -146,6 +122,15 @@ pub enum IloKind {
     Kept { words: SharedString },
 }
 
+/// Why ilo didn't give a task the folder the user picked, at its start (X6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotGiven {
+    /// It no longer resolves to itself: it was moved, renamed or is gone.
+    Gone,
+    /// It's one ilo never gives.
+    Never,
+}
+
 /// What a task went on without, or couldn't be started again without, by the name the app shows
 /// for it.
 #[derive(Clone, Debug, PartialEq)]
@@ -156,15 +141,6 @@ pub enum LeftOut {
     File(SharedString),
     /// The files they attached, more than one, which the line counts.
     Files(usize),
-}
-
-/// What the processes a run left can still reach of what its task was given: the folder, by the
-/// name the app shows for it, the files the user attached, or both.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Reach {
-    Folder(SharedString),
-    Files,
-    Both(SharedString),
 }
 
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
@@ -251,11 +227,6 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         // What happened, which no press undoes: the files are given again at a task's start.
         IloKind::NotOurTools
         | IloKind::StartedWithout { .. }
-        | IloKind::KeptAt { .. }
-        | IloKind::SetBack { .. }
-        | IloKind::NotRestarted { .. }
-        | IloKind::NotRaised { .. }
-        | IloKind::LeftRunning { .. }
         | IloKind::EndedLeft
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
@@ -296,11 +267,6 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         IloKind::TierChanged { .. } | IloKind::YouStopped { .. } => None,
         IloKind::NotOurTools
         | IloKind::StartedWithout { .. }
-        | IloKind::KeptAt { .. }
-        | IloKind::SetBack { .. }
-        | IloKind::NotRestarted { .. }
-        | IloKind::NotRaised { .. }
-        | IloKind::LeftRunning { .. }
         | IloKind::EndedLeft
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
