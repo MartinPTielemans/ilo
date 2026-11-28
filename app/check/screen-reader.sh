@@ -638,7 +638,8 @@ says "$at" "Needs you" "NVDA didn't say the agent's task needs the user as ilo r
 spoken "the agent's change refused"
 arrival=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tr '\n' ' ')
 echo "note: NVDA on the agent's change refused: $arrival"
-# The task's header is at the sidebar's foot, which the Library stands in while it's open.
+# The task's card stands at the top of Today, over the tabs opened before it (task_cards/tests.rs
+# reads the ring's order), and the Library stands in the sidebar's place while it's open.
 if [ "$(grep -c '^browser: library shown$' "$log" || true)" -gt "$(grep -c '^browser: library hidden$' "$log" || true)" ]; then
   press l cmd shift
   expect '^browser: library hidden$' "the Library's key didn't put the Library away"
@@ -652,11 +653,11 @@ expect '^browser: sidebar keyed ' "F6 didn't ring a row of the sidebar"
 headers=$(grep -c '^browser: strip keyed header$' "$log" || true)
 at=$(wc -l < "$nvda_log")
 for _ in $(seq 12); do
-  press down
+  press up
   [ "$(grep -c '^browser: strip keyed header$' "$log" || true)" -gt "$headers" ] && break
 done
 [ "$(grep -c '^browser: strip keyed header$' "$log" || true)" -gt "$headers" ] ||
-  fail "↓ from the sidebar's rows never rang the agent's task's header at its foot"
+  fail "↑ from the sidebar's rows never rang the agent's task's header over them: $(grep -e '^browser: sidebar keyed ' -e '^browser: strip keyed ' -e '^browser: task plate ' "$log" | tail -16)"
 on_header=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tail -1)
 echo "note: NVDA on the task's header: $on_header"
 press return
