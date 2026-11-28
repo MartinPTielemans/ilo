@@ -948,6 +948,13 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// Runs `then` once the command bar asked to open draws its first frame, if it hasn't yet: the
+    /// Mac's host draws it in a block it queues on the main thread, behind whatever is queued
+    /// there already (#4490). Whether it waits; a host that draws it as it's asked never does.
+    fn when_bar_drawn(&self, then: Box<dyn FnOnce(&mut App)>, cx: &mut App) -> bool {
+        _ = (then, cx);
+        false
+    }
     /// The tab the core shows in this window now, 0 for none. The shell hears of it only when
     /// the core's report comes, which at launch can be after the user's first keys.
     fn shown_now(&self) -> u64 {

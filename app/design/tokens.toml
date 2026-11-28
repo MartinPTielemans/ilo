@@ -2777,7 +2777,10 @@ ways-still-fade = 0.15
 # card's place in one frame, so only one glass is ever on screen, and its content and the bar come
 # in over `reveal`. The last step's knot fades with the content. Where it can't, and with Reduce
 # Motion, the card cross-fades over `cross-fade`. The Mac's host grows it; no other does yet.
+# The bar opened at the press draws its first frame in a block the Mac's host queues behind the
+# card's next frames, so one frame of the content's fade waits for it, `bar-hold` at most (#4490).
 content = 0.12
+bar-hold = 0.017
 grow = 0.52
 rest = 0.5
 reveal = 0.24

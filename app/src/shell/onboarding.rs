@@ -349,6 +349,10 @@ pub(super) struct Onboarding {
     /// found: the window's content and the new tab's bar, opened then, wait under the card until
     /// the window takes its place.
     grown_exit: bool,
+    /// The exit's frame that waits for the new tab's bar to draw its first (#4490): once it has
+    /// waited, and while it does.
+    held_for_bar: bool,
+    holding: bool,
     /// Light or dark where check.sh says, else the window's.
     light: Option<bool>,
     /// The step has come all the way and said so.
@@ -564,6 +568,8 @@ impl Shell {
             ending: None,
             grows: None,
             grown_exit: false,
+            held_for_bar: false,
+            holding: false,
             light: appearance.and_then(|name| match name {
                 "light" => Some(true),
                 "dark" => Some(false),
@@ -1308,6 +1314,21 @@ impl Shell {
         })
     }
 
+    /// Whether first run's card holds its next frame for the new tab's bar (#4490), which its
+    /// window then doesn't draw for a change of the shell's.
+    pub(super) fn holds_first_run_frame(&self) -> bool {
+        self.onboarding.as_ref().is_some_and(|o| o.holding)
+    }
+
+    /// The bar drew its first frame, or the card has held its frame `bar-hold`: the card draws on.
+    fn bar_hold_over(&mut self, cx: &mut Context<Self>) {
+        if let Some(onboarding) = self.onboarding.as_mut()
+            && std::mem::take(&mut onboarding.holding)
+        {
+            cx.notify();
+        }
+    }
+
     /// How far the browser window's content has come in, 0 to 1: none while first run's card
     /// grows to the window, which shows its tint alone under it, then in over `reveal` from the
     /// frame the window takes the card's place (first-run v9 §10). Whole otherwise.
@@ -1480,7 +1501,30 @@ impl Shell {
         let bringing = onboarding.bring.moving || onboarding.ways.moving;
         onboarding.drawing =
             !came || entry.is_some() || ending.is_some() || sliding || progressing || bringing;
-        if onboarding.drawing {
+        // The new tab's bar, opened at the press under a grown card, draws its first frame in a
+        // block the Mac's host queues on the main thread behind the card's next frames, which then
+        // keep it waiting (#4490). So one frame of the content's fade, never the exit's last,
+        // waits for the bar's, `bar-hold` at most.
+        let hold = onboarding.grown_exit
+            && !onboarding.held_for_bar
+            && ending.is_some_and(|at| at < crate::tokens::shell::onboarding::exit::CONTENT);
+        let shell = cx.entity().downgrade();
+        let drew = move |cx: &mut App| {
+            _ = shell.update(cx, |shell, cx| shell.bar_hold_over(cx));
+        };
+        if hold && self.browser.when_bar_drawn(Box::new(drew.clone()), cx) {
+            onboarding.held_for_bar = true;
+            onboarding.holding = true;
+            log!("browser: onboarding exit waits a frame for the bar");
+            let wait = onboarding.clock.timer(Duration::from_secs_f32(
+                crate::tokens::shell::onboarding::exit::BAR_HOLD,
+            ));
+            cx.spawn(async move |_, cx| {
+                wait.await;
+                cx.update(drew);
+            })
+            .detach();
+        } else if onboarding.drawing && !onboarding.holding {
             window.request_animation_frame();
         }
         // Each frame says again where its controls are.

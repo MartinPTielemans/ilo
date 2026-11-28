@@ -825,6 +825,8 @@ pub struct CommandBar {
     opened_drawn: bool,
     /// The open's first frame was drawn, on screen or off, and its time logged.
     opened_drew: bool,
+    /// What runs once the open's first frame is drawn (`when_drawn`).
+    when_drawn: Option<Box<dyn FnOnce(&mut App)>>,
     /// The agents ⇥ asks, as last learned, read as the bar opens and as they change.
     task_agents: Option<TaskAgents>,
     /// While ⇥ makes what's typed a task (Agent task).
@@ -1089,6 +1091,7 @@ fn new_bar(
             opened_at: None,
             opened_drawn: false,
             opened_drew: false,
+            when_drawn: None,
             task_agents: None,
             ask: None,
             plus: crate::plus::Plus::default(),
@@ -1157,6 +1160,22 @@ pub fn show(
         }
         None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, BAR_LEVEL),
     }
+}
+
+/// Runs `then` once the window's bar draws its first frame since it was asked to open, if it's
+/// open and hasn't drawn it yet: the Mac's host draws it in a block it queues on the main thread,
+/// behind whatever is queued there already (#4490). Whether it waits.
+pub fn when_drawn(then: Box<dyn FnOnce(&mut App)>, cx: &mut App) -> bool {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
+        return false;
+    };
+    window.bar.update(cx, |bar, _| {
+        let waits = bar.open.get() && bar.opened_at.is_some() && !bar.opened_drew;
+        if waits {
+            bar.when_drawn = Some(then);
+        }
+        waits
+    })
 }
 
 /// The bar, open for a new tab, takes `asked` as an ask, as if the user had typed it and pressed
@@ -4417,13 +4436,16 @@ impl CommandBar {
 impl CommandBar {
     /// Logs the time from ⌘T to the bar's first frame drawn, on screen or off, once an open: the
     /// point before its window shows it, which the first frame's line follows.
-    fn log_drawn(&mut self) {
+    fn log_drawn(&mut self, cx: &mut Context<Self>) {
         if let Some(opened) = self.opened_at.filter(|_| !self.opened_drew) {
             self.opened_drew = true;
             log!(
                 "browser: command bar frame drawn in {:.1} ms",
                 opened.elapsed().as_secs_f64() * 1000.
             );
+            if let Some(then) = self.when_drawn.take() {
+                cx.defer(then);
+            }
         }
     }
 
@@ -4449,7 +4471,7 @@ impl Render for CommandBar {
                 self.input.read(cx).text()
             );
         }
-        self.log_drawn();
+        self.log_drawn(cx);
         if window.is_visible() {
             self.log_first_frame();
         } else {

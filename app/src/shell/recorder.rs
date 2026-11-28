@@ -230,6 +230,10 @@ pub(crate) struct Recorder {
     pub(super) searched_tabs: RefCell<Vec<Vec<u64>>>,
     /// The command bar shows, until a test plays the app's report that it was dismissed.
     pub(super) bar_open: Cell<bool>,
+    /// Whether the bar asked to open waits to draw its first frame, as the Mac's host has it, and
+    /// what runs once it has, which a test plays with `bar_drew`.
+    pub(super) bar_waits: Cell<bool>,
+    pub(super) bar_drawn: RefCell<Option<Box<dyn FnOnce(&mut App)>>>,
     /// The tab the core shows already, before the shell hears of it, as a test sets it.
     pub(super) shown_now: Cell<u64>,
     /// The find bar has the keyboard, as a test sets it.
@@ -340,6 +344,13 @@ pub(crate) struct Recorder {
 }
 
 impl Recorder {
+    /// Plays the bar's first frame drawn, as the Mac's host draws it once its block's turn comes.
+    pub(super) fn bar_drew(&self, cx: &mut App) {
+        if let Some(then) = self.bar_drawn.take() {
+            then(cx);
+        }
+    }
+
     /// From now on, the calls that read Shells in the app read `shell` (#2459).
     pub(super) fn reads_shell(&self, shell: WeakEntity<super::Shell>) {
         *self.reads.borrow_mut() = Some(shell);
@@ -1916,6 +1927,14 @@ impl Browser for Recorder {
 
     fn command_bar_open(&self, _: &App) -> bool {
         self.bar_open.get()
+    }
+
+    fn when_bar_drawn(&self, then: Box<dyn FnOnce(&mut App)>, _: &mut App) -> bool {
+        let waits = self.bar_open.get() && self.bar_waits.get();
+        if waits {
+            self.bar_drawn.replace(Some(then));
+        }
+        waits
     }
 
     fn shown_now(&self) -> u64 {

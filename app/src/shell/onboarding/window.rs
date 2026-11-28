@@ -60,7 +60,12 @@ impl FirstRun {
                 })
                 .detach();
                 FirstRun {
-                    _shell: cx.observe(&shell, |_, _, cx| cx.notify()),
+                    // Not while the card holds a frame for the bar (#4490).
+                    _shell: cx.observe(&shell, |_, shell, cx| {
+                        if !shell.read(cx).holds_first_run_frame() {
+                            cx.notify();
+                        }
+                    }),
                     shell,
                 }
             })

@@ -1926,6 +1926,10 @@ impl Browser for Engine {
         with_overlays(move |cx| command_bar::show_tabs(tabs, cx), cx);
     }
 
+    fn when_bar_drawn(&self, then: Box<dyn FnOnce(&mut App)>, cx: &mut App) -> bool {
+        command_bar::when_drawn(then, cx)
+    }
+
     fn command_bar_open(&self, cx: &App) -> bool {
         command_bar::is_open(cx)
     }

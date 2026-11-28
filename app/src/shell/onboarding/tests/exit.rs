@@ -547,3 +547,109 @@ fn the_hint_says_the_new_tabs_own_key(cx: &mut TestAppContext) {
     assert_eq!(drawn, key.is_some());
     assert!(drawn, "⌘T is bound by default");
 }
+
+/// Draws the next frame, if anything asked for one, and says how many the card has drawn since
+/// the press.
+fn next_frame(cx: &mut VisualTestContext) -> usize {
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    plates().len()
+}
+
+/// Start Browsing pressed where the host grows first run's window, with the new tab's bar
+/// waiting to draw its first frame as the Mac's host has it, and the press's own frame drawn.
+fn pressed_with_the_bar_waiting(cx: &mut VisualTestContext, host: &Recorder) -> usize {
+    host.grows_first_run.set(true);
+    host.bar_waits.set(true);
+    cx.simulate_keystrokes("enter");
+    cx.simulate_resize(size(px(GROWN.0), px(GROWN.1)));
+    cx.run_until_parked();
+    next_frame(cx)
+}
+
+/// Under a grown card, the exit's next frame waits for the new tab's bar, opened at the press, to
+/// draw its first, which the Mac's host draws behind the card's queued frames (#4490): one frame
+/// alone, in the content's fade, and the card draws on once the bar has drawn. Nothing after it
+/// waits again.
+#[gpui::test]
+fn a_grown_exit_holds_one_frame_for_the_bars_first(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    let drawn = pressed_with_the_bar_waiting(cx, &host);
+    assert_eq!(
+        host.command_bars.borrow().len(),
+        1,
+        "the bar opened at the press"
+    );
+    assert!(drawn >= 1, "the press's frame wasn't drawn");
+    assert!(
+        host.bar_drawn.borrow().is_some(),
+        "nothing waits for the bar"
+    );
+    let lines = crate::heard::take();
+    assert_eq!(
+        heard(&lines, "browser: onboarding exit waits a frame for the bar"),
+        1
+    );
+    assert_eq!(
+        next_frame(cx),
+        drawn,
+        "the card drew while the bar's frame waited"
+    );
+    assert_eq!(
+        next_frame(cx),
+        drawn,
+        "the card drew while the bar's frame waited"
+    );
+
+    cx.update(|_, cx| host.bar_drew(cx));
+    let after = next_frame(cx);
+    assert!(after > drawn, "the bar drew and the card didn't");
+    assert!(next_frame(cx) > after, "the card's motion didn't go on");
+    later(&shell, cx, x::CONTENT / 2.);
+    assert!(host.bar_drawn.borrow().is_none(), "a second frame waited");
+    let lines = crate::heard::take();
+    assert_eq!(
+        heard(&lines, "browser: onboarding exit waits a frame for the bar"),
+        0
+    );
+}
+
+/// A bar that doesn't draw holds the card's frame `bar-hold` and no longer, and the exit ends on
+/// its grown card as ever.
+#[gpui::test]
+fn a_held_exit_frame_waits_bar_hold_at_most(cx: &mut TestAppContext) {
+    let (shell, cx, host) = at_the_end(cx);
+    let drawn = pressed_with_the_bar_waiting(cx, &host);
+    assert_eq!(next_frame(cx), drawn);
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(x::BAR_HOLD));
+    cx.run_until_parked();
+    assert!(next_frame(cx) > drawn, "held past bar-hold");
+
+    // The frame the exit ends on isn't held, the bar drawn or not.
+    later(&shell, cx, x::GROW);
+    assert_eq!(step(&shell, cx), None, "the exit ended");
+    let [_, to_radius] = x::CORNERS;
+    let whole = (0., 0., GROWN.0, GROWN.1, to_radius);
+    assert_eq!(plates().last(), Some(&Some(whole)), "the frame it ends on");
+}
+
+/// With the bar's first frame drawn already, as a host that draws it as it's asked has it, and
+/// where the card fades whole, no frame waits.
+#[gpui::test]
+fn no_exit_frame_waits_for_a_bar_that_drew(cx: &mut TestAppContext) {
+    let (_, cx, host) = at_the_end(cx);
+    host.grows_first_run.set(true);
+    cx.simulate_keystrokes("enter");
+    cx.simulate_resize(size(px(GROWN.0), px(GROWN.1)));
+    cx.run_until_parked();
+    let drawn = next_frame(cx);
+    assert!(next_frame(cx) > drawn, "a frame waited for no bar");
+
+    let (_, cx, host) = at_the_end(cx);
+    host.bar_waits.set(true);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let drawn = next_frame(cx);
+    assert!(next_frame(cx) > drawn, "a cross-fade's frame waited");
+}
