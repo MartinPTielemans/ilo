@@ -38,13 +38,16 @@ for choice in $other $system $other automatic; do
   expect "^browser: title [0-9]* scheme $scheme\$" \
     "View › Appearance › $item didn't make the page's prefers-color-scheme $scheme"
 done
-# Settings › General's Appearance is three drawings (#2429) that pick as View › Appearance does,
+# Settings › Appearance's Appearance is three drawings (#2429) that pick as View › Appearance does,
 # and follow it: a click on the other look's gives the page its scheme, View › Appearance's other
 # item moves the ring and gives back the system's, and a click on Automatic's leaves the page's
 # scheme as it is. The row is captured in each look.
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew
+send clickkey $(drawn "toolbar Appearance")
+expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its section"
+settings_drew Appearance
 was=$system
 for choice in $other $system automatic; do
   case $choice in

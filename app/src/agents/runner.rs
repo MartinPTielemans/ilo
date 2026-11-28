@@ -16,6 +16,8 @@ use std::time::Instant;
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
 
+use super::kept::Keep;
+
 /// A CLI that runs tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cli {
@@ -59,22 +61,6 @@ impl Cli {
         match self {
             Cli::Claude => "claude",
             Cli::Codex => "codex",
-        }
-    }
-
-    /// The command that signs the user in, which ilo never runs itself.
-    pub fn sign_in(self) -> &'static str {
-        match self {
-            Cli::Claude => "claude auth login",
-            Cli::Codex => "codex login",
-        }
-    }
-
-    /// The command that installs it.
-    pub fn install(self) -> &'static str {
-        match self {
-            Cli::Claude => "npm install -g @anthropic-ai/claude-code",
-            Cli::Codex => "npm install -g @openai/codex",
         }
     }
 
@@ -168,14 +154,31 @@ pub struct Process {
 }
 
 impl Process {
-    /// Starts the CLI, which reads `first` as the user's first message.
+    /// Starts the CLI, which reads `first` as the user's first message, on a run that keeps
+    /// nothing of its conversation.
     pub fn start(
         launch: &Launch,
         agent: &str,
         first: &str,
         events: UnboundedSender<Event>,
     ) -> std::io::Result<Process> {
+        Self::start_kept(launch, &Keep::Nothing, agent, first, events)
+    }
+
+    /// Starts the CLI on a run that keeps what `keep` says (kept.rs decides), which reads `first`
+    /// as the user's first message, or as their next in a conversation it goes on with.
+    pub fn start_kept(
+        launch: &Launch,
+        keep: &Keep,
+        agent: &str,
+        first: &str,
+        events: UnboundedSender<Event>,
+    ) -> std::io::Result<Process> {
         std::fs::create_dir_all(&launch.dir)?;
+        // A kept run's folder isn't beside its config, so the config's own is made too.
+        if let Some(folder) = launch.config.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
         let mut command = crate::child::command(&launch.program);
         match launch.cli {
             Cli::Claude => {
@@ -187,7 +190,7 @@ impl Process {
                     &instructions_file(launch),
                     launch.instructions.as_bytes(),
                 )?;
-                command.args(claude_args(launch));
+                command.args(super::kept::claude_args(claude_args(launch), keep));
             }
             Cli::Codex => _ = command.arg("app-server"),
         }

@@ -677,6 +677,10 @@ impl Browser for Engine {
         });
     }
 
+    fn ask_again(&self, asked: SharedString, cx: &mut App) {
+        with_overlays(move |cx| command_bar::ask_again(asked, cx), cx);
+    }
+
     fn show_task(&self, _: SharedString, _: &mut App) {
         // The Agents send a window its conversation as it changes; this sends it now.
         agents_core::update(|_, cx| cx.notify());
@@ -2088,6 +2092,11 @@ impl Browser for Engine {
 
     fn settings(&self, cx: &mut App) {
         settings::show(cx);
+    }
+
+    fn off_limits(&self, cx: &mut App) {
+        let section = browser::settings_column::Section::Agents;
+        settings::show_row(section, browser::agents::fence::HEADING.into(), cx);
     }
 
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {

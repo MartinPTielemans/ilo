@@ -1978,6 +1978,10 @@ impl Browser for Recorder {
         self.app_asks.borrow_mut().push("settings");
     }
 
+    fn off_limits(&self, _: &mut App) {
+        self.record("off limits".into());
+    }
+
     fn shortcuts(&self, _: &mut App) {}
 
     fn about(&self, _: &mut App) {
@@ -2027,6 +2031,10 @@ impl Browser for Recorder {
 
     fn show_task(&self, agent: SharedString, _: &mut App) {
         self.record(format!("show task {agent}"));
+    }
+
+    fn ask_again(&self, asked: SharedString, _: &mut App) {
+        self.record(format!("ask again {asked}"));
     }
 
     fn task_picture(&self, tab: u64, _: u64, _: &mut App) {

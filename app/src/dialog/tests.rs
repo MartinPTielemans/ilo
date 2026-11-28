@@ -877,6 +877,90 @@ fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     assert_eq!(dialog.calls(), left(&["show over 100"], "accept Grace"));
 }
 
+/// An input method composes "ぴ" in the prompt's field, or with `commit` ends its composition as it
+/// does when it takes the key itself: committing `commit` in its place, or with it empty dropping
+/// it. Returns what the field shows, and whether it's marked.
+fn input_method(dialog: &mut Asking, commit: Option<&str>) -> (String, bool) {
+    use gpui::EntityInputHandler as _;
+    // The test's window is the dialog's.
+    let shown = dialog.cx.update(|window, cx| {
+        let dialog = window
+            .root::<Dialog>()
+            .flatten()
+            .expect("the dialog's view");
+        let field = dialog.read(cx).asked.as_ref().unwrap().fields[0].clone();
+        field.update(cx, |field, cx| {
+            match commit {
+                None => field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx),
+                Some(text) => field.replace_text_in_range(None, text, window, cx),
+            }
+            (field.text().to_string(), field.composing())
+        })
+    });
+    dialog.cx.run_until_parked();
+    shown
+}
+
+/// What the prompt's field shows, and whether it's marked.
+fn marked(dialog: &mut Asking) -> (String, bool) {
+    dialog.cx.update(|window, cx| {
+        let dialog = window
+            .root::<Dialog>()
+            .flatten()
+            .expect("the dialog's view");
+        let field = dialog.read(cx).asked.as_ref().unwrap().fields[0].read(cx);
+        (field.text().to_string(), field.composing())
+    })
+}
+
+/// ↩ while an input method composes in a prompt's field is the composition's: it answers nothing
+/// and leaves the marked text for the method. Once the method has committed it, the next ↩
+/// answers with it.
+#[gpui::test]
+fn return_while_composing_answers_nothing(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    dialog.cx.simulate_input("a");
+    input_method(&mut dialog, None);
+    dialog.keys("enter");
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "↩ answered while composing"
+    );
+    assert_eq!(
+        marked(&mut dialog),
+        ("aぴ".into(), true),
+        "↩ ended the composition"
+    );
+    input_method(&mut dialog, Some("ぴ"));
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), left(&[], "accept aぴ"));
+}
+
+/// Esc while an input method composes in a prompt's field is the composition's: it cancels
+/// nothing and leaves the marked text for the method. Once the method has dropped it, the next Esc
+/// cancels.
+#[gpui::test]
+fn escape_while_composing_cancels_nothing(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    dialog.cx.simulate_input("a");
+    input_method(&mut dialog, None);
+    dialog.keys("escape");
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "esc cancelled while composing"
+    );
+    assert_eq!(
+        marked(&mut dialog),
+        ("aぴ".into(), true),
+        "esc ended the composition"
+    );
+    input_method(&mut dialog, Some(""));
+    dialog.keys("escape");
+    assert_eq!(dialog.calls(), left(&[], "cancel a"));
+}
+
 #[gpui::test]
 fn tab_moves_to_the_next_field(cx: &mut TestAppContext) {
     let fields = vec![field("", false), field("", true)];
