@@ -299,6 +299,20 @@ bool Ours(HWND hwnd) {
   return hwnd && GetWindowThreadProcessId(hwnd, nullptr) == GetCurrentThreadId();
 }
 
+// The browser window driven, shown or not: while first run shows, the one waiting hidden behind
+// it, whose menus are still the app's, as the Mac's menu bar is while first run shows.
+HWND BrowserWindow() {
+  if (HWND root = Browser(g_driven)) {
+    return root;
+  }
+  for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+    if (Ours(top) && !IsWindowVisible(top) && FindWindowExW(top, nullptr, L"BrowserUI", nullptr)) {
+      return top;
+    }
+  }
+  return nullptr;
+}
+
 // Whether the pointer at |screen| would be in |hwnd|, as Windows hit tests: shown, enabled, not
 // see-through, in its region if it has one, and not saying it's transparent there.
 bool Hits(HWND hwnd, POINT screen) {
@@ -2539,7 +2553,7 @@ bool Run(const std::string& line) {
     return true;
   }
   if (action == "menu" || action == "menubar") {
-    HWND ui_view = FindWindowExW(Driven(), nullptr, L"BrowserUI", nullptr);
+    HWND ui_view = FindWindowExW(BrowserWindow(), nullptr, L"BrowserUI", nullptr);
     return g_menus && ui_view && g_menus(ui_view, rest.c_str(), action == "menubar");
   }
   if (action == "choose") {
