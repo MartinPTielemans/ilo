@@ -34,7 +34,9 @@
 # opens the ringed row's menu and ⌘W closes the ringed row, not the tab shown. A folder
 # from the desktop dropped on the list becomes a folder of its files' tabs, none shown, a file's
 # row dragged onto the page hands the file to the system's drag, and the +'s Add File or Folder…
-# opens a file at the top of Today.
+# opens a file at the top of Today. Settings' Always restore pinned tabs, on, brings a pinned tab
+# away from its pinned URL home at a launch, without loading it, its row titled by its home page
+# as the page itself would be; off, it comes back at its page, away.
 
 # Pinned tabs, from the served page, whose favicon fades once its tab is unloaded.
 serve
@@ -1097,6 +1099,109 @@ expect "^browser: today [0-9][0-9]* $was\$" "the added file didn't open at the t
 added=$(today | cut -d' ' -f1)
 expect "^browser: selected $added\$" "the added file's tab didn't show"
 expect "^browser: loaded $added file:///.*/Notes/A.txt\$" "the added file didn't load in its tab"
+
+# Settings' Always restore pinned tabs, on Tabs & Sidebar, is read as the Spaces come back, so
+# the pinned tab goes away first and the setting goes on after, and a ⌘W then unloads the tab,
+# which is what a launch saves.
+send click $(pinned_row 5)
+expect "^browser: selected $c\( in .*\)\{0,1\}\$" "a click on the pinned tab's row didn't show it"
+expect "^browser: loaded $c $site\$" "the unloaded pinned tab didn't load once shown"
+link_away
+send key , cmd
+expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+settings_drew General
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+in_sight "switch restore pinned urls" || fail "Settings didn't draw Always restore pinned tabs' switch"
+../tools/window-screenshot.sh "$pid" "$out/pinned-setting.png" || fail "no window to capture"
+send clickkey $at
+expect '^browser: restore pinned urls on$' "a click on Always restore pinned tabs didn't turn it on"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+none_since '^browser: command close-tab' || fail "⌘W in Settings closed a tab"
+send key w cmd
+expect "^browser: selected $added in " "⌘W didn't show the added file's tab"
+expect "^browser: page $c unloaded 1\$" "⌘W didn't unload the pinned tab away from its pinned URL"
+none_since "^browser: tab $c closed\$" || fail "⌘W closed the pinned tab"
+quit_by_key
+await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
+exited
+grep -q '"restore_pinned_urls": *true' "$saved" ||
+  fail "Always restore pinned tabs on wasn't saved with the Spaces"
+
+# Launched again with it on, the pinned tab comes home to its pinned URL, without loading, and
+# isn't away, as the app keeps what each launch brings it back to.
+log="$out/pinned-home.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
+await '^browser: outline [0-9]*+\[[0-9]*-\[[0-9]*\] [0-9]* [0-9]*\] [0-9]* [0-9]*$' ||
+  fail "the pinned rows didn't come back: $(outline)"
+c=$(outline | sed 's/.* //')
+await "^browser: page $c back 1 forward 0 loading 0 $site\$" ||
+  fail "the pinned tab didn't come home to its pinned URL: $(grep "^browser: page $c " "$log" | tail -1)"
+await "^browser: page $c unloaded 1\$" || fail "the pinned tab came home loaded"
+await "^browser: title $c ready\$" ||
+  fail "the pinned tab home didn't take its home page's title: $(grep "^browser: title $c " "$log" | tail -1)"
+grep -q "^browser: page $c away 1\$" "$log" && fail "the pinned tab came home away from its pinned URL"
+grep -q "^browser: loaded $c " "$log" && fail "the pinned tab loaded without being shown"
+shown=$(today | cut -d' ' -f1)
+await "^browser: selected $shown\$" || fail "the relaunch didn't show the tab shown last"
+await "^browser: loaded $shown file:///.*/Notes/A.txt\$" || fail "the tab shown didn't load"
+../tools/window-screenshot.sh "$pid" "$out/pinned-home.png" || fail "no window to capture"
+send click $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the restored pinned tab home. Browser wasn't the active app, so the page ignored the click."
+  exit 0
+fi
+# Off, the pinned tab it takes away again comes back at its page, away, as without the setting.
+send click $(pinned_row 5)
+expect "^browser: selected $c\( in .*\)\{0,1\}\$" "a click on the pinned tab's row didn't show it"
+expect "^browser: loaded $c $site\$" "the pinned tab didn't load its pinned URL once shown"
+link_away
+send key , cmd
+expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+settings_drew General
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+in_sight "switch restore pinned urls" || fail "Settings didn't draw Always restore pinned tabs' switch"
+send clickkey $at
+expect '^browser: restore pinned urls off$' "a click on Always restore pinned tabs didn't turn it off"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+none_since '^browser: command close-tab' || fail "⌘W in Settings closed a tab"
+send key w cmd
+expect "^browser: selected $shown in " "⌘W didn't show the tab shown before the pinned tab"
+expect "^browser: page $c unloaded 1\$" "⌘W didn't unload the pinned tab away from its pinned URL"
+quit_by_key
+await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
+exited
+grep -q '"restore_pinned_urls": *false' "$saved" ||
+  fail "Always restore pinned tabs off wasn't saved with the Spaces"
+
+# Launched again with it off, the pinned tab comes back at the page it was left on, away from its
+# pinned URL, as before the setting.
+log="$out/pinned-away.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
+await '^browser: outline [0-9]*+\[[0-9]*-\[[0-9]*\] [0-9]* [0-9]*\] [0-9]* [0-9]*$' ||
+  fail "the pinned rows didn't come back: $(outline)"
+c=$(outline | sed 's/.* //')
+await "^browser: page $c back 1 forward 0 loading 0 ${site}notes.txt\$" ||
+  fail "the pinned tab came home with the setting off: $(grep "^browser: page $c " "$log" | tail -1)"
+await "^browser: page $c unloaded 1\$" || fail "the pinned tab came back loaded"
+await "^browser: page $c away 1\$" || fail "the pinned tab didn't come back away from its pinned URL"
+grep -q "^browser: loaded $c " "$log" && fail "the pinned tab loaded without being shown"
+../tools/window-screenshot.sh "$pid" "$out/pinned-away-restored.png" || fail "no window to capture"
 exec 3>&-
 quit
-echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, offering Undo in a toast, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. A tab shown two closed folders down is listed one under the outer one, whose glyph has dots, and stays listed as another shows until a click on the outer one closes it for good. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. A press on the Space's name row, lit under the pointer with its chevron and •••, collapses the pinned rows, the chevron turning, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-removed.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-nested.png, $out/folder-kept.png, $out/folder-closed-for-good.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-peek-motion.mp4, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png"
+echo "ok: ⌘D pins and unpins from the page and the UI, and ⌘1–⌘9 count pinned tabs first. A middle-click on a row closes its tab as its ✕ or − does. Dragging a row moves its tab in the pinned tabs, pins it and unpins it, without showing it, and escape puts it back. ⌘W and − unload a pinned tab, shown or not, and keep its row, showing the top Today tab, else a pinned tab still loaded, else no page, and an unloaded pinned tab loads once shown. An unloaded pinned row's remove button, named by its tooltip, takes the tab out of the pinned tabs without loading it and not into Today, offering Undo in a toast, and ⌘Z pins it again at its place, while a second click on the − that unloaded it shows the tab. Away from its pinned URL, ⌘↩ from the page and the UI, and a click on its favicon, go back there. Pinned tabs come back pinned, unloaded and at their page, still away. New Folder makes a folder its field names, a drag right and left takes a tab in and out of it, a folder drags as a row, a click closes and opens it, and the command bar finds Collapse All Folders, which closes it, and Expand All Folders, which opens it. A tab shown two closed folders down is listed one under the outer one, whose glyph has dots, and stays listed as another shows until a click on the outer one closes it for good. Resting on it closed previews its tab, and typing the tab's title in the preview's search and ↩ show it, the folder kept closed. It comes back closed, a double-click renames it, its menu's Copy All Links is Copy All Links as Markdown with ⌥ held, which copies them, Change Icon… gives it an emoji and offers Remove Icon after, and Delete Folder leaves its tab in place. A link and a file dragged onto the list open as tabs where they're let go, Today or pinned, and show, text that isn't a link opens a search for it there, and a link that isn't a web link doesn't open. Delete Folder offers Undo, ⌘Z remakes the folder around its tab and ⇧⌘Z deletes it again. Settings' Export… writes the folder and its pinned tab as Markdown links. ⌥-click on a pinned tab's link opens a pinned split. Away from its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change the pinned URL, which ⌘Z and ⇧⌘Z undo and redo, and ⌘-click on its favicon goes back after opening the page in a new tab. A press on the Space's name row, lit under the pointer with its chevron and •••, collapses the pinned rows, the chevron turning, which ⌘1 then skips, Expand Pinned Tabs and Collapse Pinned Tabs in the command bar and the View menu bring them back and fold them, and they come back collapsed. Focus Sidebar from the command bar and the View menu rings the tab shown's row, ↑ and ↓ move the ring past the collapsed rows, return shows its tab with the page holding the keyboard, and a key in the page and escape end it. A folder from the desktop dropped on the list becomes an open folder of its folder, closed, and its files' tabs, none shown, a file's row dragged onto the page starts the system's drag of its file, and the +'s Add File or Folder… opens a file at the top of Today. Settings' Always restore pinned tabs brings a pinned tab away from its pinned URL home at a launch, without loading it, its row titled by its home page as the page itself would be, and off, back at its page, away. Windows: $out/pinned-close.png, $out/pinned-remove.png, $out/pinned-removed.png, $out/pinned-remove-undone.png, $out/pinned-split.png, $out/pinned-url-menu.png, $out/pinned-url-edit.png, $out/pinned-kept-page.png, $out/drag.png, $out/pinned.png, $out/pinned-unloaded.png, $out/pinned-away.png, $out/pinned-restored.png, $out/folder.png, $out/folder-nested.png, $out/folder-kept.png, $out/folder-closed-for-good.png, $out/folder-preview.png, $out/folder-preview-search.png, $out/folder-peek-motion.mp4, $out/folder-restored.png, $out/export.png, $out/folder-menu.png, $out/folder-menu-option.png, $out/folder-icon.png, $out/folder-motion.mp4, $out/drop-before.png, $out/drop-line.png, $out/dropped.png, $out/dropped-text.png, $out/command-bar-commands.png, $out/pinned-caret.png, $out/pinned-collapsed.png, $out/sidebar-keyed.png, $out/sidebar-keyed-down.png, $out/pinned-expanded.png, $out/dropped-folder.png, $out/plus-add.png, $out/pinned-setting.png, $out/pinned-home.png, $out/pinned-away-restored.png"

@@ -57,6 +57,7 @@ constexpr Switch kSwitches[] = {
     {"little_windows", &Settings::little_windows},
     {"warn_before_quitting", &Settings::warn_before_quitting},
     {"restore_windows", &Settings::restore_windows},
+    {"restore_pinned_urls", &Settings::restore_pinned_urls},
     {"warn_moving_profiles", &Settings::warn_moving_profiles},
     {"ad_blocking", &Settings::ad_blocking},
     {"relay_calls", &Settings::relay_calls},

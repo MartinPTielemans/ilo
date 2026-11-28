@@ -400,7 +400,7 @@ pub(crate) unsafe extern "C" fn tab_title_changed(
         .to_string_lossy()
         .into_owned();
     browser::title_log::title(tab, &title);
-    update_shells(|shell, cx| shell.set_title(tab, title.clone().into(), cx));
+    update_shells_later(move |shell, cx| shell.set_title(tab, title.clone().into(), cx));
 }
 
 pub(crate) unsafe extern "C" fn tab_favicon_changed(
@@ -418,7 +418,7 @@ pub(crate) unsafe extern "C" fn tab_favicon_changed(
     if unsafe { bc::bc_tab_window(tab) } == 0 {
         update_app(|cx| link_preview::set_favicon(tab, favicon.clone(), cx));
     }
-    update_shells(|shell, cx| shell.set_favicon(tab, favicon.clone(), cx));
+    update_shells_later(move |shell, cx| shell.set_favicon(tab, favicon.clone(), cx));
 }
 
 pub(crate) unsafe extern "C" fn tab_history(

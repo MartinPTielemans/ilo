@@ -2848,6 +2848,11 @@ BC_EXPORT void bc_set_warn_before_quitting(bool warn);
 // and bc_window_restore.
 BC_EXPORT bool bc_restore_windows(void);
 BC_EXPORT void bc_set_restore_windows(bool restore);
+// Whether each pinned tab a launch brings back goes to the URL it was pinned at (bc_tab_pinned_url),
+// rather than the page it was left on. Off, it comes back at that page, away from its pinned URL
+// if it was. The core keeps it with the Spaces, and reads it as the Spaces come back.
+BC_EXPORT bool bc_restore_pinned_urls(void);
+BC_EXPORT void bc_set_restore_pinned_urls(bool restore);
 // Whether the user has link previews (bc_tab_open_preview) on: a link to another site clicked in a
 // pinned tab or a favorite opens in one, and a link the user asks for in one opens there
 // (tab_link_to_preview). The core keeps it with the Spaces.

@@ -221,6 +221,22 @@ pub(crate) fn update_shells(change: impl Fn(&mut Shell, &mut Context<Shell>)) {
     cx.update(|cx| update_shells_in(cx, change));
 }
 
+/// Changes every window's shell, as `update_shells`, from a core callback that can come from
+/// inside the call that asked for it, an update that holds the App: its borrow here would panic,
+/// as one nested in an update does (#2705), so the change waits for the update to end. Only what
+/// the core reports from inside an update belongs here, since waiting changes a callback's timing:
+/// the launch's restore of a pinned tab to its home fires the title and favicon callbacks
+/// (`Tab::Repoint`), so those two use this and no other.
+pub(crate) fn update_shells_later(change: impl Fn(&mut Shell, &mut Context<Shell>) + 'static) {
+    if let Some(cx) = CX.with_borrow(Clone::clone) {
+        if gpui::AsyncApp::is_updating(&cx) {
+            update_app_later(move |cx| update_shells_in(cx, change));
+            return;
+        }
+    }
+    update_shells(change);
+}
+
 /// Changes every window's shell, as `update_shells`, in an update under way.
 pub(crate) fn update_shells_in(cx: &mut App, change: impl Fn(&mut Shell, &mut Context<Shell>)) {
     let shells: Vec<_> =
