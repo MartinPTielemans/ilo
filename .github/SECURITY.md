@@ -30,6 +30,14 @@ Never in a public issue, pull request or discussion. ilo's own is:
 - **The engine patches** (`engine/series`, `engine/patches/`), including a Chromium protection they
   turn off.
 
+When you connect a client in Settings › Agents, ilo writes that client's token in plain text into
+the client's own config file: `~/.claude.json` for Claude Code, `~/.codex/config.toml` for Codex.
+This is by design: the client reads the token from there to start ilo's bridge. Any program running
+under your user account can read it too. That isn't a vulnerability; a way to get the token without
+running under your account is. The token gives only that client's connection to ilo: the same rules
+apply, and ilo asks you the same questions. Disconnecting the client in Settings › Agents revokes
+the token and closes the client's open connections.
+
 ## What a report needs
 
 - The ilo version and build, as Settings › About shows it, and the Chromium version: Copy Build
