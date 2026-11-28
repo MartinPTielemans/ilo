@@ -4565,7 +4565,7 @@ impl Shell {
         let reveal = self.sidebar_hidden
             && !self.page_fullscreen
             && self.little.is_none()
-            && self.from_side(x) < EDGE_STRIP;
+            && self.at_edge(x);
         let band = cfg!(target_os = "linux")
             && !self.maximized
             && !self.full_screen
