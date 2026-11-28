@@ -368,9 +368,13 @@ step=0
 work_downloads="$(native_path "$PWD/$out/work-downloads")"
 mkdir -p "$work_downloads"
 rm -f "$work_downloads/profile.txt"
-BROWSER_DOWNLOAD_FOLDER="$work_downloads" BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
-pid=$!
-exec 3> "$out/drive"
+# With a DevTools client that says when Clear browsing data's dialog has the keyboard (cdp.py), as
+# clear.sh's launch has, and no page of its own: the Spaces come back as they were.
+cdp_log="$out/profiles-cdp.log"
+scratch=$(mktemp -d)
+BROWSER_DOWNLOAD_FOLDER="$work_downloads"
+export BROWSER_DOWNLOAD_FOLDER
+start_with_cdp "" "$BROWSER_PROFILE_DIR" ""
 await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
 await '^browser: spaces [0-9]* [0-9]*$' || fail "the relaunch didn't bring back two Spaces"
 first=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f3)
@@ -529,25 +533,35 @@ picks=$(sed -n 's/^browser: command bar picks kept in //p' "$log" | tail -1)
 [ -e "$picks" ] || fail "the command bar's picks aren't where it said: $picks"
 expect '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' \
   "the command bar didn't open Clear browsing data: $(grep '^browser: loaded' "$log" | tail -1)"
-# The dialog takes the keyboard a moment after its page loads, which the app's log can't tell
-# (clear.sh asks DevTools, which this run hasn't): Tab and Space sent before then follow the
-# settings page's link instead, and ⌘← brings the dialog back for another try.
-deleted=
-for _ in 1 2 3; do
-  send key tab
-  send key space
-  missed=
-  for _ in $(seq 100); do
-    logged '^browser: history deleted ' && deleted=1 && break
-    logged '^browser: page [0-9]* back 1 forward 0 loading [01] chrome://settings/' && missed=1 && break
+# The dialog takes the keyboard a moment after its page loads, which the app's log can't tell: a
+# Tab sent before then follows the settings page's link instead, and the dialog opens under the keys
+# after. The run waits for its Cancel to have it, as cdp.py sees it, and Delete is after it.
+focused() {
+  if ! kill -0 "$helper" 2>/dev/null; then
+    echo "no DevTools client, as it exited: $(tail -1 "$cdp_log")"
+    return
+  fi
+  asked=$(grep -c '^cdp: focus ' "$cdp_log" || true)
+  echo "focus chrome://settings/" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -gt "$asked" ] && break
     sleep 0.1
   done
-  [ -z "$deleted" ] && [ -n "$missed" ] || break
-  history_key left back page
-  expect '^browser: page [0-9]* back 0 forward 1 loading 0 chrome://settings/clearBrowserData$' \
-    "⌘← didn't bring Clear browsing data back"
+  if [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -le "$asked" ]; then
+    echo "no answer from the DevTools client in 5 s: $(tail -1 "$cdp_log")"
+    return
+  fi
+  grep '^cdp: focus ' "$cdp_log" | tail -1 | cut -d' ' -f3-
+}
+for _ in $(seq 100); do
+  [ "$(focused)" = Cancel ] && break
+  sleep 0.1
 done
-[ -n "$deleted" ] || fail "Delete in Clear browsing data didn't delete the history"
+[ "$(focused)" = Cancel ] ||
+  fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); $(grep '^browser: link target ' "$log" | tail -1)"
+send key tab
+send key space
+expect '^browser: history deleted ' "Delete in Clear browsing data didn't delete the history: $(grep '^browser: link target ' "$log" | tail -1)"
 # A pattern of the path, whose backslashes on Windows grep would read as its own, \b in \browser-app.
 expect "^browser: command bar picks none in $(printf '%s\n' "$picks" | sed 's/[][\\.*^$]/\\&/g')\$" \
   "deleting the history kept the bar's picks"
@@ -872,6 +886,9 @@ expect '^browser: menu closed$' "escape didn't close the Space button's menu"
 new_note_switch on
 send key n ctrl shift
 expect '^browser: new note https://notion\.new$' "⌃⇧N didn't open a note once New Note was on again"
-exec 3>&-
+# Quits before cdp.py's pipe closes: the browser ends by itself as the pipe goes, and a quit asked
+# then finds it ending, which the Mac answers with an error (#3870).
 quit
+exec 5>&-
+rm -rf "$scratch"
 echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Clear Browsing Data from the command bar is a pick, kept in the profile's folder, which the dialog's Delete takes with the history; Settings › General sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms, with what the app kept in its folder; a profile no Space is in is deleted from the menu, its favorite with it, once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space; each profile's New Note opens its own service's page, by ⌃⇧N, the command bar, the Space button's menu and New Note Split beside the page, and with its switch in Settings off, the Space button's menu has no New Note and ⌃⇧N does nothing until it's on again. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/clear-browsing-data-deleted.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png, $out/settings-new-note.png, $out/new-note-split.png, $out/settings-new-note-off.png.$profile_icon"
