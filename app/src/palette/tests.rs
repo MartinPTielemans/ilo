@@ -605,8 +605,7 @@ fn the_window_is_shaded_only_where_paper_needs_it() {
 
 /// The pickers' card keeps Arc's measured grey where its text reads, and Capture's menu, ilo's
 /// menu's panel, reads in both looks: its glyphs, in the secondary colour, at 3:1, and its field's
-/// words as text on the field's tint of the line colour, which the secondary colour doesn't reach
-/// in the dark look.
+/// words, in the label's, as text on the field's tint of the line colour.
 #[test]
 fn the_pickers_card_and_captures_menu_read() {
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
@@ -637,7 +636,6 @@ fn the_pickers_card_and_captures_menu_read() {
             contrast(lay(field, menu.label), field) >= TEXT,
             "Send To…, light {light}"
         );
-        assert!(light || contrast(lay(field, menu.secondary), field) < TEXT);
     }
 }
 
@@ -1046,6 +1044,79 @@ fn the_pickers_card_is_opaque_where_nothing_blurs_what_is_behind_it() {
             assert_eq!(
                 opaque,
                 over(rgb(OVERLAY_DARK), palette.card, palette.card.a)
+            );
+        }
+    }
+}
+
+/// What floats holds #4090's floor wherever it's drawn: text at 0.6 of its ink reads at 4.5:1 on
+/// its fill, frosted over a white page, a black page, a photo's colours and the window's dark
+/// grounds (#4089), and opaque. A blur averages what's behind it, so each is a flat colour at
+/// worst.
+#[test]
+fn what_floats_holds_text_at_six_tenths_over_any_page() {
+    let behind = [
+        // A white page, a black one and a grey one.
+        0xffffff,
+        0x000000,
+        0x808080,
+        // A photo: the mocks' sky, sun, field and water, skin, and the primaries.
+        0xf4a98a,
+        0xfff6d6,
+        0x2c5647,
+        0x9fd0f0,
+        0xe0ac8f,
+        0xff0000,
+        0x00ff00,
+        0x0000ff,
+        // The window's dark grounds over black, mid grey and white (#4089), as a menu lies over
+        // the sidebar as well as the page, and the light window's.
+        0x0a0a0b,
+        0x242426,
+        0x3f3f40,
+        LIGHT_GROUND_OVER_BLACK,
+        LIGHT_GROUND_OVER_WHITE,
+    ];
+    let mut failures = Vec::new();
+    for surface in Float::ALL {
+        for tone in [Tone::Dark, Tone::Light] {
+            for blurred in [true, false] {
+                let fill = surface.fill_where(tone, blurred);
+                let text = surface.ink(tone);
+                for page in behind {
+                    let ground = over(rgb(page), fill, fill.a);
+                    let ratio = contrast(over(ground, text, 0.6), ground);
+                    if ratio < TEXT {
+                        failures.push(format!(
+                            "{surface:?} {tone:?} blurred {blurred} over {page:06x}: {ratio:.2}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Each surface is translucent only where its host blurs under it, and opaque elsewhere.
+#[test]
+fn what_floats_is_frosted_only_over_a_blur() {
+    for surface in Float::ALL {
+        for tone in [Tone::Dark, Tone::Light] {
+            assert!(
+                surface.fill_where(tone, true).a < 1.,
+                "{surface:?} {tone:?}"
+            );
+            assert_eq!(
+                surface.fill_where(tone, false).a,
+                1.,
+                "{surface:?} {tone:?}"
+            );
+            let (frosted, opaque) = (surface.fill_where(tone, true), surface.fill(tone));
+            assert_eq!(
+                (frosted.r, frosted.g, frosted.b),
+                (opaque.r, opaque.g, opaque.b),
+                "{surface:?} {tone:?}: the same colour"
             );
         }
     }

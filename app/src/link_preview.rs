@@ -22,7 +22,7 @@ use gpui::{
 
 use crate::elevation::Level;
 use crate::icon_picker::outline;
-use crate::palette::{self, Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{self, Float, Palette, STATE_HOVERED, STATE_PRESSED};
 use crate::shell::{cubic_bezier, keystroke_keys, scaled::scaled};
 use crate::tokens::dialog::DIM;
 use crate::tokens::link_preview::{
@@ -404,7 +404,7 @@ fn plate(id: &'static str, palette: &Palette, shadow: Vec<BoxShadow>) -> gpui::S
         .flex_none()
         .h(px(CONTROLS))
         .rounded_full()
-        .bg(palette.overlay)
+        .bg(Float::LinkPreview.fill(palette.tone))
         .border(px(RIM))
         .border_color(Level::Popover.rim_in(palette))
         .shadow(shadow)
@@ -1285,7 +1285,7 @@ impl Render for LinkPreview {
         let card = match under {
             // The page lies over all of it but the rim.
             false => card
-                .bg(palette.overlay)
+                .bg(Float::LinkPreview.fill(palette.tone))
                 .border(px(RIM))
                 .border_color(Level::Modal.rim_in(&palette))
                 .shadow(shadow(Level::Modal)),
