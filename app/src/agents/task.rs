@@ -28,11 +28,11 @@ use super::tier::{self, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::{MakerMark, MenuEntry};
 
+pub(super) mod boxed;
 pub mod ilo;
 mod log_of;
 mod pick_up;
 pub(super) mod revoke;
-pub(super) mod rewall;
 pub use revoke::FolderInUse;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
@@ -490,7 +490,7 @@ pub struct Task {
     /// stopped turn has no answer, so all it said stays in its stretch of work.
     pub stopped_turns: Vec<usize>,
     /// The level it ended at, once the user has picked another in the level's menu since: the
-    /// pick is the level its next reply starts at, and this the one its wall was last put up at.
+    /// pick is the level its next reply starts at, and this the one it ended at.
     pub(super) picked_from: Option<Tier>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
@@ -504,23 +504,13 @@ pub struct Task {
     pub(super) writing: Option<Writing>,
     /// What ilo holds of its helpers (#4102), which it has only if it started with the switch on.
     pub(super) helpers: Helpers,
-    /// The files the user gave it (#4101), which its assistant then runs inside a wall for. None
-    /// until a grant gives it some.
+    /// The files the user gave it (#4101). None until a grant gives it some.
     pub(in crate::agents) files: Given,
     /// What its files are shown by, in its conversation alone, as long as it has them.
     pub(in crate::agents) names: super::files::Names,
-    /// Its start inside a wall, until the system says the wall is up (rewall.rs).
-    pub(super) rising: Option<rewall::Rising>,
-    /// What came of each wall of its that wasn't put up, in order, each with where it came among
-    /// the task's messages and steps, so its line stands where it happened: what its lines about
-    /// them are written from, by the conversation's words table.
-    pub(in crate::agents) rewalled: Vec<rewall::Came>,
-    /// What each walled run of its was given, by its process, until the sweep after its end
-    /// answers: what anything it left running could still reach, and its place's name, which a
-    /// kept task's row carries while that sweep isn't clean.
-    pub(super) ran_walled: Vec<(u32, Given, Option<String>)>,
-    /// Its start after a change, while it waits on the sweep after the run before (rewall.rs).
-    pub(super) restart: Option<rewall::Restart>,
+    /// Each boxed run of its, by its process, with its place's name, until the sweep after its
+    /// end answers: a kept task's row carries the name while that sweep isn't clean (boxed.rs).
+    pub(super) ran_boxed: Vec<(u32, Option<String>)>,
     /// While ilo copies its attached files, before its assistant first starts: nothing starts or
     /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
     /// `told`, which that one start carries (`attached`).
@@ -1007,7 +997,7 @@ pub struct Tasks {
     /// Whether the launch has read the kept tasks an earlier run left (`take_old_kept`).
     pub(super) kept_taken: bool,
     /// The places the launch's cleanup swept clean, by name with how many each sweep ended, while
-    /// they wait on the kept tasks being read (rewall.rs `came_clean`).
+    /// they wait on the kept tasks being read (boxed.rs `came_clean`).
     pub(super) came_clean: Vec<(String, usize)>,
     /// The profiles there are, each by its folder's name, as the core last said them: one that
     /// goes from among them was deleted, and its kept tasks go with it.
@@ -1061,9 +1051,13 @@ pub struct Tasks {
     /// The assistants a look asked for while one ran waits to look for once it ends, as after a
     /// sign-in, each with whether the user's click on its row asked for it.
     pub(super) look_again: Vec<(Cli, bool)>,
-    /// What answers for `wall::put_up` in a test, which no system does yet.
+    /// What answers for `wall::put_up` in a test, else the system's own.
     #[cfg(test)]
-    pub(super) wall: Option<rewall::PutUp>,
+    pub(super) wall: Option<boxed::PutUp>,
+    /// Whether a test's system boxes a run in (wall.rs `available`). None is one with no
+    /// sandbox, so a test's Claude Code starts outside a box unless the test says otherwise.
+    #[cfg(test)]
+    pub(super) box_available: Option<Result<(), super::wall::Unavailable>>,
     /// The files the tasks a test starts are given, as a grant will give a task its own.
     #[cfg(test)]
     pub(super) files: Given,
@@ -1870,6 +1864,7 @@ impl Agents {
             program: found.program.clone()?,
             path: found.path.clone(),
             model: Some(self.task_model(Cli::Claude).to_string()).filter(|model| !model.is_empty()),
+            boxed: self.runs(Cli::Claude) == super::wall::Runs::Boxed,
         })
     }
 
@@ -1880,7 +1875,9 @@ impl Agents {
     }
 
     fn sorter(&self) -> Option<&Found> {
-        if !self.threads() || self.tasks.default != Some(Cli::Claude) {
+        // Where Claude Code runs in no box and outside none, it doesn't run (boxed.rs).
+        let runs = self.runs(Cli::Claude) != super::wall::Runs::Not;
+        if !runs || !self.threads() || self.tasks.default != Some(Cli::Claude) {
             return None;
         }
         let found = self.tasks.found.get(&Cli::Claude)?;
@@ -2125,10 +2122,7 @@ impl Agents {
             helpers: Helpers::default(),
             files: self.files_at_start(),
             names: self.names_at_start(),
-            rising: None,
-            rewalled: Vec::new(),
-            ran_walled: Vec::new(),
-            restart: None,
+            ran_boxed: Vec::new(),
             copying: false,
         };
         self.tasks.tasks.push(task);
@@ -2160,12 +2154,14 @@ impl Agents {
         let never = Never::here(Some(self.tasks_dir()));
         let refuses = |folder: &super::wall::Granted| {
             let root = folder.root();
-            files::resolved(root).as_deref() != Some(root) || never_grantable(root, &never)
+            match () {
+                _ if files::resolved(root).as_deref() != Some(root) => Some(ilo::NotGiven::Gone),
+                _ if never_grantable(root, &never) => Some(ilo::NotGiven::Never),
+                _ => None,
+            }
         };
-        let refused = match &picked.folder {
-            Some(folder) if refuses(folder) => picked.folder.take(),
-            _ => None,
-        };
+        let why = picked.folder.as_ref().and_then(refuses);
+        let refused = why.and_then(|_| picked.folder.take());
         let names = Names::of(&Picked {
             folder: refused.clone().or(picked.folder.clone()),
             files: picked.files.clone(),
@@ -2175,12 +2171,12 @@ impl Agents {
         {
             task.files.folder = picked.folder.clone();
             task.names = names;
-            if let Some(folder) = &refused {
+            if let (Some(folder), Some(why)) = (&refused, why) {
                 let files = Given {
                     folder: Some(folder.clone()),
                     attached: None,
                 };
-                task.rewalled(rewall::Rewalled::WithoutFiles { files });
+                self.place_in(agent, super::lines::Happened::NotGiven { files, why });
             }
         }
         let with = StartedWith {
@@ -2190,8 +2186,8 @@ impl Agents {
             left_out: refused.is_some(),
         };
         if picked.files.is_empty() {
-            let wall = self.wall_to_begin(agent, with);
-            self.launch_in(agent, &first, wall, cx);
+            self.log_start(agent, with);
+            self.launch(agent, &first, cx);
             return self.wait_for_answer(agent, cx);
         }
         if let Some(task) = self.task_mut(agent) {
@@ -2265,19 +2261,30 @@ impl Agents {
             }
         }
         // The start's log row counts what it starts with, and that its files were left out
-        // where their copies couldn't be made or its wall wasn't put up (rewall.rs).
+        // where their copies couldn't be made.
         let left_out = with.left_out || copied_none;
-        let wall = self.wall_to_begin(agent, StartedWith { left_out, ..with });
-        self.launch_in(agent, first, wall, cx);
+        self.log_start(agent, StartedWith { left_out, ..with });
+        self.launch(agent, first, cx);
         self.wait_for_answer(agent, cx);
     }
 
-    /// Whether this system can wall a task in with its files, which the `+` offers them by.
+    /// The log's row for the start of `agent`'s task at the level it has, with what it starts
+    /// with: counts alone, never a name or a path.
+    pub(super) fn log_start(&mut self, agent: &str, with: StartedWith) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        let started = tier::started_logged(task.tier, with);
+        self.note_on(agent, 0, super::access::ACCESS_ACTION, "", &started, "");
+    }
+
+    /// Whether a task can be given files, which the `+` offers them by: not until its assistant
+    /// reaches them through ilo's own tools (Road B), as its box holds none of the user's.
     pub fn files_available(&self) -> bool {
         #[cfg(test)]
         return self.tasks.files_available;
         #[cfg(not(test))]
-        super::wall::available().is_ok()
+        false
     }
 
     /// While the task thinks, its CLI has NO_ANSWER to take its first step or say something,
@@ -2365,16 +2372,9 @@ impl Agents {
         Names::default()
     }
 
-    /// Starts the task's CLI with its first message.
-    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
-        // A task with files starts inside its wall, or without them (rewall.rs).
-        let wall = self.wall_to_start(agent);
-        self.launch_in(agent, first, wall, cx);
-    }
-
     /// Starts the run of the strand `strand` of the thread `thread`, which reads `first`: the
-    /// thread's assistant, model and effort, with the strand's token and tools, inside the wall
-    /// the thread's files need and reading what the thread reads. It keeps nothing. Why not, in
+    /// thread's assistant, model and effort, with the strand's token and tools, in a box of its
+    /// own as the thread's runs are, and reading what the thread reads. It keeps nothing. Why not, in
     /// the words its call is answered with, if it couldn't start.
     pub(super) fn launch_strand(
         &mut self,
@@ -2391,10 +2391,9 @@ impl Agents {
         let Some(program) = found.program.clone() else {
             return Err(format!("{} isn't installed.", cli.name()));
         };
-        // A strand of a thread with files is held to them as the thread is, in a wall of its own
-        // that reads its own folder and config, or doesn't start.
-        let wall = self
-            .wall_or_without(thread, strand)
+        // A box of its own, which reads its own folder and config, or no start.
+        let dir = self.tasks_dir();
+        let wall = (self.box_for(thread, strand, &dir.join(strand), false))
             .map_err(|()| couldnt.clone())?;
         let Some(task) = self.task(thread) else {
             return Err(couldnt);
@@ -2402,7 +2401,6 @@ impl Agents {
         let Some(token) = task.helpers.token_of(strand) else {
             return Err(couldnt);
         };
-        let dir = self.tasks_dir();
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
@@ -2437,15 +2435,10 @@ impl Agents {
         })
     }
 
-    /// Starts `agent`'s assistant inside `wall`, or with None as a task with no files starts.
-    pub(super) fn launch_in(
-        &mut self,
-        agent: &str,
-        first: &str,
-        wall: Option<Arc<super::wall::Wall>>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
+    /// Starts the task's CLI with its first message, in its box where it runs in one (boxed.rs).
+    /// Whether it started: a run that couldn't fails the task.
+    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) -> bool {
+        let Some(cli) = self.task(agent).and_then(|task| task.cli) else {
             return false;
         };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
@@ -2459,19 +2452,28 @@ impl Agents {
             return false;
         }
         let dir = self.tasks_dir();
-        let walled = wall.is_some();
+        // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
+        let (keep, kept_in) = self.keep_for(agent, cli);
+        let run_dir = kept_in.unwrap_or_else(|| dir.join(agent));
+        let keeps = !matches!(keep, super::kept::Keep::Nothing);
+        let Ok(wall) = self.box_for(agent, agent, &run_dir, keeps) else {
+            let why = format!("{} couldn't start.", cli.name());
+            self.fail(agent, Failure::Other(why), cx);
+            return false;
+        };
+        let Some(task) = self.task(agent) else {
+            return false;
+        };
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
         let model = self.launch_model(agent, cli);
-        let effort = self.task(agent).and_then(|task| task.effort.clone());
-        // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
-        let (keep, kept_in) = self.keep_for(agent, cli);
+        let effort = task.effort.clone();
         let launch = Launch {
             cli,
             program,
             path: found.path.clone(),
-            dir: kept_in.unwrap_or_else(|| dir.join(agent)),
+            dir: run_dir,
             config: dir.join(format!("{agent}.json")),
             server: runner::Server {
                 command,
@@ -2483,7 +2485,6 @@ impl Agents {
             instructions: tools::task_instructions(task.tier),
             tools: tools::names(agent),
             wall,
-            // The files it starts with: a task whose wall was refused has none by now.
             reads: (task.files.folder.iter())
                 .map(|folder| folder.root().to_path_buf())
                 .chain(task.files.attached.clone())
@@ -2494,12 +2495,9 @@ impl Agents {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     if process.walled() {
-                        let walled = (process.run(), task.files.clone(), process.place());
-                        task.ran_walled.push(walled);
+                        task.ran_boxed.push((process.run(), process.place()));
                     }
                     task.process = Some(process);
-                    // What starts it again if its wall doesn't go up (rewall.rs).
-                    task.rising = walled.then(|| rewall::Rising::of(first));
                 }
                 self.kept_started(agent, cli, &keep);
                 true
@@ -2560,20 +2558,17 @@ impl Agents {
         if let Out::Swept(answer) = out {
             return self.swept(&agent, run, answer, cx);
         }
-        // A line of a run ilo ended as it started the task again isn't the task's (rewall.rs).
+        // A line of a run before the one under way isn't the task's.
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
         if under_way.is_some_and(|under_way| under_way != run) {
             return;
         }
-        // Nor is one of a task whose start waits on the sweep of its run before: it has no run.
-        if self.task(&agent).is_some_and(|task| task.restart.is_some()) {
-            return;
-        }
-        // Its assistant is inside its wall, which is no answer of the assistant's.
+        // Its assistant is inside its box, which is no answer of the assistant's. check.sh reads
+        // this line.
         if out == Out::Walled(Ok(())) {
-            return self.walled_in(&agent);
+            return log!("browser: task {agent} is boxed in");
         }
         // Whatever it said, it answered; a strand of it still unheard keeps its watch.
         if let Some(task) = self.task_mut(&agent) {
@@ -2685,22 +2680,24 @@ impl Agents {
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
+            // Said above.
             Out::Walled(Ok(())) => {}
             // The start the user stopped: their stop ended its launcher, and is what the card says.
             Out::Walled(Err(_))
                 if self
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
-            // Nothing started, so nothing of the task's is behind a wall that isn't up. Its
-            // launcher goes with the process, and the task goes on as the table says of a wall
-            // refused (rewall.rs): its run before went with it, so the Gone that follows is
-            // another run's and changes nothing.
+            // Nothing started, so nothing of the task's ran outside its box. Its launcher goes
+            // with the process, and the run fails as any start that can't, never started again
+            // outside a box: the Gone that follows is its own and changes nothing.
             Out::Walled(Err(refused)) => {
-                log!("browser: task {agent} wasn't walled in: {refused:?}");
-                if let Some(task) = self.task_mut(&agent) {
-                    task.end_run();
-                }
-                self.wall_refused(&agent, cx);
+                log!("browser: task {agent} wasn't boxed in: {refused:?}");
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
+                task.end_run();
+                let why = format!("{} couldn't start.", task.name);
+                self.fail(&agent, Failure::Other(why), cx);
             }
             Out::Gone(said) => {
                 // Its assistant no longer has the conversation it was to go on with, or what it
@@ -2833,10 +2830,6 @@ impl Agents {
             task.hold(text.to_string());
             return cx.notify();
         }
-        // A start waiting on a sweep (rewall.rs) is given the conversation with this in it.
-        if task.restart.is_some() {
-            return cx.notify();
-        }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{text}"),
@@ -2886,8 +2879,6 @@ impl Agents {
         task.asking = None;
         task.writing = None;
         task.waiting = None;
-        // A start waiting on a sweep never happens.
-        task.restart = None;
         // A session's agent is its client's, whose calls under way the user stops, on each of its
         // connections, as the agent path always has. Its Stop is logged before each of its
         // sessions ends, this one too, so each one's record has it (session_stopped).
@@ -3845,10 +3836,7 @@ impl Agents {
             helpers: Helpers::default(),
             files: Given::default(),
             names: Default::default(),
-            rising: None,
-            rewalled: Vec::new(),
-            ran_walled: Vec::new(),
-            restart: None,
+            ran_boxed: Vec::new(),
             copying: false,
         });
         cx.notify();
