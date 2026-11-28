@@ -13,7 +13,7 @@ use gpui::{
 };
 
 use crate::agents::tier::Tier;
-use crate::shell::MenuEntry;
+use crate::shell::{MakerMark, MenuEntry};
 use crate::tokens::command_bar::{
     CHIP_RADIUS, CHOICES_GAP, CHOICES_HEIGHT, CHOICES_LEFT, CHOICES_RIGHT, CHOICES_UNDER,
     MODEL_GAP, MODEL_LEFT, MODEL_MARK, START_ARROW, START_SIZE, START_SPACE, TRIGGER_CHEVRON,
@@ -21,7 +21,8 @@ use crate::tokens::command_bar::{
 };
 
 /// The line under the levels every level holds to, which picks nothing.
-pub const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
+pub const NEVER_GETS: &str =
+    "A thread never gets passwords or cookies, and sees your open tabs only as titles and sites.";
 
 /// The sizes one composer draws its row at.
 #[derive(Clone, Copy, Debug)]
@@ -86,6 +87,8 @@ pub enum Round {
 /// button's fill, and `primary` with what's on it.
 #[derive(Clone, Copy)]
 pub struct Inks {
+    /// Whether the look is light, for a maker's mark, which has its own ink in each.
+    pub light: bool,
     pub text: Hsla,
     pub dim: Hsla,
     pub plate: Hsla,
@@ -117,7 +120,7 @@ pub struct Row {
     /// The model's words, with the assistant's mark where the form leads with it, then the model's
     /// own word, which a form that says less draws in their place; none where the app doesn't
     /// know the model, an outside agent's session.
-    pub model: Option<(Option<&'static str>, SharedString, SharedString, Trigger)>,
+    pub model: Option<(Option<MakerMark>, SharedString, SharedString, Trigger)>,
     /// The narrowest the model's own word gets where the form lets it give way: the width of its
     /// first word.
     pub model_least: f32,
@@ -269,11 +272,17 @@ pub fn row(row: Row) -> gpui::Div {
             .when(form.model_word, |model| {
                 model.flex_shrink(1.).min_w(px(least))
             })
+            // The maker's mark as the model menu draws it: its own size and ink, centred where the
+            // mark goes, its clear space spilling past.
             .children(mark.map(|mark| {
-                div()
-                    .flex_none()
-                    .mr(px(MODEL_GAP - TRIGGER_GAP))
-                    .child(glyph(mark, MODEL_MARK, inks.text))
+                div().flex_none().mr(px(MODEL_GAP - TRIGGER_GAP)).child(
+                    svg()
+                        .path(mark.path)
+                        .size(px(mark.size))
+                        .m(px((MODEL_MARK - mark.size) / 2.))
+                        .flex_none()
+                        .text_color(mark.ink(inks.light)),
+                )
             }))
             .child(words(drawn, model_ink).when(form.model_word, |words| {
                 words.flex_shrink(1.).min_w(px(model_least)).truncate()

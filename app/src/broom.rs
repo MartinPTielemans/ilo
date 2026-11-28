@@ -88,7 +88,7 @@ pub fn handed(tabs: &[Tab]) -> Option<String> {
 }
 
 /// `text` as it's handed over: one line, at most `LONGEST` characters.
-fn cut(text: &str) -> String {
+pub(crate) fn cut(text: &str) -> String {
     let line = text.chars().map(|c| if c.is_control() { ' ' } else { c });
     line.take(LONGEST).collect::<String>().trim().to_owned()
 }
@@ -273,12 +273,13 @@ fn environment(
     set
 }
 
-/// What a sort runs: the program found for Claude Code, the PATH it was found on, and the model
-/// the user picked for tasks, if any.
+/// What a sort runs: the program found for Claude Code, the PATH it was found on, the model the
+/// user picked for tasks, if any, and whether the sort runs in a box (wall.rs `runs`).
 pub struct Program {
     pub program: PathBuf,
     pub path: Option<String>,
     pub model: Option<String>,
+    pub boxed: bool,
 }
 
 /// One sort's run, from the version's read to the answer. Ending it, or dropping it, kills what
@@ -316,38 +317,66 @@ impl Run {
     ) -> Result<Vec<Folder>, Failed> {
         let deadline = Instant::now() + self.cap;
         // Nothing is handed over yet, so however the version's read fails, the run didn't start.
-        let version = (self.run(program, &[OsString::from("--version")], None, deadline)).map_err(
-            |failed| match failed {
-                Failed::Ended => Failed::Ended,
-                _ => Failed::NotStarted,
-            },
-        )?;
+        let version = (self.run(
+            program,
+            &[OsString::from("--version")],
+            None,
+            deadline,
+            false,
+        ))
+        .map_err(|failed| match failed {
+            Failed::Ended => Failed::Ended,
+            _ => Failed::NotStarted,
+        })?;
         if !fits(&String::from_utf8_lossy(&version)) {
             return Err(Failed::TooOld);
         }
         let instruction = self.folder.join("instruction.md");
         std::fs::write(&instruction, INSTRUCTION).map_err(|_| Failed::NotStarted)?;
         let args = args(&instruction, program.model.as_deref());
-        let said = self.run(program, &args, Some(list), deadline)?;
+        let said = self.run(program, &args, Some(list), deadline, program.boxed)?;
         parse(&said, handed).ok_or(Failed::Unread)
     }
 
-    /// Starts `program` with `args`, hands it `input`, and reads what it says till it ends or
-    /// `deadline`, killing it whole after either.
+    /// Starts `program` with `args`, in a box of its own if `boxed`, hands it `input`, and reads
+    /// what it says till it ends or `deadline`, killing it whole after either. The version's read
+    /// sends nothing to a model, so it runs as any program.
     fn run(
         &self,
         program: &Program,
         args: &[OsString],
         input: Option<&str>,
         deadline: Instant,
+        boxed: bool,
     ) -> Result<Vec<u8>, Failed> {
-        let mut command = crate::child::command(&program.program);
+        use crate::agents::wall::{self, Wall};
+        // The box lives as long as the run, its listener with it.
+        let wall = match boxed {
+            true => Some(
+                wall::without_tools(
+                    crate::agents::runner::Cli::Claude,
+                    &program.program,
+                    &self.folder,
+                )
+                .map_err(|_| Failed::NotStarted)?,
+            ),
+            false => None,
+        };
+        let mut command = match &wall {
+            Some(wall) => wall.command(&program.program),
+            None => crate::child::command(&program.program),
+        };
         command.args(args).current_dir(&self.folder).env_clear();
         command.envs(environment(
             |name| std::env::var_os(name),
             program.path.as_deref(),
-            &self.folder,
+            wall.as_ref().and_then(Wall::tmp).unwrap_or(&self.folder),
         ));
+        // In a box its own service is reached through the box's listener alone.
+        if let Some(port) = wall.as_ref().and_then(Wall::port) {
+            let proxy = format!("http://127.0.0.1:{port}");
+            command.envs(crate::agents::runner::PROXY.map(|name| (name, proxy.as_str())));
+        }
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -355,16 +384,30 @@ impl Run {
         // A group of its own, which the run's end ends whole.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        let (mut stdin, stdout) = {
+        let (stdin, stdout, rising, id) = {
             let mut running = self.running.lock().unwrap();
             if running.ended {
                 return Err(Failed::Ended);
             }
-            let mut child = command.spawn().map_err(|_| Failed::NotStarted)?;
-            let pipes = (child.stdin.take(), child.stdout.take());
+            let (mut child, rising) = match &wall {
+                Some(wall) => wall.start(&mut command),
+                None => command.spawn().map(|child| (child, None)),
+            }
+            .map_err(|_| Failed::NotStarted)?;
+            let pipes = (child.stdin.take(), child.stdout.take(), rising, child.id());
             running.child = Some(child);
             pipes
         };
+        let (mut stdin, stdout, rising, id) = (stdin, stdout, rising, id);
+        // Nothing is handed over till the system says the program is inside its box; `end`
+        // ending the launcher ends the wait.
+        if let Some(rising) = rising {
+            let inside = |()| wall.as_ref().map_or(Ok(()), |wall| wall.control(id));
+            if rising.risen().and_then(inside).is_err() {
+                self.reap(Instant::now());
+                return Err(Failed::NotStarted);
+            }
+        }
         let input = input.unwrap_or_default().as_bytes().to_owned();
         std::thread::spawn(move || {
             if let Some(stdin) = stdin.as_mut() {

@@ -355,7 +355,7 @@ mod mac {
             text: MARKED.into(),
             params: vec![("MARK", PathBuf::from(mark.as_cstr().to_str().unwrap()))],
         };
-        let wall = Wall::inside(None, &rules, &[]).unwrap();
+        let wall = Wall::inside(&rules, &[]).unwrap();
         let mut command = wall.command(Path::new("/bin/sh"));
         command
             .args(["-c", script])

@@ -5,8 +5,8 @@
 //! that, on the thread that reads the assistant's output, and answers a launcher that ended
 //! instead with a sentence that names no folder, no parameter and no code of the system's.
 //!
-//! What a caller that starts the task again without its files must know: whatever was written to
-//! the assistant's input before `risen` answered no went to a launcher that never read it.
+//! Whatever was written to the assistant's input before `risen` answered no went to a launcher
+//! that never read it, and the run ends there.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -70,12 +70,12 @@ fn failed(sentence: &str) -> WallRefused {
 /// ilo's own launcher: beside the app's binary in its bundle, and in a test the one build.rs
 /// made. Never from the environment, a setting or PATH, which a task could have a hand in.
 #[cfg(all(test, target_os = "macos"))]
-fn launcher() -> Option<PathBuf> {
+pub(super) fn launcher() -> Option<PathBuf> {
     Some(PathBuf::from(env!("WALL_LAUNCHER")))
 }
 
 #[cfg(all(not(test), target_os = "macos"))]
-fn launcher() -> Option<PathBuf> {
+pub(super) fn launcher() -> Option<PathBuf> {
     Some(
         std::env::current_exe()
             .ok()?
@@ -86,7 +86,7 @@ fn launcher() -> Option<PathBuf> {
 
 /// No other system has one yet.
 #[cfg(not(target_os = "macos"))]
-fn launcher() -> Option<PathBuf> {
+pub(super) fn launcher() -> Option<PathBuf> {
     None
 }
 
@@ -129,21 +129,15 @@ fn handoff(rules: &Rules, kept: &[&str]) -> Option<Vec<u8>> {
 }
 
 impl Wall {
-    /// The wall around `folder`, the user's pick with its identity, so its watch knows the folder
-    /// it holds, that holds `rules`, inside which a program keeps of its environment the names in
+    /// The box that holds `rules`, inside which a program keeps of its environment the names in
     /// `kept` and nothing else. Nothing is started here: rules that the launcher couldn't be handed
     /// are refused now, before anything is.
-    pub fn inside(
-        folder: Option<super::Granted>,
-        rules: &Rules,
-        kept: &[&str],
-    ) -> Result<Wall, WallRefused> {
+    pub fn inside(rules: &Rules, kept: &[&str]) -> Result<Wall, WallRefused> {
         let handoff = handoff(rules, kept).ok_or_else(|| failed(TOO_LONG))?;
         let program = launcher()
             .filter(|launcher| launcher.is_file())
             .ok_or_else(|| failed(NOT_THERE))?;
         Ok(Wall {
-            folder,
             started: SystemTime::now(),
             launcher: Some(Launcher { program, handoff }),
             tmp: None,
@@ -152,8 +146,8 @@ impl Wall {
         })
     }
 
-    /// The command that starts `program` inside this wall: ilo's launcher, told the program it's
-    /// to become by its whole path, or for a task with no files the program's own.
+    /// The command that starts `program` inside this box: ilo's launcher, told the program it's
+    /// to become by its whole path, or in a test with no launcher the program's own.
     pub fn command(&self, program: &Path) -> Command {
         match &self.launcher {
             None => crate::child::command(program),

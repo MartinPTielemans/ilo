@@ -15,6 +15,7 @@ use super::{
     CONTROLS_PLATE, Command, Folders, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
+use crate::tokens::shell::EDGE_STRIP;
 use crate::tokens::shell::library::{COLUMN_WIDTH, SEARCH_HEIGHT, SEARCH_TOP, SEARCH_X};
 
 const WIDTH: f32 = 1000.;
@@ -147,6 +148,43 @@ fn the_hidden_sidebar_comes_out_from_the_right_edge(cx: &mut TestAppContext) {
     assert!(
         to(WIDTH - 1., 306., cx),
         "the right edge didn't bring it out"
+    );
+}
+
+/// The edge's strip is the points the core leaves the UI over a page that reaches the window's
+/// side (`InPageEdgeStrip`): on the right its first point in, `WIDTH - EDGE_STRIP`, brings the
+/// hidden sidebar out, and the point past the window, `WIDTH`, doesn't, as on the left `0` does and
+/// `EDGE_STRIP` doesn't (#4484).
+#[gpui::test]
+fn the_edge_strip_is_the_points_the_core_leaves_the_ui(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    let brings_out = |right: bool, x: f32, cx: &mut VisualTestContext| {
+        side(right, &shell, cx);
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            shell.set_revealed(false, cx);
+            shell.pointer_over(point(px(400.), px(300.)), cx);
+            shell.pointer_over(point(px(x), px(300.)), cx);
+            shell.pointer_over(point(px(x), px(306.)), cx);
+        });
+        cx.executor().advance_clock(REVEAL_WAIT * 2);
+        shell.read_with(cx, |shell, _| shell.revealed)
+    };
+    assert!(
+        brings_out(true, WIDTH - EDGE_STRIP, cx),
+        "the right strip's first point in didn't bring the sidebar out"
+    );
+    assert!(
+        !brings_out(true, WIDTH, cx),
+        "the point past the window's right edge brought the sidebar out"
+    );
+    assert!(
+        brings_out(false, 0., cx),
+        "the left edge's point didn't bring it out"
+    );
+    assert!(
+        !brings_out(false, EDGE_STRIP, cx),
+        "the point past the left strip brought the sidebar out"
     );
 }
 

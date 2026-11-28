@@ -78,6 +78,8 @@ struct Made {
     private: RefCell<Vec<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
+    /// The tabs whose page was reached by sending a form.
+    posted: RefCell<HashSet<u64>>,
     /// The search engine's host, where a test moves it from search.example.
     engine: std::cell::Cell<Option<&'static str>>,
     /// Whether the system opens links with the browser: another browser does, unless a test says.
@@ -433,6 +435,29 @@ impl Browser for Made {
 
     fn private_space(&self, space: u64) -> bool {
         self.private.borrow().contains(&space)
+    }
+
+    /// The Spaces of `tabs` in `profile`, in their first tab's order, but agents', tasks' and
+    /// private windows'.
+    fn user_spaces(&self, profile: &str) -> Vec<u64> {
+        let agents: Vec<u64> = self.agent_spaces.borrow().values().copied().collect();
+        let tasks = self.task_spaces.borrow();
+        let mut spaces = Vec::new();
+        for &(_, space, _, _) in self.tabs.borrow().iter() {
+            if !spaces.contains(&space)
+                && !agents.contains(&space)
+                && !tasks.contains(&space)
+                && !self.private_space(space)
+                && self.space_profile(space) == profile
+            {
+                spaces.push(space);
+            }
+        }
+        spaces
+    }
+
+    fn posted(&self, tab: u64, _: &App) -> bool {
+        self.posted.borrow().contains(&tab)
     }
 
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
@@ -3757,10 +3782,13 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 /// acts on a page would otherwise run at Look only.
 #[test]
 fn every_tool_and_step_is_in_one_class() {
-    // Opens or reads a page, which every tier allows.
-    const READS: [&str; 12] = [
+    // Opens or reads a page, which every tier allows. A copy of the user's tab is open_tab's open,
+    // judged as one, as it's made one before its access is read (#4403).
+    const READS: [&str; 14] = [
         "list_tabs",
         "list_split",
+        "your_tabs",
+        "open_your_tab",
         "open_tab",
         "search",
         "strand",
@@ -5883,9 +5911,10 @@ fn every_tool_has_an_activity_log_entry() {
     let mut names = tools::names("claude-code");
     names.extend(tools::names("task-1"));
     // The log names an action as the core's entry does, which is the tool's name but for select's
-    // (agents.rs).
+    // (agents.rs), and for a copy of the user's tab, which is open_tab's entry (#4403).
     let logged = |name: &str| match name {
         "select" => "select_option".to_string(),
+        "open_your_tab" => "open_tab".to_string(),
         name => name.to_string(),
     };
     let missing: Vec<_> = (names.iter())
@@ -7142,6 +7171,18 @@ mod tasks {
         let found = sort(cx).expect("Claude signed in sorts");
         assert!(agents.read_with(cx, |agents, _| agents.sorts()));
         assert_eq!((found.program, found.model), (program, None));
+        // Where there's no sandbox it runs outside a box, where there is it runs in its own, and
+        // where Claude Code has no box it doesn't run.
+        assert!(!found.boxed, "no sandbox");
+        let boxes = |available, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, _| agents.tasks.box_available = Some(available));
+        };
+        boxes(Ok(()), cx);
+        assert!(sort(cx).expect("boxed").boxed, "a sort runs in its box");
+        boxes(Err(crate::agents::wall::Unavailable::NotBuilt), cx);
+        assert!(sort(cx).is_none(), "no box");
+        assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
+        agents.update(cx, |agents, _| agents.tasks.box_available = None);
         set_found(&agents, Ready::SignedOut, cx);
         assert!(sort(cx).is_none(), "signed out");
         assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
@@ -11409,6 +11450,8 @@ mod tasks {
                     .map(|(id, name)| (id.to_string(), name.to_string()))
                     .into(),
                 default: Some("GPT A".into()),
+                default_id: Some("gpt-a".into()),
+                ..Models::default()
             };
             let found = Found {
                 ready: Ready::SignedIn,
@@ -11446,13 +11489,10 @@ mod tasks {
         assert!(model(&codex, cx).unwrap().3, "Codex's model opens its menu");
         assert_eq!(
             model(&codex, cx).unwrap().2,
-            crate::command_bar::DEFAULT_ROW,
-            "a default's own word is the model menu's"
+            "GPT A",
+            "a default says its own model, never Default (Z54b)"
         );
-        assert_eq!(
-            menu(&codex, cx).as_deref(),
-            Some("Codex's default [GPT A] (checked), GPT A, GPT B")
-        );
+        assert_eq!(menu(&codex, cx).as_deref(), Some("GPT A (checked), GPT B"));
 
         let pick = |agent: &str, id: &str, cx: &mut TestAppContext| {
             agents.update(cx, |agents, cx| {
@@ -11460,23 +11500,20 @@ mod tasks {
             });
         };
         pick(&codex, "gpt-b", cx);
-        assert_eq!(model(&codex, cx).unwrap().1, "Codex \u{b7} GPT B");
+        assert_eq!(model(&codex, cx).unwrap().1, "GPT B");
         assert_eq!(
             model(&codex, cx).unwrap().2,
             "GPT B",
             "the model's own word"
         );
-        assert_eq!(
-            menu(&codex, cx).as_deref(),
-            Some("Codex's default [GPT A], GPT A, GPT B (checked)")
-        );
+        assert_eq!(menu(&codex, cx).as_deref(), Some("GPT A, GPT B (checked)"));
         let next_run = |agent: &str, cli, cx: &mut TestAppContext| {
             agents.read_with(cx, |agents, _| agents.launch_model(agent, cli))
         };
         assert_eq!(next_run(&codex, Cli::Codex, cx).as_deref(), Some("gpt-b"));
         // A model the list doesn't have changes nothing, nor does a pick on Claude's thread.
         pick(&codex, "gpt-z", cx);
-        assert_eq!(model(&codex, cx).unwrap().1, "Codex \u{b7} GPT B");
+        assert_eq!(model(&codex, cx).unwrap().1, "GPT B");
         let before = model(&claude, cx);
         pick(&claude, "gpt-b", cx);
         assert_eq!(model(&claude, cx), before);
@@ -11506,26 +11543,28 @@ mod tasks {
                 .map(|(id, name)| (id.to_string(), name.to_string()))
                 .into(),
             default: Some("Opus".into()),
+            default_id: Some("opus".into()),
+            ..Models::default()
         };
         let agents = agents(&browser, &configs, None, cx);
         agents.update(cx, |agents, cx| {
             agents.set_threads(true, cx);
             agents.set_task_model(Cli::Claude, "haiku", cx);
         });
-        // Till Claude lists its own, ilo's names for them, its default naming none.
+        // Till Claude lists its own, ilo's names for them, with no Default row (Z54b).
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Claude Code's default, Opus, Sonnet, Haiku (checked)"
+            "Opus, Sonnet, Haiku (checked)"
         );
 
         *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(listed)))];
         agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
         cx.run_until_parked();
-        // Its names in its order, its default saying which it is; Haiku is gone, so that's chosen,
-        // for the run too, and comes back if Claude lists it again.
+        // Its names in its order, its default's own row checked; Haiku is gone, so the default is
+        // chosen, for the run too, and Haiku comes back if Claude lists it again.
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Claude Code's default [Opus] (checked), Opus, Fable, Sonnet"
+            "Opus (checked), Fable, Sonnet"
         );
         agents.read_with(cx, |agents, _| {
             assert_eq!(agents.task_model(Cli::Claude), "");
@@ -11541,7 +11580,7 @@ mod tasks {
         cx.run_until_parked();
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Claude Code's default [Opus], Opus, Fable (checked), Sonnet"
+            "Opus, Fable (checked), Sonnet"
         );
         agents.read_with(cx, |agents, _| {
             assert_eq!(agents.task_model(Cli::Claude), "fable");
@@ -11551,14 +11590,242 @@ mod tasks {
             );
         });
 
-        // An empty list: its default alone.
+        // An empty list: its default alone, by the assistant's name, never Default.
         *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(Models::default())))];
         agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
         cx.run_until_parked();
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Claude Code's default (checked)"
+            "Claude Code (checked)"
         );
+    }
+
+    /// The model menu's rows (Z54, Z54b, Z54c, #4394): each model by its own name after its
+    /// maker's mark and spoken with its maker, in its assistant's order; no Default row, the
+    /// default's own row checked while nothing is picked, which picks nothing so a thread follows
+    /// the assistant's default as it changes; the models kept out of its picker under More Models,
+    /// last; and an assistant that lists none yet, one row by its own name.
+    #[test]
+    fn the_model_menus_rows_are_each_models_own_after_its_makers_mark_with_no_default() {
+        use crate::agents::ready::Models;
+        use crate::agents::task::{MORE_MODELS, model_rows};
+        let named = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+            (list.iter())
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .collect()
+        };
+        let codex = Models {
+            listed: named(&[("gpt-6-luna", "GPT-6-Luna"), ("gpt-6.1-sol", "GPT-6.1-Sol")]),
+            default_id: Some("gpt-6.1-sol".into()),
+            more: named(&[("gpt-5", "GPT-5")]),
+            ..Models::default()
+        };
+        let (ids, items) = model_rows("", Cli::Codex.caps(), &codex, 0);
+        assert_eq!(
+            crate::menu::described(&items),
+            format!("GPT-6-Luna, GPT-6.1-Sol (checked), {MORE_MODELS} › GPT-5")
+        );
+        assert_eq!(
+            ids,
+            [Some("gpt-6-luna"), Some(""), None, Some("gpt-5")].map(|id| id.map(String::from)),
+            "the default's row picks no model, and More Models only opens its own"
+        );
+        let blossom = Cli::Codex.caps().mark;
+        assert!(blossom.path.ends_with("openai-blossom.svg"));
+        for at in [0, 1, 3] {
+            assert_eq!(items[at].maker_mark, Some(blossom), "{}", items[at].title);
+            assert_eq!(items[at].icon, None);
+        }
+        assert_eq!(items[3].parent, Some(2));
+        let spoken: Vec<_> = (items.iter())
+            .map(|item| item.spoken.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            spoken,
+            [
+                "OpenAI GPT-6-Luna",
+                "OpenAI GPT-6.1-Sol",
+                "More OpenAI models",
+                "OpenAI GPT-5"
+            ]
+        );
+        // A pick of its own is checked, the default's row then not, and nowhere does it say Default.
+        let (_, items) = model_rows("gpt-5", Cli::Codex.caps(), &codex, 0);
+        assert_eq!(
+            crate::menu::described(&items),
+            format!("GPT-6-Luna, GPT-6.1-Sol, {MORE_MODELS} › GPT-5 (checked)")
+        );
+        // Claude's carry its Spark, and where it hasn't listed any, it's its default alone.
+        let claude = Models {
+            listed: named(&[("opus", "Opus 5.5"), ("haiku", "Haiku 5.5")]),
+            default_id: Some("opus".into()),
+            ..Models::default()
+        };
+        let (_, items) = model_rows("haiku", Cli::Claude.caps(), &claude, 0);
+        assert_eq!(
+            crate::menu::described(&items),
+            "Opus 5.5, Haiku 5.5 (checked)"
+        );
+        let spark = Cli::Claude.caps().mark;
+        assert!(spark.path.ends_with("claude-spark.svg"));
+        assert_eq!(
+            spark.light, spark.dark,
+            "the Spark keeps its own orange in either look"
+        );
+        assert!(items.iter().all(|item| item.maker_mark == Some(spark)));
+        assert_eq!(items[0].spoken.as_deref(), Some("Anthropic Opus 5.5"));
+        let (ids, items) = model_rows("", Cli::Claude.caps(), &Models::default(), 0);
+        assert_eq!(crate::menu::described(&items), "Claude Code (checked)");
+        assert_eq!(ids, [Some(String::new())]);
+        for (cli, models) in [
+            (Cli::Codex, &codex),
+            (Cli::Claude, &claude),
+            (Cli::Claude, &Models::default()),
+        ] {
+            for chosen in ["", "gpt-5", "haiku"] {
+                let (_, items) = model_rows(chosen, cli.caps(), models, 0);
+                for item in &items {
+                    assert!(
+                        item.title != "Default" && !item.title.contains("'s default"),
+                        "{}",
+                        item.title
+                    );
+                }
+            }
+        }
+    }
+
+    /// A provider is its data (#4465): one ilo has never heard of, with its own maker, assistant,
+    /// mark and efforts, shows in the model menu, its trigger's words and the effort list by that
+    /// data alone, with no code that names it.
+    #[test]
+    fn a_third_provider_shows_in_the_model_menu_by_its_own_data_alone() {
+        use crate::agents::provider::Caps;
+        use crate::agents::ready::Models;
+        use crate::agents::task::{MORE_MODELS, model_name, model_rows};
+        use crate::shell::MakerMark;
+        let mark = MakerMark {
+            path: "makers/heron.svg",
+            size: 12.0,
+            light: 0x1122_33ff,
+            dark: 0x4455_66ff,
+        };
+        let heron = Caps {
+            id: "heron",
+            maker: "Heron Labs",
+            assistant: "Heron",
+            mark,
+            efforts: &["brisk", "thorough"],
+        };
+        let named = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+            (list.iter())
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .collect()
+        };
+        let models = Models {
+            listed: named(&[("wade-2", "Wade 2"), ("glide-3", "Glide 3")]),
+            default_id: Some("glide-3".into()),
+            more: named(&[("wade-1", "Wade 1")]),
+            ..Models::default()
+        };
+        let (ids, items) = model_rows("", &heron, &models, 0);
+        assert_eq!(
+            crate::menu::described(&items),
+            format!("Wade 2, Glide 3 (checked), {MORE_MODELS} › Wade 1")
+        );
+        assert_eq!(
+            ids,
+            [Some("wade-2"), Some(""), None, Some("wade-1")].map(|id| id.map(String::from))
+        );
+        for at in [0, 1, 3] {
+            assert_eq!(items[at].maker_mark, Some(mark), "{}", items[at].title);
+        }
+        let spoken: Vec<_> = (items.iter())
+            .map(|item| item.spoken.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            spoken,
+            [
+                "Heron Labs Wade 2",
+                "Heron Labs Glide 3",
+                "More Heron Labs models",
+                "Heron Labs Wade 1"
+            ]
+        );
+        assert_eq!(model_name(&heron, &models, ""), "Glide 3");
+        assert_eq!(model_name(&heron, &models, "wade-1"), "Wade 1");
+        // Listing nothing yet, it's its own assistant, by the name it gives.
+        let (_, items) = model_rows("", &heron, &Models::default(), 0);
+        assert_eq!(crate::menu::described(&items), "Heron (checked)");
+        assert_eq!(items[0].spoken.as_deref(), Some("Heron Labs Heron"));
+        assert_eq!(model_name(&heron, &Models::default(), ""), "Heron");
+        // Its efforts are its own, as the effort menu lists them.
+        let (levels, items) = crate::command_bar::effort_choices(heron.efforts, None);
+        assert_eq!(levels, [None, Some("brisk"), Some("thorough")]);
+        assert_eq!(items.len(), levels.len());
+    }
+
+    /// The model menu opens at once from the lists last kept, with no look waited on. Its opening
+    /// starts one behind it if none runs, which another opening meanwhile doesn't add to, and
+    /// nothing else looks as time passes: no timer (#4394).
+    #[gpui::test]
+    fn the_model_menu_opens_from_the_kept_list_and_only_opening_it_refreshes_that(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::agents::ready::Models;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let listing = |list: &[(&str, &str)]| Found {
+            ready: Ready::SignedIn,
+            program: Some("/usr/local/bin/claude".into()),
+            models: Some(Models {
+                listed: (list.iter())
+                    .map(|(id, name)| (id.to_string(), name.to_string()))
+                    .collect(),
+                default_id: Some("opus".into()),
+                ..Models::default()
+            }),
+            ..Default::default()
+        };
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+        cx.run_until_parked();
+        agents.update(cx, |agents, _| {
+            let kept = listing(&[("opus", "Opus 5.5"), ("sonnet", "Sonnet 5.5")]);
+            agents.tasks.found.insert(Cli::Claude, kept);
+        });
+        let looks = || configs.looks.load(Ordering::SeqCst);
+        let before = looks();
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Opus 5.5 (checked), Sonnet 5.5"
+        );
+        agents.read_with(cx, |agents, _| assert!(!agents.looking()));
+        assert_eq!(looks(), before, "the menu's rows wait on no look");
+
+        *configs.looked.lock().unwrap() = vec![(
+            Cli::Claude,
+            listing(&[("opus", "Opus 5.5"), ("fable", "Fable 5.2")]),
+        )];
+        agents.update(cx, |agents, cx| {
+            agents.model_menu_opened(cx);
+            assert!(agents.looking());
+            agents.model_menu_opened(cx);
+        });
+        cx.run_until_parked();
+        let after = looks();
+        assert_eq!(
+            after - before,
+            Cli::ALL.len(),
+            "one look, each assistant once"
+        );
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Opus 5.5 (checked), Fable 5.2",
+            "the next opening has the list fresh"
+        );
+        cx.executor().advance_clock(Duration::from_secs(60 * 60));
+        cx.run_until_parked();
+        assert_eq!(looks(), after, "nothing looks again of itself");
     }
 
     /// The model a task runs with (`task_model`, what its launch passes) is one the Model menu
@@ -11582,7 +11849,7 @@ mod tasks {
         });
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Claude Code's default, Opus, Sonnet (checked), Haiku"
+            "Opus, Sonnet (checked), Haiku"
         );
         // Its default passes no model.
         agents.update(cx, |agents, cx| agents.set_task_model(Cli::Claude, "", cx));
@@ -15053,7 +15320,10 @@ fn a_threads_hand_off_returns_at_once_and_an_outside_clients_waits() {
     assert!(description("claude-code").contains("this waits until"));
 }
 
+#[cfg(unix)]
+mod boxed;
 mod fenced;
+mod folders;
 mod holds;
 mod installs;
 pub(crate) mod kept;
@@ -15065,8 +15335,6 @@ mod notes;
 mod other_apps;
 mod permission_stopped;
 #[cfg(unix)]
-mod rewall;
-#[cfg(unix)]
 mod searches;
 mod sensitive;
 mod sign_ins;
@@ -15075,6 +15343,8 @@ mod strands;
 mod switches;
 mod uploads;
 mod went_to;
+#[cfg(unix)]
+mod your_tabs;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
 /// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and

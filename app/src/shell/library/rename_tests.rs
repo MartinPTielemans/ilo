@@ -460,6 +460,53 @@ fn a_card_s_field_shows_its_plate_under_the_pointer_or_while_renamed(cx: &mut Te
     );
 }
 
+/// Each card says where its parts are drawn, at the places the layout puts them, and the pointer
+/// at the middle of the second's logged field shows that field's plate, as check/spaces.sh points
+/// at the parts where they're said to be.
+#[gpui::test]
+fn a_card_s_parts_are_where_they_say_they_are_drawn(cx: &mut TestAppContext) {
+    let (shell, cx, _) = library(cx);
+    let height = cx.update(|window, _| window.viewport_size().height);
+    let place = |what: &'static str, space: u64, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let places = shell.card_places.borrow();
+            places.get(&(what, space)).copied()
+        })
+    };
+    let foot = height - px(SPACES_INSET + CARD_MORE_Y);
+    for (index, space) in [(0, 1), (1, 2)] {
+        let left = card_x(index);
+        let expected = [
+            (
+                "card",
+                point(px(left + CARD_WIDTH / 2.), px(SPACES_INSET + 150.)),
+            ),
+            ("field", name(index)),
+            ("name", name(index)),
+            ("slot", slot(index)),
+            ("brush", brush(index)),
+            ("more", point(px(left + CARD_WIDTH - CARD_MORE_X), foot)),
+            ("handle", point(px(left + CARD_MORE_X), foot)),
+        ];
+        for (what, at) in expected {
+            let Some(bounds) = place(what, space, cx) else {
+                panic!("card {index} didn't say where its {what} is drawn")
+            };
+            assert!(
+                bounds.contains(&at),
+                "card {index}'s {what} {bounds:?} isn't over {at:?}"
+            );
+        }
+    }
+    let field = place("field", 2, cx).unwrap();
+    move_to(cx, field.center());
+    assert_eq!(
+        fields_shown(&shell, cx),
+        (false, true),
+        "the pointer at the logged middle"
+    );
+}
+
 /// The middle of the `index`th card's •••, at its foot.
 fn more(index: usize, cx: &mut VisualTestContext) -> Point<Pixels> {
     let height = cx.update(|window, _| window.viewport_size().height);

@@ -423,7 +423,7 @@ impl FindBar {
         });
         unsafe { platform::host_hide_find_bar(self.ui_view) };
         crate::browser_windows::update_window_in(self.browser, cx, |shell, cx| {
-            shell.field_let_go(cx)
+            shell.find_closed(cx)
         });
     }
 

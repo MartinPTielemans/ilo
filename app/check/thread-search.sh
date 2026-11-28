@@ -96,7 +96,13 @@ send type work
 send key return
 expect "^browser: create space $second work\$" "return didn't name the Space"
 expect '^browser: space form gone$' "the form didn't leave after return"
-bar_command change-profile "New Profile" "new profile"
+# The Space shows no page, so it rests on ⌘T's bar drawn in place, which ⌘L gives the keyboard
+# rather than opening the command bar over it (#4140): the same bar, its commands the same.
+resting_key l "new Space"
+send type "new profile"
+expect '^browser: command bar commands "new profile": New Profile' "the resting bar didn't find New Profile first"
+send key return
+expect '^browser: command change-profile via command bar$' "New Profile didn't run from the resting bar"
 expect '^browser: dialog shown New Profile$' "the command bar's New Profile didn't ask for its name"
 send key return
 expect '^browser: create profile [0-9]* Profile 2$' "New Profile didn't make a profile"
@@ -119,10 +125,15 @@ expect_late "^browser: task agent claude is SignedIn at $home/.local/bin/claude\
   "the stand-in claude wasn't found signed in: $(grep '^browser: task agent claude ' "$log" | tail -1)"
 # search <words> <Space it's asked from> <Space then shown> <⌃ key for it> <engine's search URL>:
 # a thread asked from the one searches for words with the engine of its profile while the window
-# shows the other.
+# shows the other. The second Space shows no page, so there ⌘T gives the keyboard to its resting
+# bar, ⌘T's drawn in place, whose ⇥ asks as the command bar's does (#4140).
 search() {
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  if [ "$2" = "$second" ]; then
+    resting_key t "second Space"
+  else
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  fi
   send type "Search for $1"
   send key tab
   expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a task"
