@@ -73,6 +73,8 @@ mod copy_tests;
 mod display_face;
 mod drag;
 mod drm_note;
+#[cfg(test)]
+mod edge_cursor_tests;
 mod edge_knot;
 #[cfg(test)]
 mod edge_knot_tests;
@@ -139,8 +141,6 @@ mod task_cards;
 mod undo_tests;
 #[cfg(test)]
 mod window_move_tests;
-#[cfg(test)]
-mod edge_cursor_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
