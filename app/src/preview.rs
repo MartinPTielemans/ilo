@@ -3322,7 +3322,7 @@ fn main() {
                             shell.onboarding_show_assistants(rows, cx);
                         }
                         // PREVIEW_ONBOARDING_PICK=<n> picks the nth palette at the Space step.
-                        let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
+                        let pick = states::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
                             shell.onboarding_pick_palette(index, cx);
                         }
