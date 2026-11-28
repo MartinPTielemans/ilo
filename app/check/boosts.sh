@@ -4,11 +4,15 @@
 # Zap hides what the user clicks, now and in the file, until escape in the page ends it; its
 # Customize… opens the editor, whose changes show at once in each window on the site and ⌘Z takes
 # back, and whose Advanced grows the card for its sliders, which the arrow keys move and Reset puts
-# back; and with the file gone the page is its own again, as with a Boost turned off.
+# back; a Boost that names the Space's colours reads them with var(), in a private window too,
+# with no theme's, and one that names none gives the site none; and with the file gone the page is
+# its own again, as with a Boost turned off.
 
 serve
 # The page says in its title how #ad and its body look, each time that changes, so the run reads
-# what the Boost does to it. Its icon, the site's, is the one the editor's header shows.
+# what the Boost does to it, and adds "ilo-space" while its root has the Space's colours, which its
+# own script can read: a step that expects a title without it shows the site got none. Its icon,
+# the site's, is the one the editor's header shows.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>Boosted</title>
 <link rel="icon" href="icon.png">
 <body style="margin:0;background:rgb(51, 51, 51)">
@@ -17,7 +21,9 @@ printf '%s' '<!doctype html><meta charset="utf-8"><title>Boosted</title>
 const ad = document.getElementById("ad");
 let said;
 setInterval(() => {
-  const now = "ad " + getComputedStyle(ad).display + " " + getComputedStyle(document.body).backgroundColor;
+  const space = getComputedStyle(document.documentElement).getPropertyValue("--ilo-space-background");
+  const now = "ad " + getComputedStyle(ad).display + " " + getComputedStyle(document.body).backgroundColor +
+    (space ? " ilo-space" : "");
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/boost.html"
@@ -82,6 +88,60 @@ printf '%s\n' 'body { background: rgb(0, 128, 0) !important; }' > "$file"
 await "^browser: title $tab ad block rgb(0, 128, 0)\$" ||
   fail "a save of the Boost's file didn't show on the page"
 ../tools/window-screenshot.sh "$pid" "$out/boosted.png" || fail "no window to capture"
+
+# A Boost reads its tab's Space's colours with var(), the ones the app gave the core, and takes the
+# new ones as the appearance changes them, with no reload. The Boosts before it named none, so the
+# page had none: their titles have no "ilo-space".
+await '^browser: boost colors [0-9]* ' || fail "the app gave the core no Space's colours"
+system=$(grep '^browser: boost colors ' "$log" | tail -1 | cut -d' ' -f5)
+other=dark
+[ "$system" = light ] || other=light
+# The page's computed background for the last colours the app gave in `look`.
+space_background() {
+  hex=$(grep "^browser: boost colors [0-9]* $1 " "$log" | tail -1 |
+    sed 's/.* background #\([0-9a-f]*\) .*/\1/')
+  printf 'rgb(%d, %d, %d)' "0x$(echo "$hex" | cut -c1-2)" "0x$(echo "$hex" | cut -c3-4)" \
+    "0x$(echo "$hex" | cut -c5-6)"
+}
+printf '%s\n' 'body { background: var(--ilo-space-background) !important; }' > "$file"
+await "^browser: title $tab ad block $(space_background "$system") ilo-space\$" ||
+  fail "the Boost didn't read the Space's colour: $(grep '^browser: title' "$log" | tail -1)"
+for look in $other $system; do
+  item=Dark
+  [ "$look" = dark ] || item=Light
+  [ "$look" = "$system" ] && item=Automatic
+  send menu "Appearance › $item"
+  expect "^browser: boost colors [0-9]* $look " "View › Appearance › $item gave Boosts no colours"
+  expect "^browser: title $tab ad block $(space_background "$look") ilo-space\$" \
+    "the Boost didn't take the Space's $look colour: $(grep '^browser: title' "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/boost-space-colors-$look.png" ||
+    fail "no window to capture"
+done
+# A private window shows its original's Boosts, and its pages get the colours the app gives its
+# Space, which carry nothing of the user's: no theme and dark, the same for everyone.
+send key n cmd shift
+expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+expect '^browser: boost colors [0-9]* dark ' "the private window gave its Boosts no colours"
+new_window_bar
+send window 2
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+send insert "${site}boost.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}boost.html\$" \
+  "the private window didn't load the boosted page"
+private_tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}boost.html\$|\1|p" "$log" | tail -1)
+expect "^browser: title $private_tab ad block $(space_background dark) ilo-space\$" \
+  "the private page took no Space colours: $(grep "^browser: title $private_tab " "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/boost-space-colors-private.png" all ||
+  fail "no window to capture"
+send key w cmd shift
+expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
+send window 1
+printf '%s\n' 'body { background: rgb(0, 128, 0) !important; }' > "$file"
+expect "^browser: title $tab ad block rgb(0, 128, 0)\$" \
+  "the Boost's file kept the Space's colour, or a Boost that names none kept them on the page"
 
 send click $page_point
 if [ "$active" != 1 ]; then
@@ -244,13 +304,17 @@ expect "^browser: boost shown $host (0 bytes)\$" "the Boost's file going didn't 
 expect "^browser: title $tab ad block rgb(51, 51, 51)\$" "the page kept the Boost's CSS"
 exec 3>&-
 quit
-echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
+echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed;" \
+  "its var(--ilo-space-background) took the Space's colour, dark and light, and a Boost that" \
+  "named none left the page none, and a private window's page took no theme's, dark; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
   "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
   "Advanced grew the card, Contrast's and Brightness's filtered the page and Reset put them back;" \
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
-  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
+  "Windows: $out/boosted.png, $out/boost-space-colors-dark.png," \
+  "$out/boost-space-colors-light.png, $out/boost-space-colors-private.png," \
+  "$out/boost-card.png, $out/zapped.png," \
   "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png," \
   "$out/boost-edited.png, $out/boost-advanced.png"

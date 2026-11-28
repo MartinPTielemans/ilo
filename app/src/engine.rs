@@ -1316,6 +1316,16 @@ impl Browser for Engine {
         unsafe { bc::bc_space_set_theme(space, theme.as_ptr()) };
     }
 
+    fn set_space_boost_colors(&self, space: u64, colors: shell::BoostColors, _: &mut App) {
+        let colors = bc::bc_boost_colors {
+            background: colors.background,
+            text: colors.text,
+            accent: colors.accent,
+            accent_text: colors.accent_text,
+        };
+        unsafe { bc::bc_space_set_boost_colors(space, &colors) };
+    }
+
     fn set_space_profile(&self, space: u64, profile: u64, _: &mut App) {
         unsafe { bc::bc_space_set_profile(space, profile) };
     }

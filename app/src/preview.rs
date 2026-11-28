@@ -1819,6 +1819,8 @@ impl Browser for Fake {
         self.report_spaces(cx);
     }
 
+    fn set_space_boost_colors(&self, _: u64, _: browser::shell::BoostColors, _: &mut App) {}
+
     fn set_space_theme(&self, space: u64, theme: &str, cx: &mut App) {
         if let Some(entry) = self
             .spaces

@@ -566,6 +566,10 @@ pub trait Browser {
     /// Gives a Space `theme`, as `theme::Theme` writes it, which the core keeps for the UI, or
     /// takes it away for an empty one. Its main colour goes with `set_space_color`.
     fn set_space_theme(&self, space: u64, theme: &str, cx: &mut App);
+    /// Gives `space`'s colours to the Boosts of its tabs' pages. The core writes them as ilo's own
+    /// custom properties only for a Boost whose CSS names one, so a site whose Boost doesn't use
+    /// them learns nothing of them.
+    fn set_space_boost_colors(&self, space: u64, colors: BoostColors, cx: &mut App);
     /// Puts an empty Space in `profile`.
     fn set_space_profile(&self, space: u64, profile: u64, cx: &mut App);
     /// Makes a profile named `name`, and returns it. It's listed once it's made.
@@ -1248,6 +1252,16 @@ pub enum MediaAction {
     Previous,
     Next,
     PictureInPicture,
+}
+
+/// A Space's colours, each 0xRRGGBB, which its tabs' Boosts read with var() (docs/ux-spec.md ›
+/// Boosts): the window's colour at its top left, its text, and its accent with the text on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoostColors {
+    pub background: u32,
+    pub text: u32,
+    pub accent: u32,
+    pub accent_text: u32,
 }
 
 /// A tab's volume, from 0 to 1: whole until the user turns it down.
