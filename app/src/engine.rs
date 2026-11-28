@@ -2385,8 +2385,10 @@ impl Browser for Engine {
         }
     }
 
-    fn shape_first_run(&self, width: f32, height: f32, radius: f32) {
-        unsafe { platform::host_set_first_run_frame(width.into(), height.into(), radius.into()) }
+    fn shape_first_run(&self, width: f32, height: f32, radius: f32, frame: u64) {
+        unsafe {
+            platform::host_set_first_run_frame(width.into(), height.into(), radius.into(), frame)
+        }
     }
 
     // The Mac's host grows first run's window where it can (host_grow_first_run); no other does

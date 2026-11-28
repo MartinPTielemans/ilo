@@ -301,7 +301,7 @@ void host_hold_window(void* ui_view) {}
 
 // The card draws its own shape in a clear window, and the compositor puts no shadow or blur of
 // its own round one the app decorates.
-void host_set_first_run_frame(double width, double height, double radius) {}
+void host_set_first_run_frame(double width, double height, double radius, uint64_t frame) {}
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;

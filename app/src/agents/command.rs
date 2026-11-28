@@ -638,7 +638,7 @@ pub fn added(profile: &Path) -> Option<Agent> {
 
 /// What the program prints and exits with when run under `name`, the name it was run as, if that
 /// isn't the command's: a link or script from before the command took the product's name, which
-/// Add Again takes away. The command's own link, and the program run by its own name, as the
+/// Install Again takes away. The command's own link, and the program run by its own name, as the
 /// Flatpak's script and the Mac's bundle run it, go on to `run`.
 pub fn renamed(name: &std::ffi::OsStr) -> Option<Printed> {
     let stem = Path::new(name).file_stem()?;
@@ -652,7 +652,7 @@ pub fn renamed(name: &std::ffi::OsStr) -> Option<Printed> {
     Some(Printed {
         out: String::new(),
         err: format!(
-            "This command is now {LINK}. Add it again in {PRODUCT} › Settings › Other apps.\n"
+            "This command is now {LINK}. Install it again in {PRODUCT} › Settings › Other apps.\n"
         ),
         code: exit::REFUSED,
     })
@@ -677,7 +677,9 @@ pub fn run(
     let Some(agent) = agent else {
         return fail(
             exit::UNKNOWN,
-            format!("The {LINK} command isn't added. Add it in {PRODUCT} › Settings › Other apps."),
+            format!(
+                "The {LINK} command isn't installed. Install it in {PRODUCT} › Settings › Other apps."
+            ),
         );
     };
     let name = (line.name.clone())
@@ -1063,7 +1065,7 @@ mod tests {
     #[test]
     fn under_its_old_name_the_command_says_its_new_one() {
         let said = format!(
-            "This command is now {LINK}. Add it again in {PRODUCT} › Settings › Other apps.\n"
+            "This command is now {LINK}. Install it again in {PRODUCT} › Settings › Other apps.\n"
         );
         let old = super::super::cli::OLD_LINK;
         for name in [
@@ -1089,13 +1091,14 @@ mod tests {
         }
     }
 
-    /// Without an agent file there's nothing to connect as, and the run says where to add it.
+    /// Without an agent file there's nothing to connect as, and the run says where to install it.
     #[test]
-    fn a_run_without_the_agent_file_says_where_to_add_it() {
+    fn a_run_without_the_agent_file_says_where_to_install_it() {
         let printed = run(vec!["tabs".into()], None, None, String::new);
         assert_eq!(printed.code, exit::UNKNOWN);
-        let said =
-            format!("The {LINK} command isn't added. Add it in {PRODUCT} › Settings › Other apps.");
+        let said = format!(
+            "The {LINK} command isn't installed. Install it in {PRODUCT} › Settings › Other apps."
+        );
         assert!(printed.err.contains(&said), "{}", printed.err);
     }
 

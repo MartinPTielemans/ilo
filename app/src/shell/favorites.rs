@@ -895,7 +895,7 @@ impl Shell {
 
 /// A tile's fill while it isn't shown, `hover` of the way to its hover fill: the ink's quiet plate
 /// in both looks, a step firmer for a tab in Developer Mode.
-fn tile_fill(palette: &Palette, developer: bool, hover: f32) -> Hsla {
+pub(super) fn tile_fill(palette: &Palette, developer: bool, hover: f32) -> Hsla {
     let rest = if developer { DEVELOPER_TILE } else { TILE };
     // The ladder's hover step over the resting plate.
     let under = rest + crate::palette::STATE_HOVERED * (1. - rest);

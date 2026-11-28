@@ -68,6 +68,14 @@ impl Cli {
         }
     }
 
+    /// What an assistant's row calls it: the one the user signs in to, its maker's plan.
+    pub fn account_name(self) -> &'static str {
+        match self {
+            Cli::Claude => "Claude",
+            Cli::Codex => "ChatGPT",
+        }
+    }
+
     /// Its glyph, the same in Settings › Agents and ⌘T's ask: a terminal, as each is a CLI.
     pub fn glyph(self) -> &'static str {
         match self {

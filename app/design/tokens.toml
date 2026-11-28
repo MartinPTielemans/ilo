@@ -2637,18 +2637,8 @@ done-group = [194.0, 420.0]
 row = [56.0, 14.0, 11.0]
 row-name = [13.0, 16.0]
 row-words = [12.0, 15.0]
-# Tidy tabs (v9 §7): the card's top, height and side inset; the bar's width, height and thumb;
-# the track, the part filled, a stop's tick and its alpha; the thumb, white over any glass, and its
-# shadow's y, blur and alpha.
-tidy = [118.0, 76.0, 16.0]
-tidy-bar = [288.0, 12.0, 20.0]
-tidy-track = 0.086
-tidy-filled = 0.35
-tidy-tick = [3.0, 0.45]
-tidy-thumb = 0xffffff
-tidy-thumb-shadow = [2.0, 6.0, 0.5]
-# Where the window has a broom, the row that is its control: its top, height and glyph.
-broom = [210.0, 52.0, 14.0]
+# The check disc a row shows once what it offered is done: its glyph's size.
+check-disc = 14.0
 # Your first Space (v9 §6), the theme panel's parts as the fifth mock sets them out: the editor's
 # top and its head's height, the name's field; the field's corners, words' size, inset and gap to
 # Auto | Light | Dark, and the most characters it keeps; the pad's gap over it, its height, the gap
@@ -2661,17 +2651,31 @@ space-name = 16.0
 space-pad = [10.0, 92.0, 8.0, 8.0]
 space-dots = [15.0, 11.0, 270.0, 70.0]
 space-start = [1.0, 0.7, 0.4, 0.3]
+# The step's picture (#4450), a piece of the Space's sidebar in the plane as if seen through a
+# window: the window's inset from the plane's top left, its top-left corner, and the address
+# field's top in it.
+space-piece = [24.0, 10.0, 10.0]
+# The desktop behind the piece's glass, the Transparency pictures' with soft lights on it so what
+# comes through is seen: each light's x and y in the plane, their size and blur, and their colours.
+space-lights = [120.0, 210.0, 200.0, 60.0, 70.0, 400.0]
+space-light = [80.0, 70.0]
+space-light-colors = [0xffffff, 0xf2c14e, 0x2f8f7a]
+# The made-up sites' letter icons: their corners and letter's size, and their fills, the two
+# favourites', the pinned row's, then Today's three.
+space-icon = [4.0, 10.0]
+space-icons = [0x3f6fd8, 0xd0533b, 0x3a8f5b, 0x2a7fb0, 0xb7762a, 0x7a4bd6]
 # Bring your stuff (v9 §5). The browsers found: their icons' top, size and cell width, the names'
-# size, line and gap under the icon, how many show before More…, and the ring's alpha the picked
-# cell keeps.
+# size, line and gap under the icon, and how many show before More….
 bring-row = [102.0, 44.0, 72.0]
 bring-name = [11.0, 14.0, 4.0]
 bring-shown = 5.0
-bring-ring = 0.25
-# The slot the picked icon lands in: its left, top and size; its flight there in seconds, back in
-# seconds, the arc's height over the midpoint, and the lift it starts with.
+# A pick (#4449): the one look's selected plate (#4401) under its icon and name, reaching this far
+# over and under them, at these corners; its icon lifts in its cell over these seconds (ARRIVE)
+# to this height, and never leaves the row.
+bring-picked = [8.0, 12.0]
+bring-lift = [0.42, 6.0]
+# The copy of the picked icon at the flow's left end, where its strands start: left, top and size.
 bring-slot = [118.0, 260.0, 64.0]
-bring-flight = [0.42, 0.3, 80.0, 6.0]
 # The chips: the column's centre x, the centre line's y, a chip's width, height, corners and
 # pitch; the glyph's size, the words' size; a chip left out at this alpha.
 bring-chip = [372.0, 292.0, 172.0, 26.0, 9.0, 30.0]
@@ -2690,10 +2694,9 @@ bring-on = 0.9
 # The Safari notice: its left and width.
 bring-notice = [214.0, 448.0]
 # An app icon's plate: its corners as a share of its size, the letter standing in for an icon and
-# More…'s glyph at these shares of it; the flying icon's shadow at most this alpha, its drop and
-# blur as shares of its size; a chip's sides and the gap after its glyph as shares of its height.
+# More…'s glyph at these shares of it; a chip's sides and the gap after its glyph as shares of its
+# height.
 bring-plate = [0.22, 0.45, 0.4]
-bring-shadow = [0.25, 0.1, 0.25]
 bring-chip-inset = [0.333333, 0.25]
 # The favourites' tiles: width, height, corners and gap; four in a row; the plate, the name's size
 # and line, and the check disc.
@@ -2724,6 +2727,35 @@ way-plate-fill = 0x17171b
 way-small = [7.0, 11.0, 14.0]
 way-off = 0.45
 way-copied = 1.2
+# A way done shows a check and its word in its button's place, `way-done-gap` apart, as a way at
+# work shows the ring.
+way-done-gap = 6.0
+# Under the cards (v9 §8), one door and one result: a cord `ways-cord`'s first wide from each
+# card's bottom centre to a knot its second across, centred at its third on the card's centre
+# line, and one from the knot to a sidebar card, a thread's card as the sidebar draws it
+# ([shell.task-card]), `ways-card` wide and tall at its third, with a line its fourth under it.
+# Everything under the cards moves down as they grow. Not done, a cord is at `ways-cord-off`, the
+# knot at `way-off` until a cord reaches it, and the card at `ways-cord-off`: its outline, a still
+# ring and the first program's name, the card to come.
+ways-cord = [2.5, 40.0, 292.0]
+ways-card = [212.0, 59.0, 328.0, 7.0]
+ways-cord-off = 0.12
+# As a button finishes, from the first frame the window shows: its plate types in, `ways-type`'s
+# first a character and its second between the lines; its cord draws to the knot over `ways-draw`
+# on DRAW; a bead `ways-bead`'s first across runs on through the knot and down over its second,
+# at one speed; and the card arrives, its ink over `ways-arrive`'s first and rising its second
+# over its third on ARRIVE, its ring turning, until `ways-done` after it started, when its ring
+# becomes a check and its line the finished one. With the card there, a second cord draws and its
+# bead runs, no more. Undone in Settings, a cord falls back over `ways-fall`, and with both undone
+# the card goes back to its outline over the same. With Reduce Motion each travel is a fade of
+# `ways-still-fade`, nothing types in, and the ring stands still.
+ways-type = [0.028, 0.3]
+ways-draw = 0.35
+ways-bead = [6.0, 0.6]
+ways-arrive = [0.18, 5.0, 0.28]
+ways-done = 1.4
+ways-fall = 0.2
+ways-still-fade = 0.15
 
 [shell.onboarding.exit]
 # First run's exit (first-run v9 §10): where the host grows first run's window, Start Browsing

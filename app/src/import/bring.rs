@@ -66,12 +66,6 @@ fn count(tally: &Tally, kind: Kind) -> usize {
 
 impl ImportView {
     /// Reads the browser used last at once, as the card's step shows its kinds as it comes.
-    pub(crate) fn bring_first(&mut self, cx: &mut Context<Self>) {
-        if self.guided && matches!(self.step, Step::List) && !self.sources.is_empty() {
-            self.pick(0, cx);
-        }
-    }
-
     /// The card's Import can be pressed: a browser read, with a kind it has on.
     pub(crate) fn bring_ready(&self) -> bool {
         let Step::Pick {

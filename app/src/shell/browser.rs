@@ -1133,8 +1133,9 @@ pub trait Browser {
     /// waiting at launch on screen.
     fn end_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
     /// Keeps the system's glass and shadow round first run's card to its size and corners now,
-    /// as its entry grows it, where the host draws them.
-    fn shape_first_run(&self, _width: f32, _height: f32, _radius: f32) {}
+    /// as its entry grows it, where the host draws them. `frame` is the count of frames the card
+    /// has drawn, which the Mac's host logs under the checks with the glass's shape.
+    fn shape_first_run(&self, _width: f32, _height: f32, _radius: f32, _frame: u64) {}
     /// Grows first run's window to the browser window's frame, in one step, and says whether it
     /// will. The host finds its own held window. A yes says it has tested that it can, and it
     /// sets the frame on the main queue's next turn, as the ask comes inside the press. On a yes
