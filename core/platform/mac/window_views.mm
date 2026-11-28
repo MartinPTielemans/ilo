@@ -278,7 +278,6 @@ bool AnswerNonactivatingPanel() {
   dispatch_once(&once, ^{
     Method method = class_getInstanceMethod(NSWindow.class, @selector(_isNonactivatingPanel));
     if (!method) {
-      // check.sh reads this line.
       fprintf(stderr, "browser: no _isNonactivatingPanel to answer for the Mini Player\n");
       return;
     }

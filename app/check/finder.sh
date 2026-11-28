@@ -97,6 +97,7 @@ space_round_trip() {
   raw=$(screencapture -x -R"$rect" "$out/finder-round-trip-point.png" 2>/dev/null &&
     pixel "$out/finder-round-trip-point.png" 0.5 0.5) ||
     fail "no raw scene after the Space round trip"
+  # The Mini Player settling over the round-tripped Space.
   sleep 0.5
   moved=$(screencapture -x -R"$rect" "$out/finder-round-trip-point-2.png" 2>/dev/null &&
     pixel "$out/finder-round-trip-point-2.png" 0.5 0.5) ||
@@ -209,6 +210,7 @@ if ! FRAME="$at" ../tools/window-screenshot.sh "$pid" \
   raw=$(screencapture -x -R"$rect" "$out/finder-scene-point.png" 2>/dev/null &&
     pixel "$out/finder-scene-point.png" 0.5 0.5) ||
     fail "no Mini Player over Finder's full-screen window, and no raw scene to read"
+  # The Mini Player settling over Finder's full-screen window.
   sleep 0.5
   moved=$(screencapture -x -R"$rect" "$out/finder-scene-point-2.png" 2>/dev/null &&
     pixel "$out/finder-scene-point-2.png" 0.5 0.5) ||
@@ -280,6 +282,7 @@ if ! FRAME="$at" ../tools/window-screenshot.sh "$pid" \
   raw=$(screencapture -x -R"$rect" "$out/finder-scene-reformed-point.png" 2>/dev/null &&
     pixel "$out/finder-scene-reformed-point.png" 0.5 0.5) ||
     fail "no raw scene over the re-made full-screen window"
+  # The Mini Player settling over the re-made full-screen window.
   sleep 0.5
   moved=$(screencapture -x -R"$rect" "$out/finder-scene-reformed-point-2.png" 2>/dev/null &&
     pixel "$out/finder-scene-reformed-point-2.png" 0.5 0.5) ||
