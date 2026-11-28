@@ -36,7 +36,9 @@ use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
 use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task::STATUS;
-use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP};
+use crate::tokens::shell::task_area::{
+    BACK, BACK_GLYPH, BESIDE, BESIDE_GAP, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP,
+};
 use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X};
 
@@ -94,6 +96,21 @@ fn watched(card: Bounds<Pixels>) -> Bounds<Pixels> {
         card.origin,
         size(card.size.width, card.size.height - px(PAGE_ROOM)),
     )
+}
+
+/// The card split for standing on a page with the conversation beside it: the page's part on its
+/// left, and the conversation's panel at its right.
+fn split(card: Bounds<Pixels>) -> (Bounds<Pixels>, Bounds<Pixels>) {
+    let wide = px(BESIDE.min(f32::from(card.size.width) / 2.));
+    let page = Bounds::new(
+        card.origin,
+        size(card.size.width - wide - px(BESIDE_GAP), card.size.height),
+    );
+    let panel = Bounds::new(
+        point(card.right() - wide, card.top()),
+        size(wide, card.size.height),
+    );
+    (page, panel)
 }
 
 fn pushed(bounds: Bounds<Pixels>, by: Pixels) -> Bounds<Pixels> {
@@ -344,6 +361,8 @@ impl Shell {
         log!("browser: task area {space} opens");
         log!("browser: task area {space} open");
         self.take_keyboard(cx);
+        // Its group at the sidebar's foot opens to its pages, and the one shown before closes.
+        self.reshape_foot(cx);
         cx.notify();
     }
 
@@ -356,6 +375,13 @@ impl Shell {
         if self.selected != 0 {
             self.browser.focus_page(cx);
         }
+        cx.notify();
+    }
+
+    /// Puts a task's conversation beside the page it watches (`talk_beside`).
+    pub fn set_talk_beside(&mut self, beside: bool, cx: &mut Context<Self>) {
+        self.talk_beside = beside;
+        self.talk_redraw(cx);
         cx.notify();
     }
 
@@ -375,7 +401,7 @@ impl Shell {
         if !self.task_tabs(area.space).contains(&tab) {
             return false;
         }
-        let zoom = if cx.reduce_motion() {
+        let zoom = if crate::motion::still(cx) {
             Zoom::Rest
         } else {
             Zoom::Out(Instant::now())
@@ -414,7 +440,7 @@ impl Shell {
     /// Back to the conversation: the page shrinks into its thumbnail, from a picture of it as it
     /// is now.
     pub fn task_page_back(&mut self, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return;
         };
@@ -500,9 +526,27 @@ impl Shell {
             if self.page_fullscreen {
                 card
             } else {
-                watched(card)
+                watched(self.page_part(card))
             },
         ))
+    }
+
+    /// Whether the user stands on a task's page with its conversation beside it, rather than over
+    /// it: with `talk_beside`, from the page's zoom out until it goes back, and not full screen.
+    pub(super) fn task_standing(&self) -> bool {
+        self.talk_beside
+            && !self.page_fullscreen
+            && (self.task_area.as_ref())
+                .and_then(|area| area.page.as_ref())
+                .is_some_and(|page| !matches!(page.zoom, Zoom::In(_)))
+    }
+
+    /// The card's part a page watched has: all of it, or its left while the user stands on it.
+    fn page_part(&self, card: Bounds<Pixels>) -> Bounds<Pixels> {
+        match self.task_standing() {
+            true => split(card).0,
+            false => card,
+        }
     }
 
     /// Whether the window shows `tab`'s page as an agent's: a task's in place in the area.
@@ -539,10 +583,11 @@ impl Shell {
             return pushed(card, away);
         };
         let live = self.task_core == area.space;
+        let part = self.page_part(card);
         match page.zoom {
             Zoom::Rest | Zoom::Asked(_) if live && self.page_fullscreen => card,
-            Zoom::Rest | Zoom::Asked(_) if live => watched(card),
-            Zoom::Out(_) | Zoom::Rest | Zoom::Asked(_) => pushed(watched(card), away),
+            Zoom::Rest | Zoom::Asked(_) if live => watched(part),
+            Zoom::Out(_) | Zoom::Rest | Zoom::Asked(_) => pushed(watched(part), away),
             Zoom::In(_) => pushed(card, away),
         }
     }
@@ -575,6 +620,8 @@ impl Shell {
         let left = self.talk_in(area.space);
         self.talk_closed(cx);
         self.lay_out_page(cx);
+        // Its group at the sidebar's foot closes to its header.
+        self.reshape_foot(cx);
         if let Some(agent) = left {
             self.talk_left(agent, cx);
         }
@@ -745,7 +792,10 @@ impl Shell {
             | Command::Appearance(_)
             | Command::CopyBuildInfo
             // The agent's card shows over the area as over the user's Space.
-            | Command::FocusAgentQuestion => return false,
+            | Command::FocusAgentQuestion
+            // The ring goes to the task shown, at the foot: its pages' rows are there only while
+            // its view is.
+            | Command::FocusSidebar => return false,
             // Quit and Close Window too, so the session keeps the user's Space for the window.
             _ => {
                 self.leave_task_area(cx);
@@ -771,7 +821,7 @@ impl Shell {
 
     /// Steps the area's motion for a frame: the page's zoom.
     pub(super) fn step_task_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let now = Instant::now();
         let Some(area) = &mut self.task_area else {
             return;
@@ -823,11 +873,17 @@ impl Shell {
         let now = Instant::now();
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
         let back = self.task_page_going_back();
+        let standing = self.task_standing();
         let mut layer = div().absolute().size_full();
         // The Space's page goes out of the window on its card.
         // The conversation is in the card's place, and fades under a page coming out of it. Under
         // a page going back it takes clicks from the zoom's first frame, before it shows (#3496).
-        if zoom < 1. || back {
+        // Standing on the page, it's beside it in its panel instead, from the zoom's first frame.
+        if standing || zoom < 1. || back {
+            let (at, shown) = match standing {
+                true => (split(card_frame).1, 1.),
+                false => (card_frame, 1. - zoom),
+            };
             let view = div()
                 .absolute()
                 .left_0()
@@ -840,12 +896,12 @@ impl Shell {
                 div()
                     .id("task-conversation")
                     .absolute()
-                    .left(card_frame.left())
-                    .top(card_frame.top())
-                    .w(card_frame.size.width)
-                    .h(card_frame.size.height)
+                    .left(at.left())
+                    .top(at.top())
+                    .w(at.size.width)
+                    .h(at.size.height)
                     .overflow_hidden()
-                    .opacity(1. - zoom)
+                    .opacity(shown)
                     .block_mouse_except_scroll()
                     .child(view),
             );
@@ -855,15 +911,14 @@ impl Shell {
             self.task_strip_drawn.set(None);
             return Some(layer.into_any_element());
         };
-        let place = watched(card_frame);
+        let part = self.page_part(card_frame);
+        let place = watched(part);
         let in_place = self.task_page_live() == Some(page.tab);
         if in_place && self.page_fullscreen {
             return Some(layer.into_any_element());
         }
         // While the agent drives the page, the Signal ring of its pointer goes round it.
-        let driving = in_place
-            && self.task_working()
-            && matches!(self.agent_bar(), Some(Bar::Working { tab, .. }) if tab == page.tab);
+        let driving = in_place && self.task_drives(page.tab);
         if driving {
             let ring = place.dilate(px(RING));
             layer = layer.child(
@@ -888,7 +943,7 @@ impl Shell {
         }
         Some(
             layer
-                .child(self.task_strip(card_frame, page.tab, zoom, cx))
+                .child(self.task_strip(part, page.tab, zoom, cx))
                 .into_any_element(),
         )
     }
@@ -940,9 +995,43 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The dot of the task whose page the strip is under.
+    /// The dot of the task whose page the strip is under, as that page has it: the strip is the
+    /// page's own, never the task's. A task that waits on the user at another page, one it handed
+    /// them, is at work on this one (#4102).
     pub(super) fn task_strip_dot(&self) -> Option<Dot> {
-        self.task_card_shown().map(|card| card.dot)
+        let card = self.task_card_shown()?;
+        let shown = self.task_page_drawn().map(|(_, tab)| tab);
+        let elsewhere = (self.agent_status.iter())
+            .filter(|status| status.agent == card.agent)
+            .flat_map(|status| status.held.iter())
+            .any(|(held, why)| Some(*held) != shown && !why.is_empty());
+        Some(match card.dot {
+            Dot::Waiting if elsewhere => Dot::Working,
+            dot => dot,
+        })
+    }
+
+    /// Each of a task's pages' own step while it works on several, as its card has them.
+    pub(super) fn task_page_steps(&self, agent: &str) -> &[(u64, SharedString)] {
+        let card = self.task_cards.iter().find(|card| card.agent == agent);
+        card.map_or(&[][..], |card| &card.page_steps[..])
+    }
+
+    /// Whether the task the area shows is at work on `tab`'s page, which the page's ring says:
+    /// the page its agent is at work in, or once it works on several, each that has a step of
+    /// its own.
+    fn task_drives(&self, tab: u64) -> bool {
+        let Some(Bar::Working { tab: at, .. }) = self.agent_bar() else {
+            return false;
+        };
+        let Some(card) = self.task_card_shown() else {
+            return false;
+        };
+        let own = card.page_steps.iter().any(|(each, _)| *each == tab);
+        match card.page_steps.is_empty() {
+            true => self.task_working() && at == tab,
+            false => self.task_strip_dot() == Some(Dot::Working) && own,
+        }
     }
 
     /// The agent of the task whose page the strip is under.
@@ -968,8 +1057,18 @@ impl Shell {
             return (self.title(tab).to_string(), String::new());
         };
         let name = card.name.clone();
-        match card.dot {
-            Dot::Working => (format!("{name} is working"), card.status.to_string()),
+        match self.task_strip_dot().unwrap_or(card.dot) {
+            // The page's own step once the task works on several, never another page's, nor
+            // what the task waits for on another: only its card and conversation say those.
+            Dot::Working => {
+                let own = (card.page_steps.iter()).find(|(each, _)| *each == tab);
+                let detail = match (own, card.page_steps.is_empty() && card.dot == Dot::Working) {
+                    (Some((_, step)), _) => step.to_string(),
+                    (None, true) => card.status.to_string(),
+                    (None, false) => String::new(),
+                };
+                (format!("{name} is working"), detail)
+            }
             // What it needs the user for, without the card's "Needs you", which the title says.
             Dot::Waiting => {
                 let lead = status_lead(&card.status);
@@ -980,7 +1079,7 @@ impl Shell {
                 format!("{name} finished"),
                 crate::agents::site(&self.page(tab).url).to_string(),
             ),
-            Dot::Ended => ("Stopped".to_string(), String::new()),
+            Dot::Ended => (card.word.alone(&name).to_string(), String::new()),
         }
     }
 
@@ -1026,6 +1125,22 @@ impl Shell {
         )
     }
 
+    /// The strip's chips, as `strip_chips` has them for the page watched: beside the
+    /// conversation, Take Over is always the strip's, and Stop is the composer's. The ring's stops
+    /// are these, so it never rings one that isn't drawn.
+    pub(super) fn strip_shows(
+        &self,
+        held: bool,
+        dot: Option<Dot>,
+        open: bool,
+        keyed: bool,
+    ) -> Vec<(StripChip, Look)> {
+        let standing = self.task_standing();
+        (strip_chips(held, dot, open, keyed || standing).into_iter())
+            .filter(|(chip, _)| !(standing && *chip == StripChip::Stop))
+            .collect()
+    }
+
     /// Whether the task the page area shows is at work, which its page's ring says.
     pub(super) fn task_working(&self) -> bool {
         self.task_card_shown()
@@ -1049,11 +1164,12 @@ impl Shell {
         // ⌘↩, or off the Mac Ctrl+Enter, as a menu spells it.
         let take_over = |cx: &mut Context<Self>| user_keys(cx).label(Command::BackToPinnedUrl);
         let bar = self.agent_bar();
-        let dot = card.map(|card| card.dot);
+        let dot = self.task_strip_dot();
         let open = self.task_strip_open(tab);
         let held = matches!(bar, Some(Bar::Held { .. }));
         let keyed = self.keyed_strip.is_some();
-        let chips: Vec<_> = (strip_chips(held, dot, open.is_some(), keyed).into_iter())
+        let shows = self.strip_shows(held, dot, open.is_some(), keyed);
+        let chips: Vec<_> = (shows.into_iter())
             .map(|(chip, look)| match chip {
                 // A click while it shows does what its key does, as Take Over is on screen.
                 StripChip::TakeOver => self.strip_stop(
@@ -1095,7 +1211,9 @@ impl Shell {
             .collect();
         // Only a strip whose agent needs the user is heavier, as its card is.
         let needs_you = dot == Some(Dot::Waiting);
-        let glyph = card.map(|card| self.task_glyph(&card.agent, card.dot));
+        let glyph = card
+            .zip(dot)
+            .map(|(card, dot)| self.task_glyph(&card.agent, dot));
         // The back's chevron lines up with the page's edge, its plate hanging outside.
         let left = card_frame.left() - px((BACK - BACK_GLYPH) / 2.);
         let back = div()

@@ -3,13 +3,19 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::{
-    AppContext as _, Entity, FontWeight, Modifiers, SharedString, TestAppContext, VisualTestContext,
-};
+use gpui::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext};
 
-use super::{Card, Dot, Holds, Shape, chips, shape};
-use crate::shell::{Command, FOOTER_HEIGHT, Folders, PLATE_INSET, Shell, Slot, recorder::Recorder};
-use crate::tokens::shell::task::{GAP, HEIGHT};
+use super::{
+    Card, Chip, Cli, Dot, Holds, Offer, PLATE_TOP, PageWord, chip, group_height, pages_room,
+    state_line,
+};
+use crate::agents::task::Word;
+use crate::agents::tier::Tier;
+use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
+use crate::shell::{
+    Command, FOOTER_HEIGHT, Folders, PLATE_HEIGHT, PLATE_INSET, ROW_HEIGHT, Shell, Slot,
+    recorder::Recorder,
+};
 
 fn card(n: u64, dot: Dot) -> Card {
     Card {
@@ -20,13 +26,19 @@ fn card(n: u64, dot: Dot) -> Card {
         replies: true,
         title: "Find a flight to Lisbon".into(),
         status: "Searching flights".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot,
+        word: Word::for_dot(dot),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 
@@ -74,9 +86,9 @@ fn shell_with(
         shell.set_task_cards(first, cx);
         shell
             .foot
-            .plates
+            .groups
             .iter_mut()
-            .for_each(|plate| plate.settle(later()));
+            .for_each(|group| group.settle(later()));
     });
     cx.run_until_parked();
     host.take();
@@ -97,7 +109,7 @@ fn draw(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// The foot's plates as it keeps them, top first, as the log says them.
+/// The foot's groups as it keeps them, top first, as the log says them.
 fn plates(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> String {
     shell.read_with(cx, |shell, _| shell.foot.logged.clone())
 }
@@ -118,64 +130,96 @@ fn tick(seconds: f32) {
     super::set_clock(super::clock() + Duration::from_secs_f32(seconds));
 }
 
-/// The agent's question takes a second line when it needs one, and nothing else does. Its chips
-/// wrap to two rows; past that, or with an answer wider than the room, none show, and the plate's
-/// click opens the conversation, where they do. Open, a chip of its own, always shows, cut to the
-/// room.
-#[test]
-fn a_card_shapes_to_its_question_and_its_chips() {
-    // Every character 6 pt wide, in a sidebar 240 wide: 180 for the status, 191 for chips.
-    let measure = |text: &SharedString, _: f32, _: FontWeight| text.chars().count() as f32 * 6.;
-    let answers = |words: &[&str]| {
-        words
-            .iter()
-            .map(|word| SharedString::from(word.to_string()))
-            .collect()
-    };
-    let mut asks = card(1, Dot::Waiting);
-    asks.asks = true;
-    asks.status = "Both are open Saturday. Which would you rather visit?".into();
-    asks.answers = answers(&["Gulbenkian", "MAAT"]);
-    assert_eq!(
-        shape(&asks, 240., &measure),
-        Shape {
-            lines: 2,
-            rows: vec![vec![0, 1]]
-        }
-    );
+/// The line under a header's title is ilo's: who works on the task, or Full access where it has
+/// that, and the task's one word, in the fuller form its card has for the same state. The agent's
+/// own words, its step, its question or its result, are never in it: they are the title's alone
+/// (#3690).
+#[gpui::test]
+fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
+    let said = "I found three flights and booked the cheapest";
+    let mut done = card(1, Dot::Done);
+    done.status = said.into();
+    assert_eq!(state_line(&done).as_ref(), "Claude · Done");
     let mut working = card(2, Dot::Working);
-    working.status = asks.status.clone();
+    working.status = "Step 3 · Opening tap.pt".into();
+    assert_eq!(state_line(&working).as_ref(), "Claude · Working");
+    working.status = "Working · 3 helpers".into();
     assert_eq!(
-        shape(&working, 240., &measure),
-        Shape {
-            lines: 1,
-            rows: Vec::new()
-        }
+        state_line(&working).as_ref(),
+        "Claude · Working · 3 helpers"
     );
-
-    asks.answers = answers(&["Museum 1", "Museum 2", "Museum 3", "Museum 4"]);
-    assert_eq!(shape(&asks, 240., &measure).rows, [vec![0, 1], vec![2, 3]]);
-    asks.answers = answers(&["Museum 1", "Museum 2", "Museum 3", "Museum 4", "Museum 5"]);
-    assert!(shape(&asks, 240., &measure).rows.is_empty(), "a third row");
-    asks.answers = answers(&["The Calouste Gulbenkian Museum's modern wing"]);
-    assert!(
-        shape(&asks, 240., &measure).rows.is_empty(),
-        "an answer wider than the room"
-    );
-
-    let mut done = card(3, Dot::Done);
-    done.open = vec![(30, "tickets.gulbenkian.pt.example.org".into())];
-    assert_eq!(shape(&done, 240., &measure).rows, [vec![0]]);
+    working.tier = Tier::Full;
     assert_eq!(
-        chips(&done)[0].label().as_ref(),
-        "Open tickets.gulbenkian.pt.example.org"
+        state_line(&working).as_ref(),
+        "Full access · Working · 3 helpers"
     );
-    done.open
-        .extend([(31, "maat.pt".into()), (32, "gulbenkian.pt".into())]);
-    assert_eq!(chips(&done)[0].label().as_ref(), "Open 3 pages");
-    let mut failed = card(4, Dot::Ended);
-    failed.command = Some("claude auth login");
-    assert_eq!(chips(&failed)[0].label().as_ref(), "Copy");
+    assert_eq!(
+        super::state_lead(&state_line(&working)),
+        "Full access".len()
+    );
+    assert_eq!(super::state_lead(&state_line(&done)), 0);
+    let mut asks = card(3, Dot::Waiting);
+    asks.asks = true;
+    asks.status = "Which would you rather visit?".into();
+    assert_eq!(state_line(&asks).as_ref(), "Claude · Needs you");
+    // An ended task says which of the three it is, from its card's word.
+    let mut ended = card(4, Dot::Ended);
+    ended.status = "Stopped after 6 steps".into();
+    assert_eq!(
+        state_line(&ended).as_ref(),
+        "Claude · Stopped after 6 steps"
+    );
+    ended.word = Word::Interrupted;
+    ended.status = "Claude Code quit".into();
+    assert_eq!(state_line(&ended).as_ref(), "Claude · Interrupted");
+    ended.word = Word::AtLimit;
+    assert_eq!(state_line(&ended).as_ref(), "Claude · At limit");
+    // A session's receipt is ilo's line, with its time.
+    let mut session = card(5, Dot::Done);
+    session.replies = false;
+    session.name = "Flights".into();
+    session.status = "Done · 10:42".into();
+    assert_eq!(state_line(&session).as_ref(), "Flights · Done · 10:42");
+
+    // As the header draws it: the title is the agent's, the line under it is not.
+    let (shell, _, cx) = shell_with(cx, vec![done.clone()]);
+    shell.read_with(cx, |shell, _| {
+        let face = shell.foot.groups[0].face.as_ref().unwrap();
+        assert_eq!(face.title.text, done.title);
+        assert_eq!(face.status.text.as_ref(), "Claude · Done");
+        assert!(!face.status.text.contains(said));
+    });
+}
+
+/// A page's row ends in one word: Reading where the task works in the page now, Done where it has
+/// moved on or finished, and Paused where the user holds the page or the task waits or stopped.
+#[gpui::test]
+fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shell(cx);
+    shell.read_with(cx, |shell, _| {
+        let mut working = card(1, Dot::Working);
+        working.pages = vec![30, 31];
+        working.page_steps = vec![(31, "Opening maat.pt".into())];
+        assert_eq!(shell.page_word(&working, 30), PageWord::Done);
+        assert_eq!(shell.page_word(&working, 31), PageWord::Reading);
+        // With one page, that's the one it works in.
+        working.pages = vec![30];
+        working.page_steps.clear();
+        assert_eq!(shell.page_word(&working, 30), PageWord::Reading);
+        let mut waits = card(2, Dot::Waiting);
+        waits.pages = vec![40];
+        assert_eq!(shell.page_word(&waits, 40), PageWord::Paused);
+        let mut done = card(3, Dot::Done);
+        done.pages = vec![50];
+        assert_eq!(shell.page_word(&done, 50), PageWord::Done);
+        let mut stopped = card(4, Dot::Ended);
+        stopped.pages = vec![60];
+        assert_eq!(shell.page_word(&stopped, 60), PageWord::Paused);
+    });
+    assert_eq!(
+        [PageWord::Reading, PageWord::Done, PageWord::Paused].map(PageWord::label),
+        ["Reading", "Done", "Paused"]
+    );
 }
 
 /// The foot is the window's: a task asked from either Space shows in both, in the same place, and
@@ -243,7 +287,7 @@ fn the_foot_stays_put_through_a_space_switch(cx: &mut TestAppContext) {
     assert_eq!(moved, row, "the rows moved");
     assert_eq!(
         grown,
-        bottom + 2. * (HEIGHT + GAP),
+        bottom + 2. * ROW_HEIGHT,
         "the list doesn't end over the foot"
     );
     let drawn = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
@@ -256,13 +300,15 @@ fn the_foot_stays_put_through_a_space_switch(cx: &mut TestAppContext) {
     };
     let before = drawn(&shell, cx);
     assert!(before.0.is_some() && before.1.is_some());
-    // The lowest plate sits on the footer, a plate's inset in from each side.
+    // The lowest header's row sits on the footer, its plate a row's: a plate's inset in from each
+    // side, centred in the row.
     let window = shell.read_with(cx, |shell, _| (shell.viewport.height, shell.width()));
     let lowest = before.0.unwrap();
     assert_eq!(
-        f32::from(lowest.bottom()),
+        f32::from(lowest.bottom()) + PLATE_TOP,
         f32::from(window.0) - FOOTER_HEIGHT
     );
+    assert_eq!(f32::from(lowest.size.height), PLATE_HEIGHT);
     assert_eq!(f32::from(lowest.left()), PLATE_INSET);
     assert_eq!(f32::from(lowest.size.width), window.1 - 2. * PLATE_INSET);
 
@@ -277,7 +323,7 @@ fn the_foot_stays_put_through_a_space_switch(cx: &mut TestAppContext) {
 }
 
 /// Three show, waiting first, then working, then done, newest first in each, in their age's order;
-/// a fourth plate says how many more, and opens the foot to all of them, as "Show less" folds it
+/// a row over them says how many more, and opens the foot to all of them, as "Show less" folds it
 /// back. The ask's slot takes one of the three places.
 #[gpui::test]
 fn the_foot_shows_three_and_counts_the_rest(cx: &mut TestAppContext) {
@@ -299,9 +345,9 @@ fn the_foot_shows_three_and_counts_the_rest(cx: &mut TestAppContext) {
     shell.update(cx, |shell, _| {
         shell
             .foot
-            .plates
+            .groups
             .iter_mut()
-            .for_each(|plate| plate.settle(later()))
+            .for_each(|group| group.settle(later()))
     });
     draw(&shell, cx);
     let more = shell.read_with(cx, |shell, _| {
@@ -312,7 +358,7 @@ fn the_foot_shows_three_and_counts_the_rest(cx: &mut TestAppContext) {
             .get(&Holds::More.key())
             .copied()
     });
-    cx.simulate_click(more.expect("the count's plate").center(), Modifiers::none());
+    cx.simulate_click(more.expect("the count's row").center(), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
         plates(&shell, cx),
@@ -340,10 +386,10 @@ fn the_card_takes_the_slot_the_bar_folds_into(cx: &mut TestAppContext) {
         .read_with(cx, |shell, _| shell.fold_target())
         .expect("a slot to fold into");
     assert_eq!(
-        f32::from(target.bottom()),
+        f32::from(target.bottom()) + PLATE_TOP,
         f32::from(window.0) - FOOTER_HEIGHT
     );
-    assert_eq!(f32::from(target.size.height), HEIGHT);
+    assert_eq!(f32::from(target.size.height), PLATE_HEIGHT);
     assert_eq!(f32::from(target.size.width), window.1 - 2. * PLATE_INSET);
 
     // An agent's task, not ⌘T's, takes its own plate under the slot.
@@ -362,9 +408,9 @@ fn the_card_takes_the_slot_the_bar_folds_into(cx: &mut TestAppContext) {
         "the card didn't take the slot"
     );
     let taken = shell.read_with(cx, |shell, _| {
-        (shell.foot.slot, shell.foot.plates[0].height.end())
+        (shell.foot.slot, shell.foot.groups[0].height.end())
     });
-    assert_eq!(taken, (false, HEIGHT));
+    assert_eq!(taken, (false, ROW_HEIGHT));
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.layout()[&Slot::Tab(10)]),
         row,
@@ -420,16 +466,16 @@ fn a_dismissed_task_comes_back(cx: &mut TestAppContext) {
     let leaving = shell.read_with(cx, |shell, _| {
         shell
             .foot
-            .plates
+            .groups
             .iter()
-            .filter(|plate| plate.leaving)
+            .filter(|group| group.leaving)
             .count()
     });
     assert_eq!(leaving, 1, "it went at once");
     // Once its fold has had its time, the next frame drops it.
     tick(super::GROW.max(super::FADE));
     draw(&shell, cx);
-    let left = shell.read_with(cx, |shell, _| shell.foot.plates.len());
+    let left = shell.read_with(cx, |shell, _| shell.foot.groups.len());
     assert_eq!(left, 0, "its plate stayed once it had folded");
 
     shell.update(cx, |shell, cx| shell.reopen_closed(cx));
@@ -474,67 +520,58 @@ fn clear_leaves_the_tasks(cx: &mut TestAppContext) {
     );
 }
 
-/// A plate's chips sit in its title's column under its status, and each does its action; Open
-/// sends its pages flying to their rows, which show as each lands.
+/// The one chip under a header is the user's own act, which has no page: Limit's Retry, or its
+/// assistant's fix. Its words sit on the title's column and its click does the act. Done's pages
+/// are rows now and an ask's answers are the task's view's, so neither makes a chip.
 #[gpui::test]
-fn the_chips_act(cx: &mut TestAppContext) {
+fn the_chip_acts(cx: &mut TestAppContext) {
     let mut limit = card(4, Dot::Ended);
     limit.retry = true;
     let mut done = card(5, Dot::Done);
     done.open = vec![(30, "maat.pt".into()), (31, "gulbenkian.pt".into())];
-    let (shell, host, cx) = shell_with(cx, vec![done, limit]);
-    let chip = |n: u64, cx: &mut VisualTestContext| {
-        shell
-            .read_with(cx, |shell, _| {
-                shell.foot.chips_drawn.borrow().get(&(n, 0)).copied()
-            })
-            .expect("a chip")
-    };
-    let retry = chip(4, cx);
+    let mut asks = card(6, Dot::Waiting);
+    asks.asks = true;
+    asks.answers = vec!["Gulbenkian".into(), "MAAT".into()];
+    assert_eq!((chip(&done), chip(&asks)), (None, None));
+    assert_eq!(chip(&limit), Some(Chip::Retry));
+    let mut failed = card(7, Dot::Ended);
+    failed.fix = Some((Cli::Claude, Offer::SignIn));
+    assert_eq!(
+        chip(&failed).unwrap().label().as_ref(),
+        "Sign In to Claude Code"
+    );
+    failed.fix = Some((Cli::Codex, Offer::Get));
+    assert_eq!(chip(&failed).unwrap().label().as_ref(), "Get Codex");
+    assert_eq!(
+        group_height(&limit, false) - group_height(&done, false),
+        super::CHIP_ROOM,
+        "the chip has no room under its header"
+    );
+
+    STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+    let (shell, host, cx) = shell_with(cx, vec![asks, done, limit]);
+    draw(&shell, cx);
+    let drawn = |stop: StripStop| STOPS_DRAWN.with(|drawn| drawn.borrow().get(&stop).copied());
+    assert!(drawn(StripStop::Chip(5)).is_none() && drawn(StripStop::Chip(6)).is_none());
+    let retry = drawn(StripStop::Chip(4)).expect("Retry");
     let column = shell
         .read_with(cx, |shell, _| shell.task_plate_drawn("task-4"))
         .unwrap()
         .left()
         + gpui::px(super::COLUMN);
+    // A stop's bounds are recorded inside its padding, where its words start.
     assert_eq!(
-        retry.left() + gpui::px(super::CHIP_X),
+        retry.left(),
         column,
         "the chip's words aren't on the title's column"
     );
     cx.simulate_click(retry.center(), Modifiers::none());
     cx.run_until_parked();
-    let done = host.take();
-    assert!(done.contains(&"task task-4 Retry".to_string()));
-
-    let open = chip(5, cx);
-    cx.simulate_click(open.center(), Modifiers::none());
-    cx.run_until_parked();
-    assert!(host.take().contains(&"task task-5 Open".to_string()));
-    assert!(
-        shell.read_with(cx, |shell, _| shell.landing(30) && shell.landing(31)),
-        "the rows show before their pages land"
-    );
-    // The core moves the pages to the top of Today, and they fly there.
-    shell.update(cx, |shell, cx| {
-        shell.set_tabs(
-            1,
-            Vec::new(),
-            vec![30, 31, 10, 11],
-            Vec::new(),
-            Folders::default(),
-            cx,
-        )
-    });
-    draw(&shell, cx);
-    let flying = shell.read_with(cx, |shell, _| {
-        (shell.foot.opening.is_none(), shell.foot.ghosts.len())
-    });
-    assert_eq!(flying, (true, 2));
-    assert!(shell.read_with(cx, |shell, _| shell.foot_moving(super::clock())));
+    assert_eq!(host.take(), ["task task-4 Retry"]);
 }
 
-/// With motion reduced, a plate comes at its height at once and fades in, its dot holds still on
-/// the ring, nothing draws on the loading dots' clock, and a new status crossfades in place.
+/// With motion reduced, a group comes at its height at once and fades in, its dot holds still on
+/// the ring, nothing draws on the loading dots' clock, and a new state crossfades in place.
 #[gpui::test]
 fn with_motion_reduced_the_foot_crossfades(cx: &mut TestAppContext) {
     let (shell, _, cx) = shell(cx);
@@ -545,16 +582,15 @@ fn with_motion_reduced_the_foot_crossfades(cx: &mut TestAppContext) {
     draw(&shell, cx);
     let now = super::clock();
     shell.read_with(cx, |shell, _| {
-        let plate = &shell.foot.plates[0];
-        assert_eq!(plate.height.at(now), HEIGHT, "it grew");
-        assert!(plate.opacity.at(now) < 1., "it didn't fade in");
+        let group = &shell.foot.groups[0];
+        assert_eq!(group.height.at(now), ROW_HEIGHT, "it grew");
+        assert!(group.opacity.at(now) < 1., "it didn't fade in");
         assert!(!shell.foot_live(), "its dot circles");
     });
-    let mut stepped = card(1, Dot::Working);
-    stepped.status = "Opening maat.pt".into();
-    shell.update(cx, |shell, cx| shell.set_task_cards(vec![stepped], cx));
+    let waits = card(1, Dot::Waiting);
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![waits], cx));
     shell.read_with(cx, |shell, _| {
-        let face = shell.foot.plates[0].face.as_ref().unwrap();
+        let face = shell.foot.groups[0].face.as_ref().unwrap();
         assert!(
             face.status
                 .going(
@@ -604,7 +640,7 @@ fn an_idle_foot_draws_nothing(cx: &mut TestAppContext) {
 }
 
 /// A window with Space 1, showing tab 10 of its 10 and 11, and a task Space for each of `first`,
-/// whose cards are at rest in its foot.
+/// holding its pages, whose cards are at rest in its foot.
 fn with_task_spaces(
     cx: &mut TestAppContext,
     first: Vec<Card>,
@@ -651,10 +687,14 @@ fn with_task_spaces(
             cx,
         );
         for card in &first {
+            let tabs = match card.pages.is_empty() {
+                true => vec![card.space * 10],
+                false => card.pages.clone(),
+            };
             shell.set_tabs(
                 card.space,
                 Vec::new(),
-                vec![card.space * 10],
+                tabs,
                 Vec::new(),
                 Folders::default(),
                 cx,
@@ -666,9 +706,9 @@ fn with_task_spaces(
         shell.slides.clear();
         shell
             .foot
-            .plates
+            .groups
             .iter_mut()
-            .for_each(|plate| plate.settle(later()));
+            .for_each(|group| group.settle(later()));
     });
     cx.run_until_parked();
     host.take();
@@ -742,17 +782,17 @@ fn a_finished_task_folds_into_the_archive_once_seen(cx: &mut TestAppContext) {
     assert_eq!(dismissed(&host), ["task task-1 Dismiss"]);
     let now = super::clock();
     shell.read_with(cx, |shell, _| {
-        let plate = shell
+        let group = shell
             .foot
-            .plates
+            .groups
             .iter()
-            .find(|plate| plate.holds == Holds::Task("task-1".into()))
+            .find(|group| group.holds == Holds::Task("task-1".into()))
             .unwrap();
         assert!(
-            plate.leaving && plate.archived.is_some(),
+            group.leaving && group.archived.is_some(),
             "its copy doesn't fly"
         );
-        assert_eq!(plate.opacity.at(now), 0., "its plate stays");
+        assert_eq!(group.opacity.at(now), 0., "its header stays");
         assert_eq!(shell.archive_flights().len(), 1);
         let bump = shell.foot.bump.expect("the Archive doesn't bump");
         assert_eq!(
@@ -796,32 +836,39 @@ fn a_finished_task_folds_into_the_archive_once_seen(cx: &mut TestAppContext) {
     assert_eq!(dismissed(&host), ["task task-3 Dismiss"]);
 }
 
-/// Open moving a finished task's last page into Today leaves nothing on its card, which folds into
-/// the Archive once the page has landed; with a page left, it stays.
+/// The strip's Open moving a finished task's last page into Today leaves nothing in its group,
+/// which folds into the Archive once the page has landed; with a page left, it stays.
 #[gpui::test]
 fn opening_a_finished_tasks_last_page_folds_it_after_the_page_lands(cx: &mut TestAppContext) {
     let mut done = card(1, Dot::Done);
     done.open = vec![(30, "maat.pt".into()), (31, "gulbenkian.pt".into())];
-    let (shell, host, cx) = with_task_spaces(cx, vec![done]);
+    let (shell, host, cx) = with_task_spaces(cx, vec![done.clone()]);
     shell.update(cx, |shell, cx| {
         shell.open_task_pages("task-1".into(), Some(30), None, cx)
     });
     assert!(folds(&shell, cx).is_empty(), "it folded with a page left");
+    done.open.remove(0);
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![done], cx));
 
-    let chip = shell
-        .read_with(cx, |shell, _| {
-            shell.foot.chips_drawn.borrow().get(&(1, 0)).copied()
-        })
-        .expect("Open");
-    cx.simulate_click(chip.center(), Modifiers::none());
-    cx.run_until_parked();
-    assert!(host.take().contains(&"task task-1 Open".to_string()));
+    let from = gpui::Bounds::new(
+        gpui::point(gpui::px(400.), gpui::px(500.)),
+        gpui::size(gpui::px(80.), gpui::px(22.)),
+    );
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.open_task_pages("task-1".into(), Some(31), Some(from), cx)
+    });
+    assert!(host.take().contains(&"task task-1 OpenTab(31)".to_string()));
     assert_eq!(folds(&shell, cx), ["task-1"]);
-    // It waits for the list to have the pages' rows, then for the last to land.
+    assert!(
+        shell.read_with(cx, |shell, _| shell.landing(31)),
+        "the row shows before its page lands"
+    );
+    // It waits for the list to have the page's row, then for it to land.
     fold_due(&shell, cx);
     assert!(
         dismissed(&host).is_empty(),
-        "it folded before its pages flew"
+        "it folded before its page flew"
     );
     shell.update(cx, |shell, cx| {
         shell.set_tabs(
@@ -835,6 +882,8 @@ fn opening_a_finished_tasks_last_page_folds_it_after_the_page_lands(cx: &mut Tes
     });
     draw(&shell, cx);
     shell.read_with(cx, |shell, _| {
+        assert!(shell.foot.opening.is_none() && shell.foot.ghosts.len() == 1);
+        assert!(shell.foot_moving(super::clock()));
         let lands = shell
             .foot
             .ghosts
@@ -847,10 +896,10 @@ fn opening_a_finished_tasks_last_page_folds_it_after_the_page_lands(cx: &mut Tes
             lands + super::seconds(super::ARCHIVE_OPEN)
         );
     });
-    assert!(dismissed(&host).is_empty(), "it folded as its pages flew");
+    assert!(dismissed(&host).is_empty(), "it folded as its page flew");
 }
 
-/// ⌘Z and ⇧⌘T bring a folded task back, as they do one ✕ took, and its plate comes back where it
+/// ⌘Z and ⇧⌘T bring a folded task back, as they do one ✕ took, and its group comes back where it
 /// was if it's still on its way. Once it has landed nothing is left moving or waiting.
 #[gpui::test]
 fn a_folded_task_comes_back_and_leaves_nothing_scheduled(cx: &mut TestAppContext) {
@@ -865,15 +914,15 @@ fn a_folded_task_comes_back_and_leaves_nothing_scheduled(cx: &mut TestAppContext
         shell.set_task_cards(cards(&[(1, Dot::Done), (2, Dot::Ended)]), cx)
     });
     shell.read_with(cx, |shell, _| {
-        let plate = shell
+        let group = shell
             .foot
-            .plates
+            .groups
             .iter()
-            .find(|plate| plate.holds == Holds::Task("task-1".into()))
+            .find(|group| group.holds == Holds::Task("task-1".into()))
             .unwrap();
         assert!(
-            !plate.leaving && plate.archived.is_none(),
-            "its plate didn't come back"
+            !group.leaving && group.archived.is_none(),
+            "its group didn't come back"
         );
     });
 
@@ -918,15 +967,15 @@ fn with_motion_reduced_a_folded_task_fades(cx: &mut TestAppContext) {
     });
     let now = super::clock();
     shell.read_with(cx, |shell, _| {
-        let plate = shell
+        let group = shell
             .foot
-            .plates
+            .groups
             .iter()
-            .find(|plate| plate.holds == Holds::Task("task-1".into()))
+            .find(|group| group.holds == Holds::Task("task-1".into()))
             .unwrap();
-        assert!(plate.leaving && plate.archived.is_none(), "it flew");
+        assert!(group.leaving && group.archived.is_none(), "it flew");
         assert!(
-            plate.opacity.at(now) > 0. && plate.height.at(now) > 0.,
+            group.opacity.at(now) > 0. && group.height.at(now) > 0.,
             "it didn't fade where it was"
         );
         assert!(shell.foot.bump.is_none() && shell.archive_flights().is_empty());
@@ -957,18 +1006,18 @@ fn a_private_windows_foot_is_empty_while_a_regular_window_has_a_task(cx: &mut Te
         shell.set_task_cards(vec![card(2, Dot::Working)], cx);
         shell
             .foot
-            .plates
+            .groups
             .iter_mut()
-            .for_each(|plate| plate.settle(later()));
+            .for_each(|group| group.settle(later()));
     });
     cx.run_until_parked();
     assert!(private.read_with(cx, |shell, _| shell.task_cards.is_empty()
-        && shell.foot.plates.is_empty()));
+        && shell.foot.groups.is_empty()));
     assert_eq!(plates(&regular, cx), "task-2");
 }
 
-/// An outside agent's session is numbered with the tasks, so its card's plate, motion and close
-/// are its own, and two sessions' cards never share one.
+/// An outside agent's session is numbered with the tasks, so its group, its motion and its close
+/// are its own, and two sessions never share one.
 #[test]
 fn a_sessions_card_has_a_number_of_its_own() {
     use super::number;
@@ -976,4 +1025,371 @@ fn a_sessions_card_has_a_number_of_its_own() {
         [number("task-2"), number("session-3"), number("session-4")],
         [2, 3, 4]
     );
+}
+
+/// A card with `pages` in its Space.
+fn paged(n: u64, dot: Dot, pages: &[u64]) -> Card {
+    Card {
+        pages: pages.to_vec(),
+        ..card(n, dot)
+    }
+}
+
+/// Each live group's height at rest, top first, by its task.
+fn heights(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<(String, f32)> {
+    shell.read_with(cx, |shell, _| {
+        (shell.foot.groups.iter())
+            .filter(|group| !group.leaving)
+            .filter_map(|group| match &group.holds {
+                Holds::Task(agent) => Some((agent.to_string(), group.height.end())),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// Where the foot drew `tab`'s row last.
+fn row_drawn(
+    shell: &Entity<Shell>,
+    tab: u64,
+    cx: &mut VisualTestContext,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    shell.read_with(cx, |shell, _| {
+        shell.foot.rows_drawn.borrow().get(&tab).copied()
+    })
+}
+
+/// Several tasks are a group each, the one the page area shows open to its pages and the others
+/// closed to their header. A header's click shows its task's view and opens its group, and the
+/// group shown before closes; the view put away, every group is closed again.
+#[gpui::test]
+fn the_group_shown_is_open_and_the_others_are_closed(cx: &mut TestAppContext) {
+    let two = vec![
+        paged(2, Dot::Working, &[1020, 1021, 1022, 1023]),
+        paged(1, Dot::Done, &[1010]),
+    ];
+    let (shell, _, cx) = with_task_spaces(cx, two);
+    still(cx);
+    draw(&shell, cx);
+    let closed = [
+        ("task-2".to_string(), ROW_HEIGHT),
+        ("task-1".to_string(), ROW_HEIGHT),
+    ];
+    assert_eq!(heights(&shell, cx), closed, "a group not shown is open");
+    assert!(row_drawn(&shell, 1020, cx).is_none());
+
+    let header = |agent: &str, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell
+            .read_with(cx, |shell, _| shell.task_plate_drawn(agent))
+            .expect("its header")
+    };
+    let at = header("task-2", &shell, cx).center();
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        heights(&shell, cx),
+        [
+            ("task-2".to_string(), ROW_HEIGHT + pages_room(4)),
+            ("task-1".to_string(), ROW_HEIGHT),
+        ]
+    );
+    shell.update(cx, |shell, _| {
+        shell
+            .foot
+            .groups
+            .iter_mut()
+            .for_each(|group| group.settle(later()))
+    });
+    draw(&shell, cx);
+    // Its rows are a step in from the header's plate, under one another.
+    let plate = header("task-2", &shell, cx);
+    let rows: Vec<_> = [1020, 1021, 1022, 1023]
+        .map(|tab| row_drawn(&shell, tab, cx).expect("its page's row"))
+        .to_vec();
+    assert!(rows[0].left() > plate.left() && rows[0].top() >= plate.bottom());
+    assert!(
+        rows.windows(2)
+            .all(|pair| pair[1].top() == pair[0].bottom())
+    );
+    assert_eq!(rows[0].right(), plate.right());
+
+    // The other header's click swaps which is open.
+    let at = header("task-1", &shell, cx).center();
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        heights(&shell, cx),
+        [
+            ("task-2".to_string(), ROW_HEIGHT),
+            ("task-1".to_string(), ROW_HEIGHT + pages_room(1)),
+        ]
+    );
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    assert_eq!(heights(&shell, cx), closed);
+}
+
+/// The sidebar shows one thing at a time. On the user's own tab its row has the shown plate and
+/// nothing at the foot does; in a task's view its header has it; on one of its pages that row has
+/// it and the header does not.
+#[gpui::test]
+fn one_thing_in_the_sidebar_is_shown_at_a_time(cx: &mut TestAppContext) {
+    let two = vec![
+        paged(2, Dot::Working, &[1020, 1021]),
+        paged(1, Dot::Done, &[1010]),
+    ];
+    let (shell, _, cx) = with_task_spaces(cx, two);
+    still(cx);
+    draw(&shell, cx);
+    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let at_foot = shell.shown_at_foot();
+            // Every stop the foot draws that the page area shows: never more than the one.
+            let plated = (shell.foot_stops().into_iter())
+                .filter(|stop| Some(*stop) == at_foot)
+                .count();
+            (shell.shown_has_plate(), at_foot, plated)
+        })
+    };
+    assert_eq!(shown(&shell, cx), (true, None, 0));
+
+    shell.update(cx, |shell, cx| shell.show_task("task-2".into(), cx));
+    draw(&shell, cx);
+    assert_eq!(shown(&shell, cx), (false, Some(StripStop::Header(2)), 1));
+
+    let row = row_drawn(&shell, 1021, cx).expect("its page's row");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(shown(&shell, cx), (false, Some(StripStop::Row(1021)), 1));
+
+    // Its header's click goes back to the task's view, which has the plate again.
+    let header = shell
+        .read_with(cx, |shell, _| shell.task_plate_drawn("task-2"))
+        .unwrap();
+    cx.simulate_click(header.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(shown(&shell, cx), (false, Some(StripStop::Header(2)), 1));
+
+    // And on the header shown, it puts the view away, for the user's tab.
+    cx.simulate_click(header.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(shown(&shell, cx), (true, None, 0));
+}
+
+/// A page's row's click stands on that page, as its picture's click in the task's view does, and
+/// does nothing else: the core is asked to show the page, the task is told nothing, and an agent's
+/// page isn't given the keyboard. Nothing of it is kept either: the foot stores nothing, and the
+/// Agents' log, which records what a task did, hears of no click here.
+#[gpui::test]
+fn a_page_rows_click_watches_its_page_and_nothing_else(cx: &mut TestAppContext) {
+    let (shell, host, cx) = with_task_spaces(cx, vec![paged(1, Dot::Working, &[1010, 1011])]);
+    still(cx);
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    draw(&shell, cx);
+    host.take();
+    let row = row_drawn(&shell, 1011, cx).expect("its page's row");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        Some((101, 1011))
+    );
+    let asked = host.take();
+    assert!(asked.contains(&"select 1011".to_string()), "{asked:?}");
+    let told = |line: &&String| {
+        line.starts_with("task ") || line.starts_with("show task") || line.starts_with("focus page")
+    };
+    assert!(!asked.iter().any(|line| told(&line)), "{asked:?}");
+
+    // What the same call from the task's view asks of the core is all the row's click asked.
+    shell.update(cx, |shell, cx| shell.task_page_back(cx));
+    draw(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| {
+        assert!(shell.watch_task_page(1011, row, None, cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(asked, host.take());
+
+    // The row of the page watched does nothing more.
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(host.take().is_empty());
+}
+
+/// Every header and every page's row is reached by the keys. Focus Sidebar rings what the page
+/// area shows, at the foot the task's header, and the arrows go over the foot's stops, top first,
+/// on from the list's last row and back to it. The mark is the sidebar's focus ring, never the
+/// plate, so what the page area shows doesn't change as the ring moves. Return on a row stands on
+/// its page, which never gets the keyboard while its agent has it; Return on a header shows its
+/// task's view.
+#[gpui::test]
+fn the_keys_reach_every_header_and_page_row(cx: &mut TestAppContext) {
+    let two = vec![
+        paged(2, Dot::Working, &[1020, 1021]),
+        paged(1, Dot::Done, &[1010]),
+    ];
+    let (shell, host, cx) = with_task_spaces(cx, two);
+    still(cx);
+    cx.update(|window, cx| {
+        crate::shell::commands::bind_keys(cx);
+        window.focus(&shell.read(cx).focus_handle.clone(), cx);
+    });
+    let ring = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| (shell.keyed, shell.keyed_strip))
+    };
+    let press = |key: &str, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        ring(shell, cx)
+    };
+    let focus_sidebar = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
+        draw(shell, cx);
+        ring(shell, cx)
+    };
+
+    // With the user's tab shown every group is closed: the arrows go from the list's last row
+    // over the headers.
+    assert_eq!(focus_sidebar(&shell, cx), (Some(10), None));
+    let closed: Vec<_> = (0..4).map(|_| press("down", &shell, cx)).collect();
+    assert_eq!(
+        closed,
+        [
+            (Some(11), None),
+            (None, Some(StripStop::Header(2))),
+            (None, Some(StripStop::Header(1))),
+            (None, Some(StripStop::Header(1))),
+        ]
+    );
+    // Return on a header shows its task's view, which opens its group.
+    press("up", &shell, cx);
+    press("enter", &shell, cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        Some("task-2".into())
+    );
+    draw(&shell, cx);
+    let foot = [
+        StripStop::Header(2),
+        StripStop::Row(1020),
+        StripStop::Row(1021),
+        StripStop::Header(1),
+    ];
+    assert_eq!(shell.read_with(cx, |shell, _| shell.foot_stops()), foot);
+
+    // Focus Sidebar keeps the view and rings its header, and the arrows go over its pages' rows.
+    let stops = foot.map(|stop| (None, Some(stop)));
+    assert_eq!(focus_sidebar(&shell, cx), stops[0]);
+    let down: Vec<_> = (0..4).map(|_| press("down", &shell, cx)).collect();
+    assert_eq!(down, [stops[1], stops[2], stops[3], stops[3]]);
+    // The ring moved over all of them, and what's shown stayed the task's view.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.shown_at_foot()),
+        Some(StripStop::Header(2))
+    );
+    STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+    draw(&shell, cx);
+    STOPS_DRAWN.with(|drawn| {
+        let drawn = drawn.borrow();
+        assert!(foot.iter().all(|stop| drawn.contains_key(stop)));
+    });
+    let up: Vec<_> = (0..4).map(|_| press("up", &shell, cx)).collect();
+    assert_eq!(
+        up,
+        [stops[2], stops[1], stops[0], (Some(11), None)],
+        "Up didn't go back over the foot to the list"
+    );
+
+    // Return on a page's row stands on that page. Its agent has it, so the keys stay with the
+    // ring, on the row.
+    for _ in 0..3 {
+        press("down", &shell, cx);
+    }
+    host.take();
+    assert_eq!(press("enter", &shell, cx), stops[2]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        Some((102, 1021))
+    );
+    let asked = host.take();
+    assert!(asked.contains(&"select 1021".to_string()), "{asked:?}");
+    assert!(
+        !asked.iter().any(|line| line.starts_with("focus page")),
+        "the agent's page got the keyboard: {asked:?}"
+    );
+    // Focus Sidebar there rings the row of the page shown.
+    press("up", &shell, cx);
+    assert_eq!(focus_sidebar(&shell, cx), stops[2]);
+    // With the page watched the list's rows aren't stops: Up ends at the foot's first.
+    let up: Vec<_> = (0..3).map(|_| press("up", &shell, cx)).collect();
+    assert_eq!(up, [stops[1], stops[0], stops[0]]);
+    // Return on its header goes back to the task's view.
+    press("enter", &shell, cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((102, None))
+    );
+}
+
+/// The limit of three counts headers, not rows: a group open to four pages is still one of the
+/// three, and the row over them says how many more tasks there are. The task the page area shows
+/// is always one of the three, so what's shown is in the sidebar.
+#[gpui::test]
+fn the_count_is_of_headers(cx: &mut TestAppContext) {
+    let five = vec![
+        paged(5, Dot::Working, &[1050]),
+        paged(4, Dot::Done, &[1040]),
+        paged(3, Dot::Waiting, &[1030]),
+        paged(2, Dot::Working, &[1020, 1021, 1022, 1023]),
+        paged(1, Dot::Done, &[1010]),
+    ];
+    let (shell, _, cx) = with_task_spaces(cx, five);
+    still(cx);
+    assert_eq!(plates(&shell, cx), "more 2 task-5 task-3 task-2");
+    shell.update(cx, |shell, cx| shell.show_task("task-2".into(), cx));
+    draw(&shell, cx);
+    assert_eq!(plates(&shell, cx), "more 2 task-5 task-3 task-2");
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.more_words().as_ref(), "2 more tasks");
+        let stops = shell.foot_stops();
+        let headers = |stop: &&StripStop| matches!(stop, StripStop::Header(_));
+        let rows = |stop: &&StripStop| matches!(stop, StripStop::Row(_));
+        assert_eq!(stops.iter().filter(headers).count(), 3);
+        assert_eq!(stops.iter().filter(rows).count(), 4);
+        assert_eq!(stops[0], StripStop::More);
+    });
+    // A done task ranks last, and shown it still has its place.
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    assert_eq!(plates(&shell, cx), "more 2 task-5 task-3 task-1");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.shown_at_foot()),
+        Some(StripStop::Header(1))
+    );
+}
+
+/// An ended task keeps its group while it has pages open, seen or not, and the group goes into the
+/// Archive as the last of them closes.
+#[gpui::test]
+fn an_ended_task_keeps_its_group_while_it_has_pages_open(cx: &mut TestAppContext) {
+    let done = paged(1, Dot::Done, &[1010, 1011]);
+    let (shell, host, cx) = with_task_spaces(cx, vec![done.clone()]);
+    still(cx);
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    assert!(
+        folds(&shell, cx).is_empty(),
+        "seen, it folded with its pages open"
+    );
+    let left = |pages: &[u64]| vec![paged(1, Dot::Done, pages)];
+    shell.update(cx, |shell, cx| shell.set_task_cards(left(&[1011]), cx));
+    assert!(folds(&shell, cx).is_empty(), "it folded with a page left");
+    assert_eq!(plates(&shell, cx), "task-1");
+    shell.update(cx, |shell, cx| shell.set_task_cards(left(&[]), cx));
+    fold_due(&shell, cx);
+    assert_eq!(dismissed(&host), ["task task-1 Dismiss"]);
+    // A working task whose pages close stays: it isn't over.
+    let working = |pages: &[u64]| vec![paged(2, Dot::Working, pages)];
+    shell.update(cx, |shell, cx| shell.set_task_cards(working(&[1020]), cx));
+    shell.update(cx, |shell, cx| shell.set_task_cards(working(&[]), cx));
+    assert!(folds(&shell, cx).is_empty());
 }

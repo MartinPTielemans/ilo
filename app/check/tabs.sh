@@ -82,8 +82,20 @@ step=0
 rm -f "$saved" "$launch_frame"
 # The example.com and example.org pages the steps open, and DuckDuckGo's for the searches, come from
 # a server of the run's own, which a runner always reaches (#3144).
+# h puts what a page has heard of presses, releases and scrolls in its title, and h again takes it
+# out.
 serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
-<h1>Example Domain</h1>' example.com '*.example.com' example.org duckduckgo.com
+<h1>Example Domain</h1>
+<script>
+let downs = 0, ups = 0, wheels = 0, said = false;
+onmousedown = () => ++downs;
+onmouseup = () => ++ups;
+onwheel = () => ++wheels;
+onkeydown = e => {
+  if (e.key != "h") return;
+  document.title = (said = !said) ? "heard " + downs + " " + ups + " " + wheels : "Example Domain";
+};
+</script>' example.com '*.example.com' example.org duckduckgo.com
 # shellcheck disable=SC2086 # the record mode, or nothing
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
   --enable-tracing-format=json --trace-startup-file="$trace" \
@@ -407,20 +419,68 @@ in_browser RenderWidgetHostViewCocoa "a click into the page right after a menu i
 send order
 [ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$chosen_frame" ] ||
   fail "a click into the page right after a menu item chosen with the pointer moved the window from $chosen_frame"
-# A click outside closes the menu, and goes no further.
+# While a menu is open, what the pointer does outside it is the menu's. A scroll leaves it open and
+# scrolls nothing, and a click only closes it and goes no further: the page under it hears neither
+# the press nor the release, which alone would be half a click. The page has the keyboard from the
+# click into it above, and has it back as the menu closes, so it can be asked on both sides.
+send key h
+expect '^browser: title [0-9]* heard [0-9 ]*$' "h in the page didn't say what it had heard"
+heard=$(since | sed -n 's/^browser: title [0-9]* heard //p' | tail -1)
+send key h
+expect '^browser: title [0-9]* Example Domain$' "h again didn't give the page its title back"
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
 expect '^browser: menu window at ' "the menu didn't take the keyboard"
+if [ "$(uname)" != Linux ]; then
+  send scroll $page_point 40 2
+  scrolled=$step
+  send order
+  none_since '^browser: menu closed$' "$scrolled" || fail "a scroll outside the menu closed it"
+fi
 send click $page_point
 expect '^browser: menu closed$' "a click outside didn't close the menu"
 expect '^browser: menu window hidden$' "a click outside left the menu's window up"
-# A right-click elsewhere opens that menu in its place: on the next row, left of the menu, which
-# opens right of the pointer. ↓ shows the new one has the keys, not closed as it opened.
+if [ "$(uname)" = Linux ]; then
+  echo "skip: the click that closes a menu going no further, to the page or the row under it, and" \
+    "a scroll outside it scrolling nothing, on Linux: its host lets them land (#4165)."
+else
+  send key h
+  expect '^browser: title [0-9]* heard [0-9 ]*$' \
+    "after the click that closed the menu, h didn't reach the page"
+  heard_since=$(since | sed -n 's/^browser: title [0-9]* heard //p' | tail -1)
+  [ "$heard_since" = "$heard" ] ||
+    fail "the scroll outside the menu or the click that closed it reached the page under them: of presses, releases and scrolls it had heard $heard, and then $heard_since"
+  send key h
+  expect '^browser: title [0-9]* Example Domain$' "h again didn't give the page its title back"
+  # Nor does it show the tab whose row it's on: the next click there does. Then back to the tab
+  # shown, which the steps after this go on from.
+  post rightclick $(row 1)
+  expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the second Today row didn't show its menu"
+  expect '^browser: menu window at ' "the menu didn't take the keyboard"
+  set -- $(row 0)
+  send click $(($1 - 60)) $2
+  closing=$step
+  expect '^browser: menu closed$' "a click on another row didn't close the menu"
+  expect '^browser: menu window hidden$' "a click on another row left the menu's window up"
+  send order
+  none_since '^browser: selected ' "$closing" ||
+    fail "the click on another row that closed a row's menu showed that row's tab too"
+  send click $(($1 - 60)) $2
+  expect "^browser: selected $c\( in .*\)\{0,1\}\$" "the click after the one that closed the menu didn't show its row's tab"
+  set -- $(row 1)
+  send click $(($1 - 60)) $2
+  expect "^browser: selected $b\( in .*\)\{0,1\}\$" "a click on the second row didn't show its tab again"
+fi
+# The one press outside that goes on is a right press, which opens that thing's menu in this
+# one's place: on the next row, left of the menu, which opens right of the pointer. ↓ shows the new
+# one has the keys, not closed as it opened.
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
 expect '^browser: menu window at ' "the menu didn't take the keyboard"
 set -- $(row 1)
 post rightclick $(($1 - 60)) $2
+expect '^browser: menu at .* closed by pressed outside$' \
+  "a right-click on the next row with the menu up didn't close the top row's menu"
 expect "^browser: menu shown $(cased 'Copy Link, ')" \
   "a right-click on the next row with the menu up didn't show that row's menu"
 expect '^browser: menu window at ' "the next row's menu didn't take the keyboard"
@@ -2164,9 +2224,10 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
     *" search-engine "*) ;;
     *) fail "Google: the new profile's first launch had no search engine step: '$steps'" ;;
   esac
-  # The intro goes on by itself, before any key is sent, so the step after it is waited for in the
-  # whole log, and each later one after the key that left the one before, as count.sh does.
-  await '^browser: onboarding left intro via time$' || fail "Google: the intro didn't go on by itself"
+  # The welcome waits for Return, and each step after for the key that left the one before, as
+  # count.sh does.
+  send key return
+  expect '^browser: onboarding left intro via return$' "Google: Return didn't go on from the welcome"
   for each in $steps; do
     [ "$each" = intro ] && continue
     if [ "$step" = 0 ]; then

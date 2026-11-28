@@ -521,7 +521,7 @@ impl Shell {
         let artist = (!page.media_artist.is_empty()).then(|| {
             div()
                 .flex_none()
-                .text_color(self.palette.text(SECONDARY))
+                .text_color(self.palette.gray(SECONDARY))
                 .child(format!(" · {}", page.media_artist))
         });
         let float = page.media_picture_in_picture.then(|| {

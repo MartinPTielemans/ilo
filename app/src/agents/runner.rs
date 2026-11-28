@@ -16,6 +16,8 @@ use std::time::Instant;
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
 
+use super::kept::Keep;
+
 /// A CLI that runs tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cli {
@@ -62,22 +64,6 @@ impl Cli {
         }
     }
 
-    /// The command that signs the user in, which ilo never runs itself.
-    pub fn sign_in(self) -> &'static str {
-        match self {
-            Cli::Claude => "claude auth login",
-            Cli::Codex => "codex login",
-        }
-    }
-
-    /// The command that installs it.
-    pub fn install(self) -> &'static str {
-        match self {
-            Cli::Claude => "npm install -g @anthropic-ai/claude-code",
-            Cli::Codex => "npm install -g @openai/codex",
-        }
-    }
-
     /// The models its Model pop-up offers after its own default while the CLI hasn't listed its
     /// own: Claude's aliases, which every Claude Code takes, for one too old to answer initialize
     /// with its list (ready::claude_models).
@@ -120,6 +106,8 @@ pub struct Launch {
     pub instructions: String,
     /// The tools it may call, as the server lists them.
     pub tools: Vec<String>,
+    /// Whether it gets its helper tool (#4102), which only Claude's arguments read.
+    pub helpers: bool,
 }
 
 /// What a task's CLI says, as the reader thread hands it to the UI thread.
@@ -138,6 +126,21 @@ pub enum Out {
     Ended(Option<Failure>),
     /// The process has gone: its output closed. What it last said on stderr.
     Gone(String),
+    /// What its output tells of a helper (#4102), by the call of the task's that asked for it.
+    Helper { id: String, told: Helper },
+    /// Its CLI says a helper started, `deep` levels under the task, or 0 if it doesn't say how
+    /// deep: what ilo counts for the limit.
+    Started { deep: u64 },
+}
+
+/// What a task's output tells of one of its helpers, for its line in the conversation. A label:
+/// nothing ilo allows or refuses reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Helper {
+    /// The task asked for it.
+    Asked,
+    /// It calls one of the browser's tools on this tab.
+    On(u64),
 }
 
 /// Why a turn or a run ended badly.
@@ -168,14 +171,31 @@ pub struct Process {
 }
 
 impl Process {
-    /// Starts the CLI, which reads `first` as the user's first message.
+    /// Starts the CLI, which reads `first` as the user's first message, on a run that keeps
+    /// nothing of its conversation.
     pub fn start(
         launch: &Launch,
         agent: &str,
         first: &str,
         events: UnboundedSender<Event>,
     ) -> std::io::Result<Process> {
+        Self::start_kept(launch, &Keep::Nothing, agent, first, events)
+    }
+
+    /// Starts the CLI on a run that keeps what `keep` says (kept.rs decides), which reads `first`
+    /// as the user's first message, or as their next in a conversation it goes on with.
+    pub fn start_kept(
+        launch: &Launch,
+        keep: &Keep,
+        agent: &str,
+        first: &str,
+        events: UnboundedSender<Event>,
+    ) -> std::io::Result<Process> {
         std::fs::create_dir_all(&launch.dir)?;
+        // A kept run's folder isn't beside its config, so the config's own is made too.
+        if let Some(folder) = launch.config.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
         let mut command = crate::child::command(&launch.program);
         match launch.cli {
             Cli::Claude => {
@@ -187,7 +207,7 @@ impl Process {
                     &instructions_file(launch),
                     launch.instructions.as_bytes(),
                 )?;
-                command.args(claude_args(launch));
+                command.args(super::kept::claude_args(claude_args(launch), keep));
             }
             Cli::Codex => _ = command.arg("app-server"),
         }
@@ -393,9 +413,13 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--verbose",
         // Its text as it writes it, which the conversation shows as it comes.
         "--include-partial-messages",
-        // None of its own tools: no shell, files, web fetch or search.
+        // None of its own tools: no shell, files, web fetch or search. With helpers on, the one
+        // that starts a helper.
         "--tools",
-        "",
+        match launch.helpers {
+            true => super::helpers::TOOLS[0],
+            false => "",
+        },
         // The browser's server alone, none of the user's.
         "--strict-mcp-config",
         "--mcp-config",
@@ -429,6 +453,9 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--append-system-prompt-file".into(),
         instructions_file(launch).to_string_lossy().into_owned(),
     ]);
+    if launch.helpers {
+        args.extend(super::helpers::claude_args(&allowed));
+    }
     args
 }
 
@@ -448,6 +475,15 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // A helper's start is counted whoever's line says so, the task's or a helper's own (#4102).
+    if let Some(started) = super::helpers::started(kind, message) {
+        return vec![started];
+    }
+    // A line with a parent is a helper's, never the task's: nothing it says, writes or thinks is
+    // the task's, shown or kept. It tells only which tabs the helper calls for.
+    if let Some(parent) = message.get("parent_tool_use_id").and_then(Value::as_str) {
+        return super::helpers::claude_read(parent, kind, message);
+    }
     if kind == "stream_event" {
         return claude_piece(message.get("event").unwrap_or(&Value::Null), turn);
     }
@@ -481,6 +517,7 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
                         _ => None,
                     }
                 })
+                .chain(super::helpers::asked(content.into_iter().flatten()))
                 .collect()
         }
         "rate_limit_event" => {

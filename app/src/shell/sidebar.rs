@@ -12,6 +12,7 @@ use gpui::{
 };
 
 use super::access::Accessible as _;
+use crate::glow;
 use crate::tokens::shell::{SHOWN_MARKER, SHOWN_MARKER_HIT};
 
 use super::{
@@ -327,8 +328,6 @@ impl Shell {
         if to != self.sidebar_width {
             self.sidebar_width = to;
             self.browser.set_sidebar_width(to, cx);
-            // The tasks' lines and chips at the foot wrap to the new width.
-            self.reshape_foot(cx);
         }
         self.width_motion = (from != to).then(|| (from, crate::motion::start(cx)));
         if self.width_motion.is_none() {
@@ -525,7 +524,7 @@ impl Shell {
             .w_full()
             .h(px(SHOWN_MARKER))
             .rounded(px(SHOWN_MARKER / 2.))
-            .bg(self.palette.selected(0.));
+            .bg(self.palette.shown(0.));
         let marker = div()
             .id("shown-marker")
             .absolute()
@@ -645,10 +644,9 @@ impl Shell {
         (space, Some((beside, t)))
     }
 
-    /// The gradient down the window, at `y` from its top (0) to its bottom (1), where the sidebar
-    /// is: the Space's colour, going to the same at HSL lightness + 0.25, or its theme's colours.
-    /// While the sidebar pages between two Spaces, it cross-fades from one's to the other's as the
-    /// pages move.
+    /// The Space's colour where the sidebar's middle is, `y` from the window's top (0) to its
+    /// bottom (1): its glows there. While the sidebar pages between two Spaces, it cross-fades from
+    /// one's to the other's as the pages move.
     pub(super) fn gradient_color(&self, y: f32) -> Hsla {
         let x = self.sidebar_x();
         let (space, beside) = self.colored_pages();
@@ -668,8 +666,8 @@ impl Shell {
         .into()
     }
 
-    /// `space`'s colour `x` of the way across the window and `y` of the way down, as the gradient
-    /// has it: its theme's, or nothing over the underlay without one.
+    /// `space`'s colour `x` of the way across the window and `y` of the way down: its glows there,
+    /// to lay over the window's ground; a private window's shade; nothing without a colour.
     pub(super) fn space_color_at(&self, space: u64, x: f32, y: f32) -> Rgba {
         if self.private {
             return Rgba {
@@ -679,32 +677,37 @@ impl Shell {
                 a: PRIVATE_SHADE,
             };
         }
-        match self.space_theme(space) {
-            Some(theme) => self.theme_color_at(&theme, self.palette_of(space).layer_alpha, x, y),
-            None => Rgba {
-                r: 0.,
-                g: 0.,
-                b: 0.,
-                a: 0.,
-            },
-        }
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
+        let (foot, far) = glow::strengths(x * width, y * height, width, height, self.right());
+        self.palette_of(space).glow_at(foot, far)
     }
 
-    /// `space`'s gradient from top to bottom, for what is as tall as the window, such as its card
-    /// in the Library.
-    pub(super) fn space_gradient(&self, space: u64) -> gpui::Background {
-        // Across the window's middle, for a theme of more than one colour.
-        let stop = |y| linear_color_stop(Hsla::from(self.space_color_at(space, 0.5, y)), y);
-        linear_gradient(180., stop(0.), stop(1.))
-    }
-
-    /// The gradient as a background, over `base` where the window's look has to be opaque.
-    pub(super) fn gradient(&self, base: Option<Hsla>) -> gpui::Background {
-        let stop = |y| {
-            let color = self.gradient_color(y);
-            linear_color_stop(base.map_or(color, |base| base.blend(color)), y)
+    /// `space`'s glow at the foot of an opaque copy of its sidebar `width` by `height` with corners
+    /// of `radius`, such as the panel the hidden sidebar comes out in and its card in the Library:
+    /// the glow down the column's middle, as GPUI draws no radial gradient in a rounded box.
+    pub(super) fn foot_glow(&self, space: u64, width: f32, height: f32, radius: f32) -> gpui::Div {
+        let (_, reach) = glow::Corner::Foot.extent();
+        let reach = reach.min(height);
+        let palette = self.palette_of(space);
+        let at = |up: f32| {
+            let (foot, _) = glow::strengths(width / 2., height - up, width, height, false);
+            Hsla::from(palette.glow_at(foot, 0.))
         };
-        linear_gradient(180., stop(0.), stop(1.))
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(reach))
+            .rounded_b(px(radius))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(at(reach), 0.),
+                linear_color_stop(at(0.), 1.),
+            ))
     }
 
     /// The window's look, opaque, halfway down: what covers the rows it passes over, and the find

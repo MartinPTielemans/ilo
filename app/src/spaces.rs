@@ -44,6 +44,12 @@ pub(crate) unsafe extern "C" fn spaces_changed(_: *mut c_void) {
     little_sites_host::profiles_changed(&named);
     bar_picks_host::profiles_changed(&named);
     boosts_host::profiles_changed(&named);
+    // A profile deleted takes the finished tasks kept for it along (#4105).
+    let folders: Vec<String> = (named.iter())
+        .map(|(profile, _)| agents_core::profile_folder(*profile))
+        .filter(|folder| !folder.is_empty())
+        .collect();
+    agents_core::update(move |agents, cx| agents.profiles_are(folders, cx));
     update_shells(|shell, cx| {
         shell.set_profiles(profiles.clone(), cx);
         shell.set_spaces(spaces.clone(), cx);

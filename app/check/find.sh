@@ -1,8 +1,8 @@
 # check.sh runs this at 120.
 # ⌘F opens the find bar over the page with the keyboard, and what's typed right after it lands
-# there. Typing finds in the page, with "n/m", once Japanese input has committed, and return,
-# shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and from the
-# page. A text the page doesn't have shows NOT FOUND. A click
+# there. Typing finds in the page, with "n/m", once Japanese input has committed, and escape while
+# it composes cancels the composition and leaves the bar open. Return, shift-return, ⌘G and ⇧⌘G and
+# the bar's arrows go through the matches, from the bar and from the page. A text the page doesn't have shows NOT FOUND. A click
 # on the page leaves the bar open, and the bar keeps its place through a resize and full screen.
 # Each tab has its own find, which a new tab starts from the text found last; escape and the bar's
 # close button close it, and so does another page. ⌘J from the page and Edit › Find › Jump to
@@ -181,6 +181,24 @@ else
   expect_find "$first" "open 1 of 1 日本語" "the find bar didn't find the committed text"
   grep -q '^browser: find [0-9]* open [0-9-]* of [0-9-]* n' "$log" &&
     fail "the find bar searched for the composition"
+  # Escape while a composition is open is the composition's: it cancels it and leaves the bar open,
+  # still finding what was committed, and the next Escape closes the bar (#4108).
+  send ime on
+  send type nihongo
+  [ "$marked" != none ] || fail "the find bar didn't take the second composition"
+  send key escape
+  [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
+  logged '^browser: find bar hidden$' && fail "escape closed the find bar while composing"
+  logged "^browser: find $first " && fail "escape changed the find while composing"
+  send ime off
+  send key escape
+  expect_find "$first" "closed" "escape after the composition didn't close the find"
+  expect '^browser: find bar hidden$' "escape after the composition didn't hide the find bar"
+  # Open again from the page, as it was, on its match.
+  send key f cmd
+  expect '^browser: find bar drew "日本語" 0/1$' "⌘F didn't open the find again with its text"
+  send key return
+  expect_find "$first" "open 1 of 1 日本語" "return didn't go to the match again"
 
   # A resize and full screen keep the bar by the window's top right corner.
   send resize 1000 700
@@ -620,4 +638,4 @@ quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
 dock right
-echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. The pointer resting on next names it and its key in a tooltip hung off its glyph, which the click ends. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-tooltip.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"
+echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed and escape cancels a composition without closing the bar, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. The pointer resting on next names it and its key in a tooltip hung off its glyph, which the click ends. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-tooltip.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"

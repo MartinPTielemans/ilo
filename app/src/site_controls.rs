@@ -23,8 +23,9 @@ use gpui::{
 };
 
 use crate::{
+    dismissal::{self, By, Why},
     icon_picker,
-    palette::{self, Palette, STATE_HOVERED, STATE_PRESSED},
+    palette::{self, Float, Palette, STATE_HOVERED, STATE_PRESSED},
     passwords::{self, Login},
     shell::{Command, DeviceKind, MenuEntry, cubic_bezier, scaled::scaled},
     tokens::shell::{KEYED, KEYED_RING},
@@ -975,7 +976,8 @@ pub fn show(
             .as_ref()
             .is_some_and(|open| open.closing.is_none())
         {
-            return panel.close("toggle", cx);
+            // Its button's second press.
+            return panel.close(dismissal::Close::new(Why::Toggled, By::Pointer), cx);
         }
         let (at, beak) = placed(place, window);
         log_extensions(&extensions);
@@ -1072,14 +1074,15 @@ fn log_extensions(extensions: &[Extension]) {
 /// The user left the panel: a click outside it, another window or another app. The host has
 /// released it already.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |panel, _, cx| panel.close("dismissed", cx));
+    let close = dismissal::Close::left(cx.active_window().is_none());
+    update(cx, |panel, _, cx| panel.close(close, cx));
 }
 
 /// The tab closed, and its panel with it.
 pub fn tab_closed(tab: u64, cx: &mut App) {
     update(cx, |panel, _, cx| {
         if panel.open.as_ref().is_some_and(|open| open.tab == tab) {
-            panel.close("tab closed", cx);
+            panel.close(dismissal::Close::new(Why::FocusLeft, By::Code), cx);
         }
     });
 }
@@ -1234,10 +1237,22 @@ fn said(name: &str, state: &str) -> String {
     format!("{name}, {state}")
 }
 
+/// The words the log gives `close`, which check.sh reads.
+fn words(close: dismissal::Close) -> &'static str {
+    match close.why {
+        Why::Toggled => "toggle",
+        Why::Escape => "escape",
+        Why::PressOutside | Why::WindowLeft => "dismissed",
+        Why::FocusLeft => "tab closed",
+        Why::Chosen => "chosen",
+        Why::CloseCommand | Why::PointerLeft => "left",
+    }
+}
+
 impl SiteControls {
     /// Closes the panel back into its button, giving the browser window the keyboard and the
     /// clicks at once.
-    fn close(&mut self, why: &str, cx: &mut Context<Self>) {
+    fn close(&mut self, close: dismissal::Close, cx: &mut Context<Self>) {
         let Some(open) = self.open.as_mut().filter(|open| open.closing.is_none()) else {
             return;
         };
@@ -1246,7 +1261,7 @@ impl SiteControls {
         self.host.stop_reading();
         self.host.tooltip(None, cx);
         // check.sh reads this line.
-        log!("browser: site controls closing ({why})");
+        log!("browser: site controls closing ({})", words(close));
         open._leave = Some(cx.spawn(async move |panel, cx| {
             cx.background_executor()
                 .timer(Duration::from_secs_f32(CLOSE))
@@ -1271,7 +1286,7 @@ impl SiteControls {
 
     /// Closes the panel, then has the host do `run`, so what it opens gets the keyboard from the
     /// browser window.
-    fn run(&mut self, name: &str, run: Run, cx: &mut Context<Self>) {
+    fn run(&mut self, name: &str, run: Run, by: By, cx: &mut Context<Self>) {
         let Some(tab) = self
             .open
             .as_ref()
@@ -1282,13 +1297,20 @@ impl SiteControls {
         };
         // check.sh reads this line.
         log!("browser: site controls run {name}");
-        self.close(name, cx);
+        self.close(dismissal::Close::new(Why::Chosen, by), cx);
         self.host.run(run, tab, cx);
     }
 
     /// Runs `tile`. ⌥ on Capture Full Page captures in Portrait Mode on the background kept, as
     /// Arc's ⌥-click on its Portrait Mode skips the panel.
-    fn run_tile(&mut self, tile: Tile, frame: Bounds<Pixels>, alt: bool, cx: &mut Context<Self>) {
+    fn run_tile(
+        &mut self,
+        tile: Tile,
+        frame: Bounds<Pixels>,
+        alt: bool,
+        by: By,
+        cx: &mut Context<Self>,
+    ) {
         let Some(open) = self.open.as_ref() else {
             return;
         };
@@ -1301,7 +1323,7 @@ impl SiteControls {
             }
             TileRun::Command(command) => Run::Command(command),
         };
-        self.run(tile.name, run, cx);
+        self.run(tile.name, run, by, cx);
     }
 
     /// Shows the permission's values in a menu at `position`, and sets the one chosen.
@@ -1408,7 +1430,10 @@ impl SiteControls {
             else {
                 return;
             };
-            panel.update(cx, |panel, cx| panel.run(&name, run, cx)).ok();
+            // The menu doesn't say who chose.
+            panel
+                .update(cx, |panel, cx| panel.run(&name, run, By::Pointer, cx))
+                .ok();
         });
         self.host.menu(items, position, chosen, cx);
     }
@@ -1430,7 +1455,10 @@ impl SiteControls {
                 return;
             };
             let name = titles[index].to_string();
-            panel.update(cx, |panel, cx| panel.run(&name, run, cx)).ok();
+            // The menu doesn't say who chose.
+            panel
+                .update(cx, |panel, cx| panel.run(&name, run, By::Pointer, cx))
+                .ok();
         });
         self.host.menu(items, position, chosen, cx);
     }
@@ -1501,14 +1529,16 @@ impl SiteControls {
                     }
                     match action {
                         passwords::Action::Remove(login) => {
-                            panel.run("remove-login", Run::RemoveLogin(login), cx)
+                            panel.run("remove-login", Run::RemoveLogin(login), By::Pointer, cx)
                         }
                         passwords::Action::Allow(login) => {
                             // check.sh reads this line.
                             log!("browser: site controls allow saving {}", login.site);
                             panel.host.allow_saving(tab, &login);
                         }
-                        passwords::Action::ShowAll => panel.run("passwords", Run::Passwords, cx),
+                        passwords::Action::ShowAll => {
+                            panel.run("passwords", Run::Passwords, By::Pointer, cx)
+                        }
                     }
                 })
                 .ok();
@@ -1546,7 +1576,10 @@ impl SiteControls {
                             log!("browser: site controls extension {} {id}", item.name());
                             panel.host.run(run, tab, cx);
                         }
-                        false => panel.run(&format!("extension {}", item.name()), run, cx),
+                        false => {
+                            let name = format!("extension {}", item.name());
+                            panel.run(&name, run, By::Pointer, cx)
+                        }
                     }
                 })
                 .ok();
@@ -1886,15 +1919,16 @@ impl SiteControls {
         match stop {
             Stop::Tile(name) => {
                 if let Some(&tile) = TILES.iter().find(|tile| tile.name == name) {
-                    self.run_tile(tile, frame, false, cx);
+                    self.run_tile(tile, frame, false, By::Keyboard, cx);
                 }
             }
             Stop::Extension(id) => {
                 let tile = open.in_window(frame);
-                self.run("extension", Run::Extension(id, tile), cx)
+                self.run("extension", Run::Extension(id, tile), By::Keyboard, cx)
             }
             Stop::AddExtension => {
-                self.run("add-extension", Run::Command(Command::ManageExtensions), cx)
+                let run = Run::Command(Command::ManageExtensions);
+                self.run("add-extension", run, By::Keyboard, cx)
             }
             Stop::Engine => self.choose_engine(site.system_engine == Some(true), under, cx),
             Stop::AdBlocking => self.toggle_ad_blocking(site.ad_blocking != Some(true), cx),
@@ -1916,7 +1950,7 @@ impl SiteControls {
                 }
             }
             Stop::Reset => self.reset(cx),
-            Stop::Lock => self.run("certificate", Run::Certificate, cx),
+            Stop::Lock => self.run("certificate", Run::Certificate, By::Keyboard, cx),
             Stop::Profile => self.profiles(under, cx),
             Stop::More => self.more(under, cx),
         }
@@ -2005,7 +2039,7 @@ impl SiteControls {
                 panel.tooltip(tile.label.into(), frame, *hovered, cx)
             }))
             .on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
-                panel.run_tile(tile, frame, event.modifiers().alt, cx)
+                panel.run_tile(tile, frame, event.modifiers().alt, By::of(event), cx)
             }))
             .child(
                 div()
@@ -2061,8 +2095,9 @@ impl SiteControls {
                     .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                         panel.tooltip(title.clone(), frame, *hovered, cx)
                     }))
-                    .on_click(cx.listener(move |panel, _, _, cx| {
-                        panel.run("extension", Run::Extension(id.clone(), tile), cx)
+                    .on_click(cx.listener(move |panel, event, _, cx| {
+                        let run = Run::Extension(id.clone(), tile);
+                        panel.run("extension", run, By::of(event), cx)
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -2087,8 +2122,9 @@ impl SiteControls {
             .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                 panel.tooltip("Add Extension".into(), frame, *hovered, cx)
             }))
-            .on_click(cx.listener(|panel, _, _, cx| {
-                panel.run("add-extension", Run::Command(Command::ManageExtensions), cx)
+            .on_click(cx.listener(|panel, event, _, cx| {
+                let run = Run::Command(Command::ManageExtensions);
+                panel.run("add-extension", run, By::of(event), cx)
             }))
             .child(
                 svg()
@@ -2162,9 +2198,9 @@ impl SiteControls {
                         .right(px(PADDING))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(palette.on_overlay(LINK))
-                        .on_click(
-                            cx.listener(move |panel, _, _, cx| panel.run(&name, run.clone(), cx)),
-                        )
+                        .on_click(cx.listener(move |panel, event, _, cx| {
+                            panel.run(&name, run.clone(), By::of(event), cx)
+                        }))
                         .child(link),
                 )
             })
@@ -2573,8 +2609,8 @@ impl SiteControls {
                 true => button
                     .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
                     .active(move |style| style.bg(palette.state(PLATE, STATE_PRESSED)))
-                    .on_click(cx.listener(|panel, _, _, cx| {
-                        panel.run("certificate", Run::Certificate, cx)
+                    .on_click(cx.listener(|panel, event, _, cx| {
+                        panel.run("certificate", Run::Certificate, By::of(event), cx)
                     })),
                 false => button.opacity(DISABLED_OPACITY),
             })
@@ -2721,7 +2757,9 @@ impl Render for SiteControls {
         let root = div()
             .key_context("SiteControls")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|panel, _: &Close, _, cx| panel.close("escape", cx)))
+            .on_action(cx.listener(|panel, _: &Close, _, cx| {
+                panel.close(dismissal::Close::new(Why::Escape, By::Keyboard), cx)
+            }))
             .on_action(cx.listener(|panel, _: &NextStop, _, cx| panel.key_step(true, true, cx)))
             .on_action(
                 cx.listener(|panel, _: &PreviousStop, _, cx| panel.key_step(false, true, cx)),
@@ -2789,7 +2827,10 @@ impl Render for SiteControls {
         let at = layout(&site, open.extensions.len(), open.beak.is_some());
         let shape = corners(open.beak, at.height);
         let palette = palette::current(cx);
-        let (overlay, rim) = (palette.overlay, Level::Popover.rim_in(&palette));
+        let (overlay, rim) = (
+            Float::SiteControls.fill(palette.tone),
+            Level::Popover.rim_in(&palette),
+        );
         let card = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
