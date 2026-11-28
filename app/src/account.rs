@@ -1294,29 +1294,21 @@ impl Account {
             Choice::Settings => "Sync Settings",
             Choice::Extensions => "Sync Extensions",
         };
-        stop_switch(
-            &self.look,
-            name,
-            spoken,
-            on,
-            slid,
-            self.look.accent,
-            self.a11y,
-        )
-        .on_click(cx.listener(move |account, _, _, cx| {
-            // check.sh waits for this line.
-            log!("browser: sync {name} {}", if on { "off" } else { "on" });
-            // It slides now; the core's word that it took the choice follows.
-            match what {
-                Choice::Settings => account.state.settings = !on,
-                Choice::Extensions => account.state.extensions = !on,
-            }
-            account.host.choose(what, !on);
-            account.switched = Some((what, crate::motion::start(cx)));
-            cx.notify();
-        }))
-        .child(self.place(format!("switch {name}")))
-        .into_any_element()
+        stop_switch(&self.look, name, spoken, on, slid, self.look.on, self.a11y)
+            .on_click(cx.listener(move |account, _, _, cx| {
+                // check.sh waits for this line.
+                log!("browser: sync {name} {}", if on { "off" } else { "on" });
+                // It slides now; the core's word that it took the choice follows.
+                match what {
+                    Choice::Settings => account.state.settings = !on,
+                    Choice::Extensions => account.state.extensions = !on,
+                }
+                account.host.choose(what, !on);
+                account.switched = Some((what, crate::motion::start(cx)));
+                cx.notify();
+            }))
+            .child(self.place(format!("switch {name}")))
+            .into_any_element()
     }
 
     /// Delete Account, under the rest while signed in, with or without the secret: someone who

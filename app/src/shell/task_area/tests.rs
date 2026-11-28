@@ -946,7 +946,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         question: None,
         open: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     };
     shell.update(cx, |shell, cx| {
         shell.set_page(
@@ -1413,7 +1413,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         question: None,
         open: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card], cx);

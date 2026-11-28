@@ -1502,23 +1502,10 @@ impl Render for BoostEditor {
 
         // The name's menu, ilo's own menu's look, inside the card.
         let menu = editing.menu.then(|| {
-            let tone = palette::current(cx).tone;
-            let (fill, rim, label, destructive) = match tone {
-                palette::Tone::Dark => (
-                    menu::DARK_FILL,
-                    menu::DARK_RIM,
-                    menu::DARK_LABEL,
-                    menu::DARK_DESTRUCTIVE,
-                ),
-                palette::Tone::Light => (
-                    menu::LIGHT_FILL,
-                    menu::LIGHT_RIM,
-                    menu::LIGHT_LABEL,
-                    menu::LIGHT_DESTRUCTIVE,
-                ),
-            };
-            let accent = palette.accent;
-            let accent_label = palette.accent_label;
+            let light = palette::current(cx).tone == palette::Tone::Light;
+            let look = crate::menu::Look::plain(light).palette();
+            let (rim, label, destructive) = (look.rim, look.label, look.destructive);
+            let lit = crate::menu::Highlight::plate(light);
             let items = ITEMS
                 .iter()
                 .enumerate()
@@ -1542,22 +1529,19 @@ impl Render for BoostEditor {
                             true => row
                                 .bg(gpui::rgba(menu::DESTRUCTIVE_FILL))
                                 .text_color(gpui::rgba(menu::DESTRUCTIVE_LABEL)),
-                            false => row.bg(accent).text_color(accent_label),
+                            false => row.bg(lit.fill).text_color(lit.label),
                         })
                         .child(title)
                 });
-            div()
+            let panel = div()
                 .id("boost-menu")
                 .when(a11y, |menu| menu.role(Role::Menu))
                 .absolute()
                 .left(card_x(MENU_LEFT))
                 .top(px(MENU_TOP))
                 .w(px(menu::MIN_WIDTH))
-                .h(px(menu_height()))
-                .rounded(px(menu::RADIUS))
-                .bg(gpui::rgba(fill))
-                .border_1()
-                .border_color(gpui::rgba(rim))
+                .h(px(menu_height()));
+            crate::menu::glass(panel, light, menu::RADIUS, true)
                 .child(
                     div()
                         .absolute()

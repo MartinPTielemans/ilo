@@ -7,7 +7,7 @@ use gpui::{
     AppContext as _, Entity, FontWeight, Modifiers, SharedString, TestAppContext, VisualTestContext,
 };
 
-use super::{Card, Dot, Holds, Shape, chips, shape};
+use super::{Card, Cli, Dot, Holds, Offer, Shape, chips, shape};
 use crate::shell::{Command, FOOTER_HEIGHT, Folders, PLATE_INSET, Shell, Slot, recorder::Recorder};
 use crate::tokens::shell::task::{GAP, HEIGHT};
 
@@ -26,7 +26,7 @@ fn card(n: u64, dot: Dot) -> Card {
         question: None,
         open: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 
@@ -174,8 +174,10 @@ fn a_card_shapes_to_its_question_and_its_chips() {
         .extend([(31, "maat.pt".into()), (32, "gulbenkian.pt".into())]);
     assert_eq!(chips(&done)[0].label().as_ref(), "Open 3 pages");
     let mut failed = card(4, Dot::Ended);
-    failed.command = Some("claude auth login");
-    assert_eq!(chips(&failed)[0].label().as_ref(), "Copy");
+    failed.fix = Some((Cli::Claude, Offer::SignIn));
+    assert_eq!(chips(&failed)[0].label().as_ref(), "Sign In to Claude Code");
+    failed.fix = Some((Cli::Codex, Offer::Get));
+    assert_eq!(chips(&failed)[0].label().as_ref(), "Get Codex");
 }
 
 /// The foot is the window's: a task asked from either Space shows in both, in the same place, and

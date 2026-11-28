@@ -572,7 +572,7 @@ use crate::tokens::shell::SLEEPING_FAVICON;
 use crate::tokens::shell::TILE;
 use crate::tokens::shell::TITLE;
 use crate::tokens::shell::UNSELECTED_TITLE;
-use crate::tokens::shell::URL_FIELD;
+use crate::palette::FIELD_PLATE as URL_FIELD;
 /// A tile, and the URL field, under the pointer: the ladder's hover over its resting plate.
 pub(crate) const TILE_HOVERED: f32 =
     crate::palette::state_alpha(TILE, crate::palette::STATE_HOVERED);
@@ -1928,6 +1928,10 @@ pub struct Shell {
     task_core: u64,
     task_live_logged: Option<u64>,
     task_strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether a task's conversation stands beside the page it watches, with what the strip under
+    /// the page says in it, and the composer's row under its reply (#4095, #4094). Only the preview
+    /// sets it until the task's ilo lines are wired (#4086).
+    talk_beside: bool,
     /// The words the strip last said, and for which tab, which check.sh reads as they change.
     task_strip_said: RefCell<Option<(u64, String)>>,
     /// The tabs whose player × put away until their page plays again.
@@ -2389,6 +2393,7 @@ impl Shell {
             task_core: 0,
             task_live_logged: None,
             task_strip_drawn: Rc::default(),
+            talk_beside: false,
             task_strip_said: RefCell::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
@@ -4955,6 +4960,14 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
+        // Onboarding's transparency step shows the window's glass alone (onboarding.rs).
+        let bare = self.onboarding_bare();
+        let normal = normal && !bare;
+        let task_area = task_area.filter(|_| !bare);
+        let (under, sidebar, over, edge) = match bare {
+            true => (None, None, None, None),
+            false => (under, sidebar, over, edge),
+        };
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5632,8 +5645,24 @@ impl Shell {
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
                     .border(px(0.5))
-                    .border_color(self.palette.faint(REVEAL_BORDER))
-                    .bg(self.gradient(Some(self.palette.underlay.into())))
+                    .border_color(gpui::black().opacity(REVEAL_BORDER))
+                    .shadow(vec![BoxShadow {
+                        color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
+                        inset: true,
+                    }])
+                    .bg(self.palette.underlay)
+                    .children(self.paged_weights().into_iter().map(|(space, weight)| {
+                        self.foot_glow(
+                            space,
+                            self.width(),
+                            f32::from(window.viewport_size().height) - 2. * REVEAL_INSET,
+                            REVEAL_RADIUS,
+                        )
+                        .opacity(weight)
+                    }))
                     .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
@@ -6186,7 +6215,7 @@ fn selected_plate(
     hover: f32,
     developer: bool,
 ) -> gpui::Div {
-    let fill = palette.selected(hover);
+    let fill = palette.shown(hover);
     let firmer = if developer {
         DEVELOPER_SELECTED - crate::palette::STATE_SELECTED
     } else {
@@ -6197,8 +6226,8 @@ fn selected_plate(
         ..fill
     };
     plate
-        .bg(fill.opacity(fill.a * opacity))
-        .shadow(palette.selected_shadow(opacity))
+        .bg(fill.opacity(opacity))
+        .shadow(palette.shown_shadow(opacity))
 }
 
 /// The shown tab's outline in Developer Mode, inside its plate's or tile's `radius` corners, over

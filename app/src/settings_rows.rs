@@ -22,10 +22,12 @@ use crate::tokens::settings::{
     CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
     CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
     CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
-    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA,
-    KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y, LINE, NAME, NAME_OFF, ON_CONTROL,
-    ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT,
-    ROW_X, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, GROUP_RIM,
+    GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING, KNOB,
+    KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y, LINE, NAME, NAME_OFF,
+    ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS,
+    ROW_HEIGHT, ROW_X, SIDE_ROOM, STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT,
+    SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -344,8 +346,13 @@ pub struct Look {
     pub hovered: Rgba,
     pub pressed: Rgba,
     pub switch_off: Rgba,
-    /// A switch's knob while it's off. On, it's white on the accent.
+    /// A switch's knob while it's off.
     pub knob: Rgba,
+    /// What's on: a switch's track, a ticked box, a chosen radio. Settings' is neutral, the
+    /// text colour (#4092); a look on another view's ground takes that ground's accent.
+    pub on: Rgba,
+    /// A switch's knob on `on`, and the tick on a ticked box.
+    pub knob_on: Rgba,
     /// The plate a feature's glyph sits on, and the glyph while it's on.
     pub glyph_plate: Rgba,
     pub glyph: Rgba,
@@ -353,22 +360,28 @@ pub struct Look {
     pub heading: Rgba,
     /// A group's edge, where its fill alone wouldn't stand off the ground.
     pub edge: Option<Rgba>,
-    /// What's on, a switch's track or a box's tick, and the one button that does what the view
-    /// is for: the host's own green.
+    /// A group's shadow under it, where it's a plate lifted off the ground (Settings' light).
+    pub lifted: Option<Rgba>,
+    /// The one button that does what the view is for: the host's own green.
     pub accent: Rgba,
 }
 
 impl Look {
     /// Settings' own, on its card: the paper over the overlay's fill in dark, the ink over the
-    /// dialog's in light, as the window's other text is, and ilo's green, as the app's window
-    /// isn't a Space's (#319).
+    /// dialog's in light, as the window's other text is. Its controls are neutral, the text colour
+    /// where they're on (#4092), and its one main action ilo's green, as the app's window isn't a
+    /// Space's (#319). Its groups are the text colour over the card in dark, rimmed, and white
+    /// plates in light, ringed and lifted.
     pub fn settings(dark: bool) -> Look {
         let (card, base) = match dark {
             true => (rgb(OVERLAY_DARK), rgb(PAPER)),
             false => (rgb(DIALOG_LIGHT), rgb(INK)),
         };
         let pick = |dark_alpha: f32, light_alpha: f32| if dark { dark_alpha } else { light_alpha };
-        let surface = card.blend(base.opacity(pick(GROUP, GROUP_LIGHT)));
+        let surface = match dark {
+            true => card.blend(base.opacity(GROUP)),
+            false => card.blend(rgba(GROUP_LIGHT)),
+        };
         let mix = |amount: f32| surface.blend(base.opacity(amount));
         let switch_off = mix(pick(SWITCH_OFF, SWITCH_OFF_LIGHT));
         Look {
@@ -384,10 +397,16 @@ impl Look {
                 true => switch_off.blend(base.opacity(KNOB_ALPHA)),
                 false => gpui::white().into(),
             },
+            on: base,
+            knob_on: match dark {
+                true => rgb(INK),
+                false => gpui::white().into(),
+            },
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
             heading: card.blend(base.opacity(HEADING)),
-            edge: None,
+            edge: Some(rgba(if dark { GROUP_RIM } else { GROUP_RING_LIGHT })),
+            lifted: (!dark).then(|| rgba(GROUP_SHADOW_LIGHT)),
             accent: rgb(NO_THEME_ACCENT),
         }
     }
@@ -407,10 +426,13 @@ impl Look {
             pressed: mix(ON_PRESSED),
             switch_off: mix(ON_SWITCH_OFF),
             knob: gpui::white().into(),
+            on: accent,
+            knob_on: gpui::white().into(),
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(line),
+            lifted: None,
             accent,
         }
     }
@@ -454,6 +476,15 @@ pub fn group_lined(look: &Look, rows: impl IntoIterator<Item = (gpui::Div, f32)>
         .rounded(px(radius::ROW))
         .bg(look.surface)
         .when_some(look.edge, |group, edge| group.border_1().border_color(edge))
+        .when_some(look.lifted, |group, shadow| {
+            group.shadow(vec![BoxShadow {
+                color: shadow.into(),
+                offset: point(px(0.), px(GROUP_SHADOW_Y)),
+                blur_radius: px(GROUP_SHADOW_BLUR),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+        })
         .children(rows)
 }
 
@@ -467,21 +498,29 @@ pub fn frame() -> gpui::Div {
         .items_center()
 }
 
-/// A row's text: its name, and the line under it that says more, if any, which wraps.
+/// A row's line's type, which says more under its name, and any line that describes as a row's
+/// does.
+pub fn detail_type() -> gpui::Div {
+    div().text_size(px(SMALL)).line_height(px(DETAIL_LINE))
+}
+
+/// A row's text: its name, at medium, and the line under it that says more, if any, which wraps.
 pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedString>) -> gpui::Div {
     let line = line.map(|line| {
-        div()
+        detail_type()
             .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
             .child(line)
     });
+    div().flex_1().min_w_0().child(name_of(name)).children(line)
+}
+
+/// A row's name, at medium, on one line.
+fn name_of(name: impl Into<SharedString>) -> gpui::Div {
     div()
-        .flex_1()
-        .min_w_0()
-        .child(div().truncate().child(name.into()))
-        .children(line)
+        .truncate()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .child(name.into())
 }
 
 /// A row's text whose line sets what the user or an agent types in `mono`, the face a terminal
@@ -511,17 +550,11 @@ pub fn command_text(
         None => vec![run(line.len(), crate::face::UI)],
     };
     let runs: Vec<_> = runs.into_iter().filter(|run| run.len > 0).collect();
-    let small = || {
-        div()
-            .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
-            .text_color(look.detail)
-    };
+    let small = || detail_type().mt(px(DETAIL_TOP)).text_color(look.detail);
     div()
         .flex_1()
         .min_w_0()
-        .child(div().truncate().child(name.into()))
+        .child(name_of(name))
         .child(small().child(gpui::StyledText::new(line.clone()).with_runs(runs)))
 }
 
@@ -558,7 +591,7 @@ pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
 /// A row: its name, and its control at the end.
 pub fn row(name: impl Into<SharedString>, control: gpui::AnyElement) -> gpui::Div {
     frame()
-        .child(div().flex_1().min_w_0().truncate().child(name.into()))
+        .child(name_of(name).flex_1().min_w_0())
         .child(end([control]))
 }
 
@@ -572,6 +605,42 @@ pub fn detailed_row(
     frame()
         .child(text(look, name, Some(detail.into())))
         .children(control.map(|c| end([c])))
+}
+
+/// A row whose control is drawn pictures (settings_pictures), such as Appearance: its name and
+/// `line`, and the pictures at its end, their ring's room outside the row's padding so the
+/// drawings keep to the row's edge (#4092).
+pub fn pictured(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: SharedString,
+    pictures: impl IntoElement,
+) -> gpui::Div {
+    frame().child(text(look, name, Some(line))).child(
+        div()
+            .flex_none()
+            .ml(px(END_GAP - SIDE_ROOM))
+            .my(px(-SIDE_ROOM))
+            .mr(px(-SIDE_ROOM))
+            .child(pictures),
+    )
+}
+
+/// A row whose control is too wide for its end, such as Transparency's pictures: its name and
+/// `line`, then the control across the row under them, `inset` wider on each side than the text,
+/// so the control's own room keeps what it draws in the text's column.
+pub fn stacked(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: SharedString,
+    inset: f32,
+    control: impl IntoElement,
+) -> gpui::Div {
+    frame()
+        .flex_col()
+        .items_stretch()
+        .child(text(look, name, Some(line)))
+        .child(div().mt(px(STACKED_GAP)).mx(px(-inset)).child(control))
 }
 
 /// A feature's glyph on its quiet plate, 12 before its name, quieter while it's off.
@@ -665,8 +734,9 @@ fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::
 }
 
 /// A pop-up button `width` wide showing `label`, with its chevrons at its end, lit as a button is
-/// under the pointer and pressed while its menu is `open`. It opens on a press, as a pop-up
-/// button does, which its caller listens for.
+/// under the pointer and pressed while its menu is `open`. Its text stays at its start, where its
+/// menu puts the chosen item's. It opens on a press, as a pop-up button does, which its caller
+/// listens for.
 pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool) -> gpui::Div {
     let chevrons = svg()
         .flex_none()
@@ -719,7 +789,7 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
                 .size(px(KNOB))
                 .rounded_full()
                 .shadow(vec![shadow])
-                .bg(if on { gpui::white().into() } else { look.knob }),
+                .bg(if on { look.knob_on } else { look.knob }),
         )
 }
 
@@ -740,6 +810,12 @@ pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
         .when(!on, |empty| {
             empty.border_1().border_color(look.line).bg(look.switch_off)
         })
+}
+
+/// The mark that picks one of a list, as Your assistant's picks the assistant tasks run on: a
+/// checkbox, round.
+pub fn mark(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
+    checkbox(look, on, accent, tick).rounded_full()
 }
 
 /// A row with a checkbox before its name, as a list to tick from has.
@@ -1060,7 +1136,7 @@ mod tests {
     fn the_quiet_text_reads_in_dark_and_light() {
         use crate::palette::contrast;
         use crate::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
-        use crate::tokens::settings::{FOOT_TEXT, SEARCH_HINT, SECTION_TEXT};
+        use crate::tokens::settings::{SEARCH_HINT, SECTION_TEXT};
         use crate::tokens::shell::library::LIBRARY_PLATE;
         for dark in [true, false] {
             let look = Look::settings(dark);
@@ -1079,7 +1155,10 @@ mod tests {
                 ("keys that can't change", chip(CHIP_FIXED, CHIP_FIXED_TEXT)),
                 ("None", chip(CHIP, CHIP_NONE_TEXT)),
                 ("a section", on(ground, SECTION_TEXT)),
-                ("Chromium settings", on(ground, FOOT_TEXT)),
+                (
+                    "Chromium settings and the groups' labels",
+                    on(ground, HEADING),
+                ),
                 ("Search", on(field, DETAIL)),
                 ("⌘F", on(field, SEARCH_HINT)),
             ];
@@ -1098,7 +1177,31 @@ mod tests {
         assert!(lum(dark.ink) > lum(dark.surface) && lum(light.ink) < lum(light.surface));
         assert!(!dark.light() && light.light());
         let on = Look::on(dark.surface, dark.ink, dark.accent);
-        assert!(dark.edge.is_none() && on.edge.is_some());
+        assert!(on.edge.is_some());
+    }
+
+    /// In Settings what's on is the text's colour, a switch's knob on it the card's, never the
+    /// green the main action keeps (#4092): it stands off the group as far as a name does, and its
+    /// knob reads on it at WCAG's 3:1 for a control. Off Settings' card, on is still the accent.
+    #[test]
+    fn whats_on_is_the_text_colour_not_the_green() {
+        for dark in [true, false] {
+            let look = Look::settings(dark);
+            assert_ne!(look.on, look.accent, "{dark}");
+            assert!(
+                contrast(&look, look.on) >= contrast(&look, look.ink) * 0.95,
+                "{dark}: on is quieter than a name"
+            );
+            let knob = crate::palette::contrast(look.knob_on, look.on);
+            assert!(knob >= 3., "{dark}: the knob reads at {knob}");
+            assert!(
+                look.lifted.is_some() != dark,
+                "only light's groups are lifted"
+            );
+        }
+        let settings = Look::settings(true);
+        let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
+        assert_eq!(elsewhere.on, settings.accent);
     }
 }
 
@@ -1175,4 +1278,200 @@ pub mod spoken {
             .cloned()
             .collect()
     }
+}
+
+/// What a press on an assistant's row asks for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Act {
+    /// Get: the maker's install page.
+    Get,
+    /// Sign in or Try Again.
+    SignIn,
+    Cancel,
+    /// The mark, which has tasks run on it.
+    Mark,
+    /// The ⋯ menu, a press on its button.
+    Menu,
+}
+
+/// An assistant's row (#4100), one component for Settings › Agents' Your assistant and first run's
+/// assistant step: Claude Code's or Codex's glyph, its name and what `shown` says of it, then Get,
+/// Sign in, Cancel or Try Again, or, signed in, its ⋯ menu, opening at `menu_at`, and the mark,
+/// `marked` when tasks run on it. A press calls `act`.
+pub fn assistant_row(
+    look: &Look,
+    cli: crate::agents::runner::Cli,
+    shown: &crate::agents::sign_in::Shown,
+    marked: bool,
+    a11y: bool,
+    menu_at: impl IntoElement,
+    act: Rc<dyn Fn(Act, &mut gpui::Window, &mut gpui::App)>,
+) -> gpui::Div {
+    use crate::agents::sign_in::Offer;
+    let index = cli as usize;
+    let name = cli.assistant();
+    let press = |id: &'static str, title: SharedString, what: Act| {
+        let act = act.clone();
+        stop_button(look, (id, index), title, a11y)
+            .on_click(move |_, window, cx| act(what, window, cx))
+            .into_any_element()
+    };
+    let title = |offer: Offer| offer.label(cli).unwrap_or_default().into();
+    let controls = match shown.offer {
+        Offer::Nothing => Vec::new(),
+        Offer::Get => vec![press("assistant-get", title(Offer::Get), Act::Get)],
+        Offer::SignIn => vec![press(
+            "assistant-sign-in",
+            title(Offer::SignIn),
+            Act::SignIn,
+        )],
+        Offer::TryAgain => vec![press(
+            "assistant-try-again",
+            title(Offer::TryAgain),
+            Act::SignIn,
+        )],
+        Offer::Cancel => vec![press("assistant-cancel", title(Offer::Cancel), Act::Cancel)],
+        Offer::SignedIn => {
+            let more = {
+                let act = act.clone();
+                icon_button(look, ("assistant-more", index), "icons/ellipsis.svg")
+                    .relative()
+                    .child(menu_at)
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                        act(Act::Menu, window, cx)
+                    })
+                    .when(a11y, |more| named_button(more, format!("{name} options")))
+            };
+            let mark = {
+                let act = act.clone();
+                div()
+                    .id(("assistant-mark", index))
+                    .when(a11y, |mark| {
+                        named_check(mark, format!("Run tasks with {name}"), marked)
+                    })
+                    .size(px(CONTROL_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(self::mark(look, marked, look.on, look.knob_on))
+                    .on_click(move |_, window, cx| act(Act::Mark, window, cx))
+            };
+            vec![more.into_any_element(), mark.into_any_element()]
+        }
+    };
+    let line: SharedString = shown.line.clone().into();
+    let text = match shown.command() {
+        Some(command) => commanded(look, name, line, command).into_any_element(),
+        None => text(look, name, Some(line)).into_any_element(),
+    };
+    frame()
+        .child(glyph_plate(look, cli.glyph(), true))
+        .child(text)
+        .when(!controls.is_empty(), |row| row.child(end(controls)))
+}
+
+/// A row's text whose line has a command in it, set in the face a terminal shows it in, which only
+/// the computer's fonts can say, so it's found as it's drawn.
+#[derive(IntoElement)]
+struct Commanded {
+    look: Look,
+    name: SharedString,
+    line: SharedString,
+    command: std::ops::Range<usize>,
+}
+
+fn commanded(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: SharedString,
+    command: std::ops::Range<usize>,
+) -> Commanded {
+    Commanded {
+        look: *look,
+        name: name.into(),
+        line,
+        command,
+    }
+}
+
+impl RenderOnce for Commanded {
+    fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let mono = crate::face::mono(&cx.text_system().all_font_names());
+        let run = |len: usize, family: &'static str| gpui::TextRun {
+            len,
+            font: gpui::font(family),
+            color: self.look.detail.into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = [
+            run(self.command.start, crate::face::UI),
+            run(self.command.len(), mono),
+            run(self.line.len() - self.command.end, crate::face::UI),
+        ]
+        .into_iter()
+        .filter(|run| run.len > 0);
+        text(&self.look, self.name, None).child(
+            div()
+                .mt(px(DETAIL_TOP))
+                .text_size(px(SMALL))
+                .line_height(px(DETAIL_LINE))
+                .text_color(self.look.detail)
+                .child(gpui::StyledText::new(self.line).with_runs(runs.collect())),
+        )
+    }
+}
+
+/// Your assistant's last row: another app, which connects as Apps that connect has it, where
+/// How to Connect goes.
+pub fn another_agent_row(
+    look: &Look,
+    a11y: bool,
+    how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Div {
+    let how = stop_button(look, "assistant-another-how", "How to Connect", a11y)
+        .on_click(move |_, window, cx| how(window, cx));
+    frame()
+        .child(glyph_plate(look, "icons/cable.svg", true))
+        .child(text(
+            look,
+            "Another app",
+            Some("Any app that uses MCP".into()),
+        ))
+        .child(end([how.into_any_element()]))
+}
+
+/// A site's note in Settings › Agents' Site notes (#4122): the site's name over what its note
+/// holds, and a button that opens the note's own text under them, as an agent gets it, and
+/// closes it again. A press calls `toggle`.
+pub fn site_note_row(
+    look: &Look,
+    note: &'static crate::agents::notes::Note,
+    opened: bool,
+    a11y: bool,
+    logged: Drawn,
+    toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Div {
+    use crate::agents::notes::{CLOSE, READ};
+    let host = note.host;
+    let title = if opened { CLOSE } else { READ };
+    let id = gpui::ElementId::Name(format!("agent-note-read-{host}").into());
+    let read = stop_button(look, id, title, a11y)
+        .relative()
+        .child(drawn(format!("note {host}"), logged))
+        .on_click(toggle);
+    let head = frame()
+        .child(text(look, note.name, Some(note.about.into())))
+        .child(end([read.into_any_element()]));
+    let words = opened.then(|| {
+        div()
+            .px(px(ROW_X))
+            .pb(px(PADDING))
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(note.text.trim_end())
+    });
+    div().child(head).children(words)
 }

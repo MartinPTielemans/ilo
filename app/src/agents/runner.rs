@@ -62,22 +62,6 @@ impl Cli {
         }
     }
 
-    /// The command that signs the user in, which ilo never runs itself.
-    pub fn sign_in(self) -> &'static str {
-        match self {
-            Cli::Claude => "claude auth login",
-            Cli::Codex => "codex login",
-        }
-    }
-
-    /// The command that installs it.
-    pub fn install(self) -> &'static str {
-        match self {
-            Cli::Claude => "npm install -g @anthropic-ai/claude-code",
-            Cli::Codex => "npm install -g @openai/codex",
-        }
-    }
-
     /// The models its Model pop-up offers after its own default while the CLI hasn't listed its
     /// own: Claude's aliases, which every Claude Code takes, for one too old to answer initialize
     /// with its list (ready::claude_models).

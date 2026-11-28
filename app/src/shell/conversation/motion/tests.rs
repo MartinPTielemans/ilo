@@ -22,6 +22,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         running,
         failed: false,
         opens: Opens::Nothing,
+        under: "".into(),
     }
 }
 
@@ -53,6 +54,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         open: None,
         answers: Vec::new(),
         writing: false,
+        tier: Default::default(),
     }
 }
 
@@ -167,6 +169,7 @@ fn what_is_written_fades_in_only_where_it_grew_at_most_once_a_frame() {
     };
     let line = |text: &str| Conversation {
         writing: true,
+        tier: Default::default(),
         ..conversation(vec![trace(true, 1), Line::Said(text.to_string().into())])
     };
     motion.changed(&line(""), &line("Two"), &HashMap::new(), start);
@@ -257,6 +260,7 @@ fn what_was_written_below_the_trace_goes_into_it_without_rising_again() {
     };
     let old = Conversation {
         writing: false,
+        tier: Default::default(),
         ..conversation(vec![trace(true, 1), Line::Said("Looking at maat.".into())])
     };
     let mut new = conversation(vec![trace(true, 2)]);

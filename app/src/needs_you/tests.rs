@@ -49,7 +49,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         question: None,
         open: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 

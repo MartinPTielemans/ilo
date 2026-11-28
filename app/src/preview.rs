@@ -12,9 +12,11 @@ use std::{
 };
 
 use browser::account::{self, Account};
+use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
+use browser::agents::tier::{Tier, Why};
 use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
@@ -2489,9 +2491,13 @@ fn task_space(id: u64) -> SpaceEntry {
 
 /// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
 /// rings the stop named, as Tab from the window does: none, card, back, page, take-over or stop
-/// (#3220).
+/// (#3220). PREVIEW_TASK's bench stands on its page the same way, with no ring.
 fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
-    let Ok(stop) = std::env::var("PREVIEW_TASK_RING") else {
+    let bench = std::env::var_os("PREVIEW_TASK").is_some();
+    let Some(stop) = std::env::var("PREVIEW_TASK_RING")
+        .ok()
+        .or(bench.then(|| "none".to_string()))
+    else {
         return;
     };
     // Tabs after the strip's first stop, the task's card.
@@ -2503,7 +2509,8 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
         "stop" => Some(4),
         _ => None,
     };
-    let tab = FIRST_TASK + 300;
+    // The bench's page is its conversation's.
+    let tab = FIRST_TASK + if bench { 200 } else { 300 };
     let agent: SharedString = format!("task-{FIRST_TASK}").into();
     cx.spawn(async move |cx| {
         // After the conversation the card's click opens.
@@ -2579,7 +2586,7 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
             _ => Vec::new(),
         },
         retry: false,
-        command: None,
+        fix: None,
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it
@@ -2630,6 +2637,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             true => Opens::Text("Another element would get the click: div.cookie-banner".into()),
             false => Opens::Nothing,
         },
+        under: "".into(),
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
     let items = vec![
@@ -2654,7 +2662,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
         TraceItem::Step(step(3, click, "Clicked “Accept”", "", false, false)),
         TraceItem::Step(step(4, click, "Clicking “Tickets”", "", true, false)),
     ];
-    Conversation {
+    let mut talk = Conversation {
         agent,
         name: "Claude".into(),
         title: title.into(),
@@ -2666,7 +2674,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             key: 0,
             running: true,
             took: None,
-            items,
+            items: items.clone(),
         })],
         tabs: vec![
             (FIRST_TASK + 200, "tickets.example".into()),
@@ -2679,7 +2687,138 @@ fn task_conversation(agent: SharedString) -> Conversation {
         open: None,
         answers: Vec::new(),
         writing: false,
-    }
+        tier: Default::default(),
+    };
+    bench_task(&mut talk, items);
+    talk
+}
+
+/// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
+/// one of the states ilo's own lines are made for, from made-up data: working, refused,
+/// off-limits, yours, tab-back, signed-in, raised or notes.
+fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
+    let Ok(state) = std::env::var("PREVIEW_TASK") else {
+        return;
+    };
+    let tab = FIRST_TASK + 200;
+    let done = |key, items: &[TraceItem]| {
+        Line::Trace(Trace {
+            key,
+            running: false,
+            took: Some(40),
+            items: items.to_vec(),
+        })
+    };
+    let working = |key: usize, title: &str| {
+        Line::Trace(Trace {
+            key,
+            running: true,
+            took: None,
+            items: vec![TraceItem::Step(TraceStep {
+                key,
+                glyph: "icons/mouse-pointer-2.svg",
+                title: title.to_string().into(),
+                description: "".into(),
+                running: true,
+                failed: false,
+                opens: Opens::Nothing,
+                under: "".into(),
+            })],
+        })
+    };
+    let ilo = |key, kind, settled| Line::Ilo(IloLine { key, kind, settled });
+    let line = |key, kind| ilo(key, kind, false);
+    let before = &items[..items.len() - 1];
+    let stopped = |why, at: &str, count| IloKind::Stopped {
+        tab,
+        at: at.to_string().into(),
+        why,
+        tier: Tier::Work,
+        count,
+    };
+    talk.progress = "".into();
+    // It stands on its one page, beside it.
+    talk.tabs.truncate(1);
+    talk.lines = match state.as_str() {
+        "refused" => vec![
+            done(0, before),
+            Line::Said("Two seats in row 12 are in the basket. Placing the order is the last step.".into()),
+            line(100, stopped(Why::Order, "Place order", 2)),
+        ],
+        "off-limits" => vec![
+            done(0, before),
+            line(100, stopped(Why::Fenced, "seatmap.example", 1)),
+        ],
+        "yours" => vec![
+            done(0, before),
+            Line::Said("tickets.example wants you to sign in before it shows the seats. I'll carry on once you hand the tab back.".into()),
+            line(100, IloKind::Yours { tab }),
+        ],
+        "tab-back" => vec![
+            done(0, before),
+            Line::Said("I need the seat map back to pick two seats together.".into()),
+            line(100, IloKind::TabBack { tab: FIRST_TASK + 201 }),
+        ],
+        "signed-in" => vec![
+            done(0, before),
+            line(
+                100,
+                IloKind::SignedIn {
+                    tab,
+                    site: "tickets.example".into(),
+                    with: SignedInWith::Saved("ada@example.com".into()),
+                },
+            ),
+            working(10, "Reading this page"),
+        ],
+        "raised" => {
+            talk.tier = Tier::Full;
+            vec![
+                done(0, before),
+                ilo(100, stopped(Why::Order, "Place order", 1), true),
+                line(
+                    101,
+                    IloKind::TierChanged {
+                        from: Tier::Work,
+                        to: Tier::Full,
+                    },
+                ),
+                working(10, "Clicking “Place order”"),
+            ]
+        }
+        // A step whose answer carried a site's notes (#4122), which the line under it says.
+        "notes" => {
+            let github = &browser::agents::notes::NOTES[0];
+            let opened = TraceStep {
+                key: 10,
+                glyph: "icons/globe.svg",
+                title: "Opened github.com".into(),
+                description: "2 s".into(),
+                running: false,
+                failed: false,
+                opens: Opens::Nothing,
+                under: github.with().into(),
+            };
+            let reading = TraceStep {
+                key: 11,
+                glyph: "icons/text-align-start.svg",
+                title: "Reading github.com".into(),
+                description: "".into(),
+                running: true,
+                failed: false,
+                opens: Opens::Nothing,
+                under: "".into(),
+            };
+            let trace = Trace {
+                key: 10,
+                running: true,
+                took: None,
+                items: vec![TraceItem::Step(opened), TraceItem::Step(reading)],
+            };
+            vec![done(0, before), Line::Trace(trace)]
+        }
+        _ => vec![done(0, before), working(10, "Reading this page")],
+    };
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
@@ -2931,27 +3070,31 @@ fn main() {
             if let Some(update) = &update {
                 preview_update(update, cx);
             }
-            // PREVIEW_SIDEBAR_POSITION=left or right shows Settings › Tabs & Sidebar's sidebar group
-            // alone, Sidebar position's drawings with that side chosen (#2407).
-            if let Ok(side) = std::env::var("PREVIEW_SIDEBAR_POSITION") {
+            // PREVIEW_APPEARANCE_PICKER=automatic, light or dark shows Settings › Appearance,
+            // Appearance's drawings with that one chosen and Settings drawn in it, Automatic's as
+            // PREVIEW_APPEARANCE has the system (#2429, #4092); PREVIEW_SIDEBAR_POSITION=left or
+            // right shows it with that side chosen (#2407), either alone.
+            let picked = std::env::var("PREVIEW_APPEARANCE_PICKER").ok();
+            let side = std::env::var("PREVIEW_SIDEBAR_POSITION").ok();
+            if picked.is_some() || side.is_some() {
+                let chosen = match picked.as_deref() {
+                    Some("light") => browser::theme::Appearance::Light,
+                    Some("dark") => browser::theme::Appearance::Dark,
+                    _ => browser::theme::Appearance::Automatic,
+                };
+                let right = side.as_deref() == Some("right");
                 preview_pictures(
-                    Pictures::Sidebar {
-                        right: side == "right",
+                    Pictures::Appearance {
+                        appearance: chosen,
+                        right,
                     },
                     cx,
                 );
                 return;
             }
-            // PREVIEW_APPEARANCE_PICKER=automatic, light or dark shows Settings › General's Look
-            // group alone, Appearance's drawings with that one chosen and Settings drawn in it,
-            // Automatic's as PREVIEW_APPEARANCE has the system (#2429).
-            if let Ok(chosen) = std::env::var("PREVIEW_APPEARANCE_PICKER") {
-                let chosen = match chosen.as_str() {
-                    "light" => browser::theme::Appearance::Light,
-                    "dark" => browser::theme::Appearance::Dark,
-                    _ => browser::theme::Appearance::Automatic,
-                };
-                preview_pictures(Pictures::Appearance(chosen), cx);
+            // PREVIEW_SETTINGS_GENERAL=1 shows Settings › General, on made-up values (#4092).
+            if std::env::var("PREVIEW_SETTINGS_GENERAL").is_ok() {
+                preview_pictures(Pictures::General, cx);
                 return;
             }
             // PREVIEW_SHARE_FAVORITES=every, profile or space shows Settings › Tabs & Sidebar's
@@ -2977,6 +3120,21 @@ fn main() {
                     _ => CommandLine::Off,
                 };
                 preview_pictures(Pictures::CommandLine(state), cx);
+                return;
+            }
+            // PREVIEW_ASSISTANTS=start or signed-in shows Settings › Agents' Your assistant, its
+            // rows in each state before a sign-in and while and after it fails, or signed in and
+            // signing out, with the same rows as Settings draws (#4100).
+            if let Ok(state) = std::env::var("PREVIEW_ASSISTANTS") {
+                let signed_in = state == "signed-in";
+                preview_pictures(Pictures::Assistants { signed_in }, cx);
+                return;
+            }
+            // PREVIEW_SITE_NOTES=open or closed shows Settings › Agents' Site notes (#4122), its
+            // switch and its row a site, the first one's note open to read or none.
+            if let Ok(state) = std::env::var("PREVIEW_SITE_NOTES") {
+                let open = state == "open";
+                preview_pictures(Pictures::SiteNotes { open }, cx);
                 return;
             }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
@@ -3053,7 +3211,10 @@ fn main() {
                     // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
-                    let tasks = std::env::var("PREVIEW_TASKS").ok();
+                    let tasks = std::env::var("PREVIEW_TASKS").ok().or_else(|| {
+                        // The bench's states show the working task's conversation.
+                        std::env::var_os("PREVIEW_TASK").map(|_| "open".to_string())
+                    });
                     if tasks.is_some() {
                         spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
                     }
@@ -3110,8 +3271,13 @@ fn main() {
                     // second Space, for its colour, =private in a private window with no tabs, and =new
                     // in a Space with no tabs and no favorites, as a new user's after the onboarding.
                     // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
-                    // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first.
-                    let onboarding = std::env::var("PREVIEW_ONBOARDING").ok();
+                    // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first, and
+                    // PREVIEW_ONBOARDING_STEP=transparency, or a step's number from 1, opens it at
+                    // that step.
+                    let onboarding_step = std::env::var("PREVIEW_ONBOARDING_STEP").ok();
+                    let onboarding = std::env::var("PREVIEW_ONBOARDING")
+                        .ok()
+                        .or(onboarding_step.as_ref().map(|_| "1".into()));
                     let welcome =
                         std::env::var_os("PREVIEW_WELCOME").is_some() || onboarding.is_some();
                     let empty = std::env::var("PREVIEW_EMPTY")
@@ -3428,7 +3594,12 @@ fn main() {
                             let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
                             window.on_next_frame(move |_, cx| {
                                 shown
-                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
+                                    .update(cx, |shell, cx| {
+                                        if std::env::var_os("PREVIEW_TASK").is_some() {
+                                            shell.set_talk_beside(true, cx);
+                                        }
+                                        shell.show_task(agent.into(), cx)
+                                    })
                                     .ok();
                                 preview_task_ring(shown, cx);
                             });
@@ -3474,9 +3645,10 @@ fn main() {
                     // daily count's switch on there.
                     if let Some(given) = &onboarding {
                         let mut parts = given.split(':');
-                        shell.start_onboarding(parts.next(), cx);
-                        if let Some(step) = parts.next() {
-                            shell.onboarding_to(step, cx);
+                        let appearance = parts.next();
+                        match parts.next().or(onboarding_step.as_deref()) {
+                            Some(step) => shell.onboarding_at(appearance, step, cx),
+                            None => shell.start_onboarding(appearance, cx),
                         }
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
@@ -4608,15 +4780,22 @@ fn preview_account(state: &str, cx: &mut App) {
 /// A Settings group whose row is chosen from drawings, on its card as Settings draws it.
 #[derive(Clone, Copy)]
 enum Pictures {
-    /// Tabs & Sidebar's sidebar group: Sidebar position, `right` chosen, and the two switches
-    /// under it.
-    Sidebar { right: bool },
-    /// General's Look group: Appearance, the one chosen, and Page zoom under it.
-    Appearance(browser::theme::Appearance),
+    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen,
+    /// and the Top bar under it.
+    Appearance {
+        appearance: browser::theme::Appearance,
+        right: bool,
+    },
+    /// General's groups as a profile has them, with ilo not the default browser.
+    General,
     /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
     Favorites(browser::shell::FavoritesScope),
     /// Agents' first row, its apps that connect, and the ilo command's row under them.
     CommandLine(CommandLine),
+    /// Your assistant's rows in their states, `signed_in` or before (#4100).
+    Assistants { signed_in: bool },
+    /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
+    SiteNotes { open: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -4631,17 +4810,9 @@ enum CommandLine {
     FlatpakOn,
 }
 
-/// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
-/// OS's window buttons in the drawings.
+/// `shown`'s groups in a window of Settings' size.
 fn preview_pictures(shown: Pictures, cx: &mut App) {
-    use browser::settings_pictures::Buttons;
     use browser::tokens::settings::{HEIGHT, WIDTH};
-    let buttons = match std::env::var("PREVIEW_BUTTONS").as_deref() {
-        Ok("mac") => Buttons::Mac,
-        Ok("windows") => Buttons::Windows,
-        Ok("linux") => Buttons::Linux,
-        _ => Buttons::HERE,
-    };
     // PREVIEW_SETTINGS_WIDTH=<points> narrows the window, to Settings' least for one.
     let width = std::env::var("PREVIEW_SETTINGS_WIDTH")
         .ok()
@@ -4653,10 +4824,8 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
         point(px(x as f32), px(y as f32)),
         size(px(width), px(HEIGHT)),
     );
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        ..Default::default()
-    };
+    // As the app opens Settings, so a capture shows what it draws (#4129).
+    let options = browser::settings_column::window_options(bounds, "Settings".into());
     let opened = cx.open_window(options, |_, cx| {
         cx.new(|cx| {
             let look = browser::settings_rows::Look::settings(true);
@@ -4667,7 +4836,6 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
             });
             PicturesPage {
                 shown,
-                buttons,
                 card: Card::default(),
                 search,
                 logged: Rc::default(),
@@ -4681,7 +4849,6 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
 
 struct PicturesPage {
     shown: Pictures,
-    buttons: browser::settings_pictures::Buttons,
     card: Card,
     search: gpui::Entity<browser::text_input::TextInput>,
     logged: browser::settings_rows::Drawn,
@@ -4699,20 +4866,27 @@ impl gpui::Render for PicturesPage {
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, command_export, command_text, drawn, end, frame, glyph_plate, group, popup,
-            stop_button, stop_switch, text as row_text,
+            Look, command_export, command_text, drawn, end, frame, glyph_plate, group, pictured,
+            popup, stop_button, stop_switch, text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
+            BUTTONS_TOP, CONTROL_GAP, DETAIL_LINE, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM,
+            HEADING_TOP, NAME, POPUP_WIDTH, SHARE_TOP, SIDE_ROOM, TEXT_X,
         };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
         // Settings takes Light's or Dark's look when it's chosen, and the system's for Automatic.
         let dark = match self.shown {
-            Pictures::Appearance(Appearance::Light) => false,
-            Pictures::Appearance(Appearance::Dark) => true,
+            Pictures::Appearance {
+                appearance: Appearance::Light,
+                ..
+            } => false,
+            Pictures::Appearance {
+                appearance: Appearance::Dark,
+                ..
+            } => true,
             _ => preview_tone() != Some(Tone::Light),
         };
         let look = Look::settings(dark);
@@ -4726,9 +4900,11 @@ impl gpui::Render for PicturesPage {
             cx,
         );
         let section = match self.shown {
-            Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
-            Pictures::Appearance(_) => Section::General,
-            Pictures::CommandLine(_) => Section::Agents,
+            Pictures::Favorites(_) => Section::TabsAndSidebar,
+            Pictures::Appearance { .. } => Section::Appearance,
+            Pictures::General => Section::General,
+            Pictures::CommandLine(_) | Pictures::Assistants { .. } => Section::Agents,
+            Pictures::SiteNotes { .. } => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -4742,14 +4918,36 @@ impl gpui::Render for PicturesPage {
             a11y,
         );
         let page = cx.entity().downgrade();
+        let switch = |name: &'static str, on: bool| {
+            end([gpui::IntoElement::into_any_element(stop_switch(
+                &look, name, name, on, 1., look.on, a11y,
+            ))])
+        };
+        // A line under the first group, as Settings' Reduce Transparency line is.
+        let mut under: Option<&str> = None;
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
-            Pictures::Sidebar { right } => {
+            Pictures::Appearance { appearance, right } => {
+                let three = appearance_picker(
+                    &look,
+                    base,
+                    appearance,
+                    a11y,
+                    self.logged.clone(),
+                    move |appearance, _, cx| {
+                        log!("preview: appearance {appearance:?}");
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Appearance { appearance, right };
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let page = cx.entity().downgrade();
                 let pair = picker(
                     &look,
                     base,
                     dark,
                     right,
-                    self.buttons,
                     a11y,
                     self.logged.clone(),
                     move |side, _, cx| {
@@ -4758,91 +4956,19 @@ impl gpui::Render for PicturesPage {
                             browser::settings_pictures::title(side)
                         );
                         page.update(cx, |page, cx| {
-                            page.shown = Pictures::Sidebar { right: side };
+                            page.shown = Pictures::Appearance {
+                                appearance,
+                                right: side,
+                            };
                             cx.notify();
                         })
                         .ok();
                     },
                 );
-                let position = frame()
-                    .flex_col()
-                    .items_stretch()
-                    .child(row_text(
-                        &look,
-                        "Sidebar position",
-                        Some(
-                            "The side of the window the sidebar and the window's buttons are on."
-                                .into(),
-                        ),
-                    ))
-                    .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair));
-                let switch = |name: &'static str, on: bool| {
-                    end([gpui::IntoElement::into_any_element(stop_switch(
-                        &look,
-                        name,
-                        name,
-                        on,
-                        1.,
-                        look.accent,
-                        a11y,
-                    ))])
+                let line = match cfg!(target_os = "macos") {
+                    true => "Light, dark, or as macOS is. View › Appearance has it too.",
+                    false => "Light, dark, or as the system is.",
                 };
-                let side = if right { "right" } else { "left" };
-                let edge = frame()
-                    .child(row_text(
-                        &look,
-                        "Show the hidden sidebar at the window's edge",
-                        Some(
-                            format!(
-                                "Move the pointer along the {side} edge. ⌘S shows it either way."
-                            )
-                            .into(),
-                        ),
-                    ))
-                    .child(switch("edge", true));
-                let option = frame()
-                    .child(row_text(
-                        &look,
-                        "Show the hidden sidebar when ⌥ is pressed alone",
-                        Some("Press and let go of ⌥ with no other key.".into()),
-                    ))
-                    .child(switch("option", false));
-                vec![(Some("The sidebar"), vec![position, edge, option])]
-            }
-            Pictures::Appearance(chosen) => {
-                let three = appearance_picker(
-                    &look,
-                    base,
-                    chosen,
-                    self.buttons,
-                    a11y,
-                    self.logged.clone(),
-                    move |appearance, _, cx| {
-                        log!("preview: appearance {appearance:?}");
-                        page.update(cx, |page, cx| {
-                            page.shown = Pictures::Appearance(appearance);
-                            cx.notify();
-                        })
-                        .ok();
-                    },
-                );
-                let line = match self.buttons {
-                    browser::settings_pictures::Buttons::Mac => {
-                        "Light, dark, or as macOS is. View › Appearance has it too."
-                    }
-                    _ => "Light, dark, or as the system is.",
-                };
-                let appearance = frame()
-                    .flex_col()
-                    .items_stretch()
-                    .child(row_text(&look, "Appearance", Some(line.into())))
-                    .child(
-                        div()
-                            .flex()
-                            .mt(px(SIDE_TOP))
-                            .ml(px(-SIDE_ROOM))
-                            .child(three),
-                    );
                 let zoom = frame()
                     .child(row_text(
                         &look,
@@ -4857,7 +4983,128 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                vec![(Some("Look"), vec![appearance, zoom])]
+                let top_bar = frame()
+                    .child(row_text(
+                        &look,
+                        "Top bar",
+                        Some(
+                            "The URL field and the sidebar's buttons in a row across the window's \
+                             top, the page under it. ⇧⌘D turns it on and off."
+                                .into(),
+                        ),
+                    ))
+                    .child(switch("top bar", false));
+                // Transparency under Appearance, at the level kept, as Settings has it (#4129).
+                let transparency = browser::transparency::row(
+                    &look,
+                    browser::transparency::has_glass(),
+                    self.logged.clone(),
+                    cx,
+                );
+                let mut looks = vec![pictured(&look, "Appearance", line.into(), three)];
+                let mut groups = Vec::new();
+                match transparency {
+                    Some(transparency) if cfg!(target_os = "macos") => {
+                        looks.push(transparency);
+                        under = Some(browser::transparency::REDUCE_TRANSPARENCY_WINS);
+                        groups.push((None, looks));
+                        groups.push((None, vec![zoom]));
+                    }
+                    transparency => {
+                        looks.extend(transparency);
+                        looks.push(zoom);
+                        groups.push((None, looks));
+                    }
+                }
+                groups.extend([(
+                    Some("Layout"),
+                    vec![
+                        pictured(
+                            &look,
+                            "Sidebar position",
+                            "The side of the window the sidebar, the Library and the \
+                                 window's buttons are on."
+                                .into(),
+                            pair,
+                        ),
+                        top_bar,
+                    ],
+                )]);
+                groups
+            }
+            Pictures::General => {
+                let button = |id: &'static str, title: &'static str| {
+                    gpui::IntoElement::into_any_element(stop_button(&look, id, title, a11y))
+                };
+                let row = |name: &'static str, line: Option<&str>, control| {
+                    frame()
+                        .child(row_text(
+                            &look,
+                            name,
+                            line.map(|line| line.to_string().into()),
+                        ))
+                        .child(end([control]))
+                };
+                let folder = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(CONTROL_GAP))
+                    .child(div().text_color(look.detail).child("~/Downloads"))
+                    .child(button("download-folder", "Change…"));
+                vec![
+                    (
+                        Some("Opening and quitting"),
+                        vec![
+                            row(
+                                "Reopen your windows and tabs",
+                                Some(
+                                    "Off: ilo opens one empty window, and Today tabs go to the \
+                                     archive.",
+                                ),
+                                gpui::IntoElement::into_any_element(stop_switch(
+                                    &look, "restore", "restore", true, 1., look.on, a11y,
+                                )),
+                            ),
+                            row(
+                                "Ask before quitting",
+                                Some("⌘Q asks first, so a stray press can't close every window."),
+                                gpui::IntoElement::into_any_element(stop_switch(
+                                    &look, "warn", "warn", true, 1., look.on, a11y,
+                                )),
+                            ),
+                        ],
+                    ),
+                    (
+                        Some("Search and downloads"),
+                        vec![
+                            row(
+                                "Search engine",
+                                None,
+                                gpui::IntoElement::into_any_element(popup(
+                                    &look,
+                                    "DuckDuckGo",
+                                    POPUP_WIDTH,
+                                    false,
+                                )),
+                            ),
+                            row(
+                                "Save downloads to",
+                                None,
+                                gpui::IntoElement::into_any_element(folder),
+                            ),
+                            row(
+                                "Ask where to save each file",
+                                Some(
+                                    "Each download asks where it goes, rather than saving to its \
+                                     folder.",
+                                ),
+                                gpui::IntoElement::into_any_element(stop_switch(
+                                    &look, "ask", "ask", false, 1., look.on, a11y,
+                                )),
+                            ),
+                        ],
+                    ),
+                ]
             }
             Pictures::Favorites(chosen) => {
                 let three = favorites_picker(
@@ -4887,7 +5134,7 @@ impl gpui::Render for PicturesPage {
                     .child(
                         div()
                             .flex()
-                            .mt(px(SIDE_TOP))
+                            .mt(px(SHARE_TOP))
                             .ml(px(-SIDE_ROOM))
                             .child(three),
                     );
@@ -4913,7 +5160,7 @@ impl gpui::Render for PicturesPage {
                         "Let agents use the browser",
                         true,
                         1.,
-                        look.accent,
+                        look.on,
                         a11y,
                     ))],
                 );
@@ -4985,6 +5232,111 @@ impl gpui::Render for PicturesPage {
                     (Some("Command line"), vec![command]),
                 ]
             }
+            Pictures::Assistants { signed_in } => {
+                use browser::agents::ready::Ready;
+                use browser::agents::runner::Cli;
+                use browser::agents::sign_in::{Row, shown};
+                use browser::settings_rows::{another_agent_row, assistant_row};
+                let row = |cli, ready, plan: Option<&str>, row: Row, marked| {
+                    let shown = shown(cli, ready, plan, &row);
+                    assistant_row(
+                        &look,
+                        cli,
+                        &shown,
+                        marked,
+                        a11y,
+                        gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+                        Rc::new(|_, _, _| {}),
+                    )
+                };
+                // Where the parity sheet waits for the rows to be drawn.
+                let another = || {
+                    another_agent_row(&look, a11y, |_, _| {})
+                        .relative()
+                        .child(drawn("assistant rows".into(), self.logged.clone()))
+                };
+                // A made-up assistant's words, as a failed sign-in shows them.
+                let said = "Your workspace doesn't allow Codex".to_string();
+                match signed_in {
+                    false => vec![
+                        (
+                            Some("Your assistant"),
+                            vec![
+                                row(Cli::Claude, Ready::SignedOut, None, Row::Idle, false),
+                                row(Cli::Codex, Ready::NotFound, None, Row::Idle, false),
+                                another(),
+                            ],
+                        ),
+                        (
+                            Some("Signing in"),
+                            vec![row(
+                                Cli::Claude,
+                                Ready::SignedOut,
+                                None,
+                                Row::SigningIn,
+                                false,
+                            )],
+                        ),
+                        (
+                            Some("Failed"),
+                            vec![
+                                row(
+                                    Cli::Codex,
+                                    Ready::SignedOut,
+                                    None,
+                                    Row::Failed(Some(said)),
+                                    false,
+                                ),
+                                row(
+                                    Cli::Claude,
+                                    Ready::SignedOut,
+                                    None,
+                                    Row::Failed(None),
+                                    false,
+                                ),
+                            ],
+                        ),
+                    ],
+                    true => vec![
+                        (
+                            Some("Your assistant"),
+                            vec![
+                                row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
+                                row(Cli::Codex, Ready::SignedIn, Some("Plus"), Row::Idle, false),
+                                another(),
+                            ],
+                        ),
+                        (
+                            Some("Signing out"),
+                            vec![row(
+                                Cli::Codex,
+                                Ready::SignedIn,
+                                Some("Plus"),
+                                Row::SigningOut,
+                                false,
+                            )],
+                        ),
+                    ],
+                }
+            }
+            Pictures::SiteNotes { open } => {
+                use browser::agents::notes;
+                use browser::settings_rows::site_note_row;
+                let on = frame()
+                    .child(row_text(
+                        &look,
+                        notes::HEADING,
+                        Some(notes::SWITCH_LINE.into()),
+                    ))
+                    .child(switch(notes::HEADING, true));
+                let rows = (notes::NOTES.iter().enumerate())
+                    .map(|(index, note)| {
+                        let (opened, logged) = (open && index == 0, self.logged.clone());
+                        site_note_row(&look, note, opened, a11y, logged, |_, _, _| {})
+                    })
+                    .collect();
+                vec![(None, vec![on]), (None, rows)]
+            }
         };
         let blocks = blocks
             .into_iter()
@@ -4994,15 +5346,59 @@ impl gpui::Render for PicturesPage {
                     div()
                         .px(px(TEXT_X))
                         .mb(px(HEADING_BOTTOM))
+                        .text_size(px(text::SMALL))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(look.heading)
                         .child(heading)
                 });
+                let top = match (index, heading.is_some()) {
+                    (0, _) => FIRST_GROUP,
+                    (_, true) => HEADING_TOP,
+                    (_, false) => GROUP_GAP,
+                };
+                let under = under.filter(|_| index == 0).map(|line| {
+                    div()
+                        .mt(px(BUTTONS_TOP))
+                        .px(px(TEXT_X))
+                        .text_size(px(text::SMALL))
+                        .line_height(px(DETAIL_LINE))
+                        .text_color(look.detail)
+                        .child(line)
+                });
                 div()
-                    .mt(px(if index > 0 { HEADING_TOP } else { 0. }))
+                    .mt(px(top))
                     .children(heading)
                     .child(group(&look, rows))
+                    .children(under)
             });
+        // The page's name, and General's sentence and Make Default, as Settings draws them.
+        let title = browser::shell::display_text(
+            section.name(),
+            browser::tokens::shell::library::TITLE_SIZE,
+            browser::tokens::shell::library::TITLE_LINE,
+            cx,
+        )
+        .text_color(base.opacity(browser::tokens::settings::TITLE));
+        let general = matches!(self.shown, Pictures::General);
+        let lede = general.then(|| {
+            div()
+                .mt(px(browser::tokens::settings::LEDE_TOP))
+                .line_height(px(browser::tokens::settings::LEDE_LINE))
+                .text_color(base.opacity(browser::tokens::settings::DETAIL))
+                .child("ilo isn't your default browser.")
+        });
+        let make = general.then(|| {
+            div()
+                .flex_none()
+                .ml(px(browser::tokens::settings::END_GAP))
+                .child(stop_button(&look, "make-default", "Make Default", a11y))
+        });
+        let head = div()
+            .px(px(TEXT_X))
+            .flex()
+            .items_start()
+            .child(div().flex_1().min_w_0().child(title).children(lede))
+            .children(make);
         let colors = Colors {
             line: look.line,
             name: base.opacity(NAME),
@@ -5010,7 +5406,14 @@ impl gpui::Render for PicturesPage {
         };
         let card = self.card.draw(
             section.name(),
-            div().flex().flex_col().children(blocks),
+            div()
+                .w_full()
+                .max_w(px(browser::tokens::settings::PAGE_WIDTH))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .child(head)
+                .children(blocks),
             dark,
             colors,
         );
