@@ -6498,19 +6498,6 @@ static void PlaceFirstRunGlass() {
   const NSRect card = NSMakeRect(round(NSMidX(bounds) - g_first_run_card.width / 2),
                                  round(NSMidY(bounds) - g_first_run_card.height / 2),
                                  g_first_run_card.width, g_first_run_card.height);
-  // Under the checks, each shape is logged as it's set and again once Core Animation has committed
-  // it, with the last frame the UI had drawn by then: the glass goes out with the UI's next, and
-  // onboarding.sh reads its lag behind the card from that (exit item 3). Nothing is logged in use.
-  const bool logged = Checked();
-  if (logged) {
-    fprintf(stderr, "browser: first run glass %.1f %.1f set at frame %llu\n", card.size.width,
-            card.size.height, (unsigned long long)g_first_run_drawn);
-    [CATransaction begin];
-    [CATransaction setCompletionBlock:^{
-      fprintf(stderr, "browser: first run glass %.1f %.1f committed after frame %llu\n",
-              card.size.width, card.size.height, (unsigned long long)g_first_run_drawn);
-    }];
-  }
   // GPUI's glass fills the window; it's kept to the card, which the UI draws over it.
   for (NSView* view in content.subviews) {
     if ([view isKindOfClass:NSVisualEffectView.class]) {
@@ -6520,8 +6507,15 @@ static void PlaceFirstRunGlass() {
       glass.maskImage = FirstRunMask(g_first_run_radius);
     }
   }
-  if (logged) {
-    [CATransaction commit];
+  // Committed now, with the frame the UI is drawing the card in: left to the run loop, a frame
+  // that keeps the main thread busy holds every shape set meanwhile, and the card grows past a
+  // glass still at its old size.
+  [CATransaction flush];
+  // Under the checks, each shape is logged once it's committed, with the frame the UI is drawing,
+  // which onboarding.sh reads against the frame that draws the card in it. Nothing in use.
+  if (Checked()) {
+    fprintf(stderr, "browser: first run glass %.1f %.1f committed at frame %llu\n", card.size.width,
+            card.size.height, (unsigned long long)g_first_run_drawn);
   }
   // The shadow is the window's drawn shape, read once this frame is on screen.
   dispatch_async(dispatch_get_main_queue(), ^{

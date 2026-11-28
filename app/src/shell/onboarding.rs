@@ -328,14 +328,11 @@ pub(super) struct Onboarding {
     /// When the entry began, while it plays (v9 §2).
     entry: Option<Instant>,
     /// The card's size and corners the host last shaped the window to, so it's told only of a
-    /// change: on the entry's frames, and once as it ends. The exit draws its card by it, a frame
-    /// behind (`exit::behind`).
+    /// change: on the entry's frames, the exit's, and once as it ends.
     shaped: Option<(f32, f32, f32)>,
     /// How many frames the card has drawn, told to the host with each shape for the checks' log of
-    /// the glass's lag behind it.
+    /// the frame its glass goes out with.
     drawn: u64,
-    /// Whether the exit has drawn a frame of its grow, past the content's fade.
-    growing: bool,
     /// Help › Welcome plays the card again, which keeps no step to resume at.
     replay: bool,
     /// The assistants whose Sign In was pressed, whose rows then say what the press learned.
@@ -560,7 +557,6 @@ impl Shell {
             entry: Some(now),
             shaped: None,
             drawn: 0,
-            growing: false,
             replay,
             pressed: Vec::new(),
             signing: Vec::new(),
@@ -1538,21 +1534,12 @@ impl Shell {
         let (_, _, w, h, radius) = plate;
         let shape = (w, h, radius);
         let before = onboarding.shaped.replace(shape);
-        let growing =
-            exiting.is_some_and(|at| at > crate::tokens::shell::onboarding::exit::CONTENT);
-        let grow_starts = growing && !std::mem::replace(&mut onboarding.growing, growing);
         onboarding.drawn += 1;
+        // The host commits the glass's shape as it's told it, so it goes out with the frame that
+        // draws the card in it, and fill and glass grow together.
         if before != Some(shape) {
             self.browser.shape_first_run(w, h, radius, onboarding.drawn);
         }
-        // The glass is the system's and reaches the screen a frame after the card drawn with it,
-        // so the exit draws the card in the shape its glass was given the frame before, and fill
-        // and glass grow together. The grow's first shape follows the glass still through the
-        // content's fade and lands at once (f0053), so that frame's card is drawn in it.
-        let plate = match (&exit, before) {
-            (Some(_), Some(before)) if !grow_starts => exit::behind(before, viewport),
-            _ => plate,
-        };
         // check.sh reads the exit's frames against the host's lines for its glass.
         if exit.is_some() {
             let (_, _, w, h, _) = plate;

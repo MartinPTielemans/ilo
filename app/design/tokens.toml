@@ -892,6 +892,11 @@ max-width = 320.0
 # A run of rows that scroll, as the Space button's menu's Spaces, shows this many at a time, the
 # rows after it staying in place under it (ours, #4400).
 scroll-rows = 8
+# A Space dragged by its row up or down that run (#4440) scrolls it while the row's middle is within
+# `reorder-scroll-edge` of the run's top or foot, this many points a second: the card row's
+# sortable model, set on y.
+reorder-scroll-edge = 12.0
+reorder-scroll-speed = 240.0
 # How far a submenu lies over its parent, so their rows line up.
 overlap = 4.0
 # A menu's search field, its first row, as the model menu's (Z9): a row's text at a row's inset,
@@ -2304,6 +2309,11 @@ spaces-inset = 48.0
 card-width = 240.0
 card-radius = 16.0
 card-gap = 24.0
+# A card dragged by its handle along the row (#4452) is lifted to this scale, and scrolls the row
+# while its middle is within `card-scroll-edge` of the row's ends, this many points a second.
+card-lift-scale = 1.02
+card-scroll-edge = 48.0
+card-scroll-speed = 480.0
 # Once its cards don't fit, the section leaves the page this much of the window, however narrow,
 # and its cards scroll across (Arc 1.171 ax: 500 → 444, 1100 → 1044, live as the window resizes).
 spaces-page = 56.0

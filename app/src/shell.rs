@@ -497,7 +497,6 @@ const COPIED_TIME: Duration = Duration::from_secs(2);
 const DELETED_TIME: Duration = Duration::from_secs(5);
 use crate::tokens::shell::FOOTER_HEIGHT;
 use crate::tokens::shell::PLUS_INSET;
-use crate::tokens::shell::SPACE_DRAGGED;
 // The Create a Space form, in Arc's places and type, without its illustration and subtitle, which
 // are Arc's art and copy. The field moves up into the subtitle's place, Arc's 35 pt under the text
 // above it. Distances to the buttons are from the window's bottom.
@@ -1617,8 +1616,12 @@ pub struct Shell {
     /// to their places after the Spaces' order changed, and where the one let go was along its
     /// row, which glides from there.
     space_drag: Option<space_order::SpaceDrag>,
-    space_slides: space_order::SpaceSlides,
-    space_landing: Option<(u64, f32)>,
+    space_sent: crate::sortable::Sent<u64>,
+    /// The card drawn over the others: the one dragged, and while it settles.
+    space_lifted: Option<u64>,
+    /// Where a Space card's handle was last pressed, across the window: a drag that starts with its
+    /// first move holds the card where it was pressed, not where that move is.
+    space_press: Option<f32>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -2269,8 +2272,9 @@ impl Shell {
             window_drag: None,
             dragged: false,
             space_drag: None,
-            space_slides: HashMap::new(),
-            space_landing: None,
+            space_sent: Default::default(),
+            space_lifted: None,
+            space_press: None,
             putting_back: false,
             swipe: None,
             settle: None,
@@ -4955,7 +4959,7 @@ impl Render for Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window, cx);
-        self.step_space_slides(window);
+        self.step_space_slides(window, cx);
         self.step_space_button(window);
         self.step_form_going(cx);
         // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
@@ -5774,7 +5778,7 @@ impl Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window, cx);
-        self.step_space_slides(window);
+        self.step_space_slides(window, cx);
         self.step_space_button(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
@@ -6074,7 +6078,7 @@ fn settle_progress(start: Instant) -> Option<f32> {
 }
 
 /// How far the list's motion is `t` seconds in, or None once it's done.
-fn row_spring(t: f32) -> Option<f32> {
+pub(crate) fn row_spring(t: f32) -> Option<f32> {
     spring(t, ROW_RESPONSE, ROW_DAMPING)
 }
 

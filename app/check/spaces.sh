@@ -310,6 +310,30 @@ choose_space "$second_name" "$second"
 expect_tabs "$b" "$b" "after the Space button's menu showed Space $second"
 choose_space "$first_name" "$first"
 expect_tabs "$a" "$a" "after the Space button's menu showed Space $first"
+# A row of the Space button's menu held and moved past the next row's middle moves its Space there,
+# the menu staying open, and ⌘Z in the open menu puts it back before it would close the menu
+# (#4440). The rows are pressed where the menu logs them, and the core's order is read from the
+# app's own line once it reports it.
+post click "$(space_button)"
+expect "^browser: menu row $first_name at " "the Space button's menu didn't log where its rows are"
+menu_row() {
+  grep "^browser: menu row $1 at " "$log" | tail -1 | sed "s/^browser: menu row $1 at //"
+}
+first_row=$(menu_row "$first_name")
+second_row=$(menu_row "$second_name")
+[ -n "$first_row" ] && [ -n "$second_row" ] || fail "the Space button's menu didn't log its Spaces' rows"
+send move $first_row
+send press $first_row
+send dragto ${first_row% *} $((${second_row#* } + 6))
+send release ${first_row% *} $((${second_row#* } + 6))
+expect '^browser: menu reordered a row$' "a row held past the next row's middle didn't reorder the menu"
+expect "^browser: spaces $second $first\$" "the menu's row moved past the next didn't move its Space in the core"
+none_since '^browser: menu closed$' || fail "a row's drop closed the menu"
+send key z cmd
+expect '^browser: menu undid a reorder$' "⌘Z in the open menu didn't undo the reorder"
+expect "^browser: spaces $first $second\$" "⌘Z in the menu didn't put the Spaces back in the core"
+send key escape
+expect '^browser: menu closed$' "escape didn't close the Space button's menu"
 ../tools/window-screenshot.sh "$pid" "$out/spaces.png" || fail "no window to capture"
 
 # A tab whose page lets it go only after the Space switch typed straight after its ⌘W, as a loading
@@ -824,23 +848,24 @@ none_since '^browser: library hidden$' || fail "moving the icon picker closed th
 send key escape
 expect '^browser: icon picker hidden$' "escape didn't close the card's icon picker"
 none_since '^browser: library hidden$' || fail "escape in the card's icon picker closed the Library"
-# The second card's handle, at its foot on its left, drags it along the cards: let go over the
-# first card's left half it goes first, the Library staying open with the
-# Space shown where it was, and ⌘Z puts it back. Held there, its copy hangs from the pointer, its
-# place dims and the line stands before the first card; the recording has the cards gliding to
-# their places as it's let go (#1580). It starts after the still, which would end it (#2026).
+# The second card's handle, at its foot on its left, drags it along the cards: its middle taken
+# left of the first card's middle, with the pointer a card's width over the first card's handle, it
+# goes first, the Library staying open with the Space shown where it was, and ⌘Z puts it back.
+# Held there, the card itself follows the pointer along the row and the first springs one cell
+# right, making room; the recording has the card settling into the open slot as it's let go
+# (#1580, #4452). It starts after the still, which would end it (#2026).
 part_at handle "$second"
 handle_point="$part_x $part_y"
 handle_y=$part_y
-first_half=$((first_left + first_w / 4))
+over_first=$((part_x - 264 - 20))
 send move $handle_point
 send press $handle_point
 send dragto $((part_x - 6)) $handle_y
 expect "^browser: drag space $second\$" "the second card's handle didn't drag the card"
-send dragto $first_half $handle_y
+send dragto $over_first $handle_y
 ../tools/window-screenshot.sh "$pid" "$out/library-space-drag.png" || fail "no window to capture"
 record library-space-drag 3
-send release $first_half $handle_y
+send release $over_first $handle_y
 expect "^browser: dropped space $second after 0\$" "the second card let go over the first didn't move its Space"
 expect "^browser: spaces $second $first\$" "the second Space didn't go first"
 recorded

@@ -2015,6 +2015,7 @@ impl Browser for Fake {
                 area,
                 look,
                 chosen,
+                reorder: None,
             },
             cx,
         );
@@ -3920,6 +3921,7 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
                 area: Bounds::new(point(px(0.), px(0.)), bounds.size),
                 look: menu::Look::plain(light),
                 chosen: menu::picked(|_, _| {}),
+                reorder: None,
             };
             menu::show(request, cx);
         });
@@ -3976,6 +3978,7 @@ fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App)
                 area: Bounds::new(point(px(0.), px(0.)), bounds.size),
                 look: menu::Look::plain(light),
                 chosen: menu::picked(|_, _| {}),
+                reorder: None,
             };
             menu::show(request, cx);
         });

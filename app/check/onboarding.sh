@@ -110,18 +110,18 @@ launch_new() {
   expect "^browser: appearance $1\$" "$1: View › Appearance › $look didn't set ilo's look"
 }
 
-# On the Mac the exit grows the window, and the host logs each shape it gives the card's glass and
-# the last frame the UI had drawn as Core Animation committed it: the glass goes out with the next.
-# It reaches the screen with the frame that draws the card in its shape, or the one after, never
-# before it and never two late (exit item 3). $1 starts each failure's message.
+# On the Mac the exit grows the window, and the host logs each shape it gives the card's glass with
+# the frame the UI was drawing as Core Animation committed it. The glass goes out with the frame
+# that first draws the card in its shape, never one before or after, even while another window's
+# frame keeps the main thread busy (exit item 3). $1 starts each failure's message.
 glass_follows_card() {
   [ "$(uname)" = Darwin ] || return 0
   expect '^browser: onboarding exit grows$' \
     "$1the Mac's host didn't grow first run's window for its exit, so its glass can't be read"
   local last lag
-  last=$(sed -n 's/^browser: first run glass \(.*\) set at frame .*/\1/p' "$log" | tail -1)
-  expect "^browser: first run glass $last committed after frame " \
-    "$1the host didn't log the grow's last glass shape, $last, as committed"
+  last=$(sed -n 's/^browser: onboarding card frame [0-9]* drawn \(.*\)/\1/p' "$log" | tail -1)
+  expect "^browser: first run glass $last committed at frame " \
+    "$1the host didn't log the glass of the card's last frame, $last, as committed"
   # Only a commit that changes the glass's shape is read: the shape it had through the steps is
   # set again as the grow starts, which changes nothing on screen.
   lag=$(awk '
@@ -130,11 +130,11 @@ glass_follows_card() {
       shape = $7 " " $8
       if (exit_ && !(shape in card)) card[shape] = $5
     }
-    /^browser: first run glass .* committed after frame / {
+    /^browser: first run glass .* committed at frame / {
       shape = $5 " " $6
       if (shape == had) next
       had = shape
-      if (exit_) went[++n] = shape " " $10 + 1
+      if (exit_) went[++n] = shape " " $10
     }
     END {
       for (i = 1; i <= n; i++) {
@@ -142,12 +142,12 @@ glass_follows_card() {
         shape = g[1] " " g[2]
         if (!(shape in card)) continue
         read++
-        if (g[3] < card[shape] || g[3] > card[shape] + 1)
+        if (g[3] != card[shape])
           printf "glass %s went out with frame %d, the card drew it at frame %d; ", shape, g[3], card[shape]
       }
       if (!read) printf "no glass shape of the grow matched a frame the card drew in it"
     }' "$log")
-  [ -z "$lag" ] || fail "$1the grow's glass wasn't on the card's frame or the next: $lag"
+  [ -z "$lag" ] || fail "$1the grow's glass didn't go out with the card's frame: $lag"
 }
 
 # Light: each step captured once settled and left the way that takes nothing it offers.

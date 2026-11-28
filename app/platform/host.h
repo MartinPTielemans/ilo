@@ -789,10 +789,10 @@ void host_add_first_run(void* first_run_view);
 // corners of |radius|. The system's blur, where the window has it, and its shadow are behind that
 // shape alone. The UI calls it on the entry's frames as the card grows and once as the entry ends,
 // and again only on the exit's frames after host_grow_first_run said yes, so nothing keeps it
-// alive. A host that can't shape a window does nothing. |frame| is the UI's count of the frames
-// it has drawn the card in: under the checks the Mac logs each shape with it as it's set and,
-// once Core Animation has committed it, the last frame the UI had drawn by then, so a check can
-// read the glass's lag behind the card. It logs nothing otherwise.
+// alive. The shape goes out with the frame the UI is drawing, which draws the card in it. A host
+// that can't shape a window does nothing. |frame| is the UI's count of the frames it has drawn
+// the card in: under the checks the Mac logs each shape with it once committed, so a check can
+// read that the glass and the card go out together. It logs nothing otherwise.
 void host_set_first_run_frame(double width, double height, double radius, uint64_t frame);
 
 // Mac only: grows first run's window to the frame of the browser window held behind it, for the

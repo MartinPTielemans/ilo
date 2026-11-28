@@ -84,6 +84,14 @@ impl Shell {
         open && self.cards_room() > 0. && x >= left && x < right
     }
 
+    /// The cards are scrolled to `at` by a card dragged to an end of them: any momentum or spring
+    /// back stops.
+    pub(super) fn scroll_cards_to(&mut self, at: f32) {
+        self.card_strip.settle = None;
+        self.card_strip.coasting = false;
+        self.card_strip.at = at.clamp(0., self.cards_room());
+    }
+
     /// Fingers came down at `x`: the momentum of the last swipe stops, and over the cards, which
     /// way they go first decides whether they scroll them (`catch_cards`).
     pub(super) fn fingers_down(&mut self, x: f32) -> Option<f32> {

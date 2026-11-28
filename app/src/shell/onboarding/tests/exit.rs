@@ -224,13 +224,12 @@ fn a_cross_fades_last_frame_draws_no_card(cx: &mut TestAppContext) {
 }
 
 /// As the card grows, the host's glass is given each frame's own shape and the card is drawn in
-/// the shape its glass had on the frame before, centred in its window: the glass reaches the
-/// screen a frame after the card the UI draws with it, so a frame behind it the fill and the
-/// glass grow together. The grow's first shape follows the glass still through the content's fade
-/// and lands at once (f0053), so the grow's first frame draws the card in its own glass's shape.
-/// The frame the exit ends on draws the grown card whole, its glass told the same.
+/// that shape on the same frame, centred in its window: the host commits the shape as it's told it,
+/// so the glass goes out with the frame that draws the card in it, never a frame behind it, and the
+/// fill and the glass grow together. The frame the exit ends on draws the grown card whole, its
+/// glass told the same.
 #[gpui::test]
-fn the_exits_card_is_drawn_a_frame_behind_its_glass(cx: &mut TestAppContext) {
+fn the_exits_card_is_drawn_in_its_glass_shape_on_each_frame(cx: &mut TestAppContext) {
     let (shell, cx, host) = at_the_end(cx);
     pressed_and_grown(&shell, cx, &host);
     for _ in 0..5 {
@@ -243,22 +242,15 @@ fn the_exits_card_is_drawn_a_frame_behind_its_glass(cx: &mut TestAppContext) {
         .iter()
         .map(|each| each.unwrap_or_else(|| panic!("the card on every frame: {drawn:?}")))
         .collect();
-    let (ending, running) = frames.split_last().unwrap();
-    let (mut grew, mut first) = (0, 0);
-    for pair in running.windows(2) {
+    let mut grew = 0;
+    for pair in frames.windows(2) {
         let (_, _, before) = pair[0];
         let ((x, y, w, h, radius), _, glass) = pair[1];
-        // The grow's first step, a point or more past the card at rest.
-        if before.0 < t::WIDTH + 1. && glass.0 >= t::WIDTH + 1. {
-            first += 1;
-            assert_eq!(
-                (w, h, radius),
-                glass,
-                "the grow's first frame in its own glass's shape"
-            );
-        } else {
-            assert_eq!((w, h, radius), before, "its glass's shape a frame before");
-        }
+        assert_eq!(
+            (w, h, radius),
+            glass,
+            "the card in its own frame's glass: {drawn:?}"
+        );
         if glass.0 > before.0 {
             grew += 1;
             let centred = ((GROWN.0 - w) / 2., (GROWN.1 - h) / 2.);
@@ -266,9 +258,8 @@ fn the_exits_card_is_drawn_a_frame_behind_its_glass(cx: &mut TestAppContext) {
         }
     }
     assert!(grew >= 4, "the glass grew frame by frame: {drawn:?}");
-    assert_eq!(first, 1, "the grow has one first frame: {drawn:?}");
     // The frame it ends on is the grown card and its glass the same, the last the host was told.
-    let ((_, _, w, h, radius), _, glass) = *ending;
+    let ((_, _, w, h, radius), _, glass) = *frames.last().unwrap();
     assert_eq!(glass, (w, h, radius));
     assert_eq!(shapes(&host.take()).last().copied(), Some(glass));
 }
