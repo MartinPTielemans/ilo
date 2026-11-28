@@ -80,7 +80,8 @@ opened() { grep '^browser: little window opened ' "$log" | tail -1 | cut -d' ' -
 # On X11, the window manager focuses the browser window again just after an overlay over it has
 # taken the keyboard, with no input, as sway does as it activates it (#3044): the overlay takes the
 # keyboard and its place on top back, and the step after shows it has them. Each overlay is taken
-# twice, with the user's key or click in it between, as it takes them back once a loss.
+# twice, with the user's key or click in it between. sway may have taken them once already as the
+# overlay mapped, which is why it takes them back twice a loss.
 refocus() {
   [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
   send refocus
