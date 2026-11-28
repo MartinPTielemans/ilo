@@ -7,7 +7,7 @@
 //! over the browser window, as its child, with the keyboard, translucent over a blur in the shape
 //! drawn here. What it asks of its window goes through `Host`.
 
-use std::{ops::Range, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
@@ -147,7 +147,35 @@ struct Picking {
     tones: bool,
     /// Whether it has drawn on screen since it was shown, before which a click finds nothing.
     drawn: bool,
+    /// Where its controls were drawn since it was shown or the tones came out or went in.
+    placed: Placed,
     _edit: Option<Subscription>,
+}
+
+/// Each control's centre in the picker's window, by its name.
+type Placed = Rc<RefCell<HashMap<String, (i32, i32)>>>;
+
+/// Logs where the control `name` is drawn, its centre in the picker's window, as "browser: icon
+/// picker `name` at x y", each time it's drawn somewhere new since `placed` was cleared, for
+/// check.sh to click it there whatever the picker's layout.
+fn placed(placed: &Placed, name: String) -> impl IntoElement + use<> {
+    let placed = placed.clone();
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, _, _| {
+            let centre = bounds.center();
+            let at = (
+                f32::from(centre.x).round() as i32,
+                f32::from(centre.y).round() as i32,
+            );
+            if placed.borrow_mut().insert(name.clone(), at) != Some(at) {
+                // check.sh reads this line.
+                log!("browser: icon picker {name} at {} {}", at.0, at.1);
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 
 pub struct IconPicker {
@@ -287,6 +315,7 @@ pub fn show(
                 selected: None,
                 tones: false,
                 drawn: false,
+                placed: Placed::default(),
                 _edit: None,
             });
             picker.show_tab(tab, window, cx);
@@ -363,6 +392,7 @@ impl IconPicker {
         };
         picking.tab = tab;
         picking.tones = false;
+        picking.placed.borrow_mut().clear();
         picking._edit = None;
         if tab == Tab::Icon {
             window.focus(&self.focus, cx);
@@ -485,6 +515,7 @@ impl IconPicker {
             return;
         };
         picking.tones = false;
+        picking.placed.borrow_mut().clear();
         if tone != self.recents.tone() {
             let host = &self.host;
             if let Some(drawable) = &mut self.drawable {
@@ -518,6 +549,7 @@ impl IconPicker {
         let tones = picking.tones.then(|| {
             emoji::TONES.iter().enumerate().map(|(index, &tone)| {
                 plate(("icon-picker-tone", index), tone)
+                    .child(placed(&picking.placed, format!("tone {index}")))
                     .when(a11y, |plate| {
                         let name = emoji::tone_name(tone);
                         plate
@@ -534,7 +566,8 @@ impl IconPicker {
         });
         let button = (!picking.tones).then(|| {
             let name = format!("Skin Tone, {}", emoji::tone_name(shown));
-            let plate = plate(("icon-picker-tones", 0), shown);
+            let plate = plate(("icon-picker-tones", 0), shown)
+                .child(placed(&picking.placed, "tones".to_string()));
             let plate = plate.when(a11y, |plate| {
                 plate
                     .role(Role::Button)
@@ -544,6 +577,7 @@ impl IconPicker {
             plate.on_click(cx.listener(|picker, _, window, cx| {
                 if let Some(picking) = &mut picker.picking {
                     picking.tones = true;
+                    picking.placed.borrow_mut().clear();
                     cx.notify();
                 }
                 // The picker takes the keyboard on the press, and typing goes on in the search.
@@ -677,6 +711,7 @@ impl IconPicker {
                         .size(px(TRASH_GLYPH))
                         .text_color(rgb(LABEL)),
                 )
+                .child(placed(&picking.placed, "trash".to_string()))
                 .on_click(cx.listener(|picker, _, _, cx| picker.pick("", cx)))
         });
         div()

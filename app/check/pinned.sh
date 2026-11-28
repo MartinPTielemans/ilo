@@ -817,10 +817,15 @@ expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the 
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 ../tools/window-screenshot.sh "$pid" "$out/folder-icon.png" || fail "no window to capture"
 # For a folder with an emoji, Change Icon… opens the picker on its emoji again. The hand at the
-# search's right end, 13 + 44 + 12 down, puts out the six tones along the search, and the fifth,
-# medium-dark, shows each emoji that has tones in it: "thumbs" then finds 👍🏾 first, which ↩ makes
-# the folder's icon. The default tone, the first, puts them back. Each is 20 wide, ending 2 in from
-# the search's end at 12.25 + 8 × 31.
+# search's right end puts out the six tones along the search, and the fifth, medium-dark, shows each
+# emoji that has tones in it: "thumbs" then finds 👍🏾 first, which ↩ makes the folder's icon. The
+# default tone, the first, puts them back. Each is clicked where the picker logged it drawn.
+# Clicks the icon picker's control $1 where the picker drew it, which it logs as it's shown and as
+# its tones come out or go in ("browser: icon picker $1 at x y").
+picker_click() {
+  expect "^browser: icon picker $1 at " "the icon picker didn't draw its $1"
+  send clickkey $(sed -n "s/^browser: icon picker $1 at //p" "$log" | tail -1)
+}
 post rightclick $(pinned_row 0)
 expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Remove Icon, Duplicate'), " \
   "the folder with an icon didn't offer Remove Icon in its menu"
@@ -829,28 +834,24 @@ expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't o
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the folder"
 expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/folder-emoji-grid.png" all || fail "no window to capture"
-tone_y=69
-send clickkey 248.25 $tone_y
-send state
-send clickkey 228.25 $tone_y
+picker_click tones
+picker_click 'tone 4'
 send insert thumbs
 ../tools/window-screenshot.sh "$pid" "$out/emoji-tone.png" all || fail "no window to capture"
 send key return
 expect "^browser: iconed folder $f 👍🏾\$" \
   "the medium-dark tone didn't make thumbs' first match 👍🏾: $(grep '^browser: iconed folder' "$log" | tail -1)"
 expect '^browser: icon picker hidden$' "the emoji picked in its tone didn't close the icon picker"
-# The trash after Emoji takes the icon away: Emoji, 57 wide, and the trash, 24, 7 apart and centred
-# in the 273-wide picker, put the trash's middle 92.5 + 57 + 7 + 12 across and 13 + 14.5 + 12 down.
+# The trash after Emoji takes the icon away.
 post rightclick $(pinned_row 0)
 expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Remove Icon, ')" \
   "the folder with an icon didn't offer Remove Icon in its menu"
 send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the picker on its emoji again"
 expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
-send clickkey 248.25 $tone_y
-send state
-send clickkey 148.25 $tone_y
-send clickkey 168.5 39.5
+picker_click tones
+picker_click 'tone 0'
+picker_click trash
 expect "^browser: iconed folder $f none\$" "the icon picker's trash didn't take the folder's icon away"
 expect '^browser: icon picker hidden$' "the icon picker's trash didn't close it"
 # The menu then offers no Remove Icon, and its Change Icon… gives the folder its star back.
