@@ -64,6 +64,17 @@ fn a_picture_wholly_in_view_shows_its_page_inside_its_ring(cx: &mut TestAppConte
     assert_eq!(host.take(), vec![shown(30, moved)]);
 }
 
+/// The rail scrolls under its pictures, so the wheel over a live one is the rail's, never its
+/// page's (#4441).
+#[gpui::test]
+fn a_live_picture_leaves_the_wheel_to_the_rail(cx: &mut TestAppContext) {
+    let (host, tiles) = tiles(true);
+    let picture = bounds(120., 120., 200., 150.);
+    cx.update(|cx| tiles.place(&[(30, picture)], area(), false, cx));
+    assert_eq!(host.take(), vec![shown(30, picture)]);
+    assert!(host.tiles_taking_wheel.borrow().is_empty());
+}
+
 #[gpui::test]
 fn a_picture_partly_out_of_view_keeps_its_picture(cx: &mut TestAppContext) {
     let (host, tiles) = tiles(true);

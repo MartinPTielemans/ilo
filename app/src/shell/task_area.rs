@@ -566,7 +566,8 @@ impl Shell {
             });
         }
         let at = page_in(from);
-        if self.browser.show_tile(tab, at, TILE_RADIUS) {
+        // The page watched scrolls under the trackpad as in its tab, and stays the agent's (#4441).
+        if self.browser.show_tile(tab, at, TILE_RADIUS, true) {
             return Some(WatchTile {
                 tiles,
                 shown: true,
@@ -824,7 +825,7 @@ impl Shell {
             return;
         }
         let tab = page.tab;
-        if self.browser.show_tile(tab, placed.0, placed.1) {
+        if self.browser.show_tile(tab, placed.0, placed.1, true) {
             if let Some(tile) = self.watch_tile_mut() {
                 tile.placed = Some(placed);
             }
@@ -1028,6 +1029,17 @@ impl Shell {
             && (self.task_area.as_ref())
                 .and_then(|area| area.page.as_ref())
                 .is_some_and(|page| !matches!(page.zoom, Zoom::In(_)))
+    }
+
+    /// The size the core makes each agent's page at: a watch's at rest, beside the conversation,
+    /// or the whole card while a page is full screen, where the watch is (`page_part`), so the
+    /// page watched is never scaled up from a smaller one (#4441).
+    pub(super) fn agent_page_size(&self) -> Size<Pixels> {
+        let (card, _) = self.page_frame(self.viewport);
+        match self.page_fullscreen {
+            true => watched(card).size,
+            false => watch_size(card),
+        }
     }
 
     /// The card's part a page watched has: all of it, or its left while the user stands on it.
@@ -1653,8 +1665,9 @@ impl Shell {
 
     /// What the area draws under a page watched in its tile, which the core draws over it: the
     /// page's own outline and the area's ground round the page, fading in as it zooms; and where
-    /// the tile is, what takes a press on it, which takes the page over. Nothing takes a scroll or
-    /// a key there.
+    /// the tile is, what takes a press on it, which takes the page over. Nothing here takes a key
+    /// or a scroll there: the trackpad over the tile scrolls its page, as the core gives it the
+    /// wheel (#4441).
     fn watch_tile_ground(
         &self,
         tab: u64,

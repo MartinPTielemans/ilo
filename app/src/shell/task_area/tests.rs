@@ -2138,6 +2138,30 @@ fn a_watched_page_is_its_tile_grown_to_the_area(cx: &mut TestAppContext) {
     );
 }
 
+/// The page watched scrolls under the trackpad as in its tab, from its first frame in the tile to
+/// its rest, and the wheel goes with the tile once a click takes the page over (#4441).
+#[gpui::test]
+fn a_watched_page_takes_the_wheel_until_it_is_taken_over(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    let asked = host.take();
+    assert!(
+        asked.iter().any(|line| line.starts_with("tile 30 ")),
+        "{asked:?}"
+    );
+    assert!(host.tiles_taking_wheel.borrow().contains(&30));
+
+    let place = tile_place(&shell, cx);
+    cx.simulate_click(place.center(), gpui::Modifiers::none());
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(at_work(vec![(30, "".into())]), cx)
+    });
+    shell.update(cx, |shell, _| shell.age_watch_press());
+    draw(&shell, cx);
+    assert!(host.take().contains(&"end tile 30".to_string()));
+    assert!(host.tiles_taking_wheel.borrow().is_empty());
+}
+
 /// A window resized while a tile is watched moves the tile alone: the agent's page is never laid
 /// out, selected or shown in the window. Standing on another of the task's pages needs the
 /// conversation's own tiles, so its test is the conversation's
@@ -2739,6 +2763,39 @@ fn a_web_link_from_a_threads_page_opens_in_the_users_space(cx: &mut TestAppConte
             "standing {standing}: the thread's pages changed"
         );
     }
+}
+
+/// While a page is full screen, a watch has the whole card, so the core is told the card's size for
+/// an agent's page, and the size beside the conversation again once it's back (#4441).
+#[gpui::test]
+fn an_agents_page_takes_the_cards_size_while_a_page_is_full_screen(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    let said =
+        |size: gpui::Size<Pixels>| format!("{}x{}", f32::from(size.width), f32::from(size.height));
+    let card = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0)
+    };
+    draw(&shell, cx);
+    host.take();
+
+    shell.update_in(cx, |shell, window, cx| {
+        shell.set_page_fullscreen(true, window, cx)
+    });
+    draw(&shell, cx);
+    let full = card(&shell, cx);
+    assert_eq!(agent_page_sizes(&host.take()), [said(full.size)]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.agent_page_sized),
+        Some(full.size)
+    );
+
+    shell.update_in(cx, |shell, window, cx| {
+        shell.set_page_fullscreen(false, window, cx)
+    });
+    draw(&shell, cx);
+    let back = card(&shell, cx);
+    assert_ne!(back, full, "the card didn't come back from full screen");
+    assert_eq!(agent_page_sizes(&host.take()), [said(split(back).0.size)]);
 }
 
 /// The size the shell tells the core a thread's page has watched here, from `calls`.

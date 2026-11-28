@@ -2319,9 +2319,8 @@ impl Browser for Engine {
         });
     }
 
-    fn show_tile(&self, tab: u64, at: Bounds<Pixels>, radius: f32) -> bool {
-        // No tile takes the wheel until the app says which do (#4441).
-        unsafe { bc::bc_tab_show_tile(tab, self.ui_view, rect(at), f64::from(radius), false) }
+    fn show_tile(&self, tab: u64, at: Bounds<Pixels>, radius: f32, takes_wheel: bool) -> bool {
+        unsafe { bc::bc_tab_show_tile(tab, self.ui_view, rect(at), f64::from(radius), takes_wheel) }
     }
 
     fn end_tile(&self, tab: u64) {
