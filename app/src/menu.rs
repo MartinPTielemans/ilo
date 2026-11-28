@@ -2019,7 +2019,8 @@ pub fn show(request: Request, cx: &mut App) {
         let layout = if blends { layout } else { layout.opaque() };
         // check.sh waits for this line before it chooses.
         log!("browser: menu shown {}", described(&request.items));
-        if request.reorder.is_some() {
+        let reorder = request.reorder.clone().or_else(|| take_reorder(cx));
+        if reorder.is_some() {
             // spaces.sh reads these lines, to drag a row from where it's drawn: the middle of each row of the first
             // level, in the browser window's content, before the run scrolls.
             let level = &layout.levels[0];
@@ -2058,7 +2059,6 @@ pub fn show(request: Request, cx: &mut App) {
                 choices: layout.levels[0].checks,
             }
         });
-        let reorder = request.reorder.clone().or_else(|| take_reorder(cx));
         let led = take_led(cx);
         let mut tracking = Tracking::new(request.items, layout, request.at);
         tracking.sorting.on = reorder.is_some() && !led && search.is_none();
