@@ -115,8 +115,12 @@ impl<K: Copy + Eq + Hash> Sent<K> {
                 Some((held, offset)) if held == key => offset,
                 _ => self.drawn(key, ease),
             };
+            // A spring left from before would go on from `to` as it was, so it's replaced even
+            // when the cell is drawn where it's sent.
             if drawn != target {
                 self.slides.insert(key, (drawn - target, now));
+            } else {
+                self.slides.remove(&key);
             }
         }
         self.to = to;
@@ -135,6 +139,21 @@ impl<K: Copy + Eq + Hash> Sent<K> {
 #[cfg(test)]
 mod tests {
     use super::{edge_scroll, gap_at, held_offset, shifts_for, slot_shift};
+
+    /// A cell sent to where it's drawn stays there: the spring it had is gone, not left to carry
+    /// on from the shift it was sent to before.
+    #[test]
+    fn a_cell_sent_where_it_is_drawn_keeps_no_old_spring() {
+        use std::collections::HashMap;
+        use std::time::{Duration, Instant};
+        let ease: super::Ease = |t| (t < 1.).then_some(t);
+        let mut sent = super::Sent::<u8>::default();
+        let held = Instant::now() + Duration::from_secs(3600);
+        sent.send([1], HashMap::from([(1, -10.)]), None, held, ease);
+        assert_eq!(sent.drawn(1, ease), 0.);
+        sent.send([1], HashMap::new(), None, held, ease);
+        assert_eq!(sent.drawn(1, ease), 0.);
+    }
 
     /// Only a middle within the edge of an end scrolls, toward that end.
     #[test]

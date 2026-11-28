@@ -178,6 +178,17 @@ fn a_card_passing_two_neighbours_moves_two(cx: &mut TestAppContext) {
     assert_eq!(aside(&shell, cx), [(2, -PITCH), (3, -PITCH)]);
 }
 
+/// Holds every spring at its start, which the wall clock would otherwise carry on: what comes
+/// next goes on from where each card was drawn then.
+fn freeze(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, _| {
+        let later = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+        for (_, start) in shell.space_sent.slides.values_mut() {
+            *start = later;
+        }
+    });
+}
+
 /// Let go, the card lands in the slot the others left open, tells the core once, and ⌘Z puts it
 /// back; the others are already where the order puts them.
 #[gpui::test]
@@ -186,6 +197,7 @@ fn the_release_lands_in_the_open_slot(cx: &mut TestAppContext) {
     let from = handle(&shell, cx, 1);
     let to = moved(&shell, cx, 1, 1., 20.);
     hold(cx, from, to);
+    freeze(&shell, cx);
     let_go(cx, to);
     assert_eq!(host.take_edits(), ["move space 1 after 2"]);
     assert!(!shell.read_with(cx, |shell, _| shell.space_dragged(1)));
@@ -195,6 +207,7 @@ fn the_release_lands_in_the_open_slot(cx: &mut TestAppContext) {
         "the drag was a click on the card"
     );
 
+    freeze(&shell, cx);
     report_gliding(&shell, cx, &[2, 1, 3]);
     let from = glide_from(&shell, cx, 2);
     assert!(
@@ -213,6 +226,7 @@ fn escape_puts_every_card_back(cx: &mut TestAppContext) {
     let from = handle(&shell, cx, 1);
     let to = moved(&shell, cx, 1, 1., 20.);
     hold(cx, from, to);
+    freeze(&shell, cx);
     let before = shell.read_with(cx, |shell, _| shell.space_shift(2));
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
     assert!(aside(&shell, cx).is_empty());
@@ -271,6 +285,13 @@ fn a_card_held_at_the_row_s_end_scrolls_the_row(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.cards_room()) > 0.);
     let end = point(px(COLUMN_WIDTH + width - 10.), from.y);
     hold(cx, from, end);
+    // The frames drawn while the card was held stepped by the wall clock, which the test sets
+    // aside: the scroll's time is only the one given it.
+    shell.update(cx, |shell, _| {
+        if let Some(drag) = shell.space_drag.as_mut() {
+            drag.last = None;
+        }
+    });
     let base = std::time::Instant::now();
     let step = |cx: &mut VisualTestContext, after: u64| {
         let now = base + std::time::Duration::from_millis(after);

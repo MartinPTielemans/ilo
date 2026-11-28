@@ -36,7 +36,7 @@ pub(super) struct SpaceDrag {
     /// The gap among the others the card's middle is over, None before it has moved.
     slot: Option<usize>,
     /// When the row last scrolled under the card, for how long to scroll it.
-    last: Option<Instant>,
+    pub(super) last: Option<Instant>,
 }
 
 impl Shell {
