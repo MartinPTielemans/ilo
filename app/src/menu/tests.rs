@@ -2261,3 +2261,18 @@ fn command_z_undoes_the_last_reorder_before_it_closes_the_menu(cx: &mut TestAppC
     assert_eq!(undone.get(), 1, "nothing left to undo");
     assert_eq!(chosen.get(), Some(Closed::Otherwise), "so it closed");
 }
+
+/// A menu's row under the keys or the pointer is the flat plate the command bar and the tab
+/// switcher light (#4402), at its strength in each look, in the menu's own ink.
+#[test]
+fn a_menus_row_is_the_flat_plate_in_both_looks() {
+    for tone in [crate::palette::Tone::Dark, crate::palette::Tone::Light] {
+        let palette = crate::palette::Palette::of(None, tone);
+        let row = super::Highlight::plate(tone == crate::palette::Tone::Light);
+        assert_eq!(row.fill.a, palette.flat_plate().a, "{tone:?}");
+        assert!(
+            row.pressed.a > row.fill.a,
+            "{tone:?}: pressed is no stronger"
+        );
+    }
+}

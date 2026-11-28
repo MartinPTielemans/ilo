@@ -18,19 +18,19 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful,
-    Subscription, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions,
+    AnyElement, App, Bounds, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
+    Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Subscription,
+    Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions,
     accesskit::{Role, Toggled},
     actions, canvas, div, img, point,
     prelude::*,
-    px, rgb, rgba, size, svg,
+    px, rgb, size, svg,
 };
 
 use crate::{
     dismissal::{By, Close, FocusReturn, Returned, Why},
-    palette::{self, Float, STATE_PRESSED},
+    palette::{self, Float, STATE_PRESSED, ink_states},
     settling::Settling,
     shell::cubic_bezier,
     text_input::{Colors, TextInput},
@@ -39,9 +39,9 @@ use crate::{
 actions!(dialog, [Confirm, Cancel, NextField]);
 
 use crate::elevation::Level;
+use crate::tokens::button::SECONDARY;
 use crate::tokens::dialog::ACTION;
 use crate::tokens::dialog::ACTION_HOVERED;
-use crate::tokens::dialog::ACTION_LEDGE;
 use crate::tokens::dialog::ALSO_GAP;
 use crate::tokens::dialog::BUTTON_HEIGHT;
 use crate::tokens::dialog::BUTTON_INSET;
@@ -1299,16 +1299,6 @@ fn chip() -> Div {
         .rounded(px(CHIP_RADIUS))
 }
 
-fn shadow(color: Hsla, y: f32, blur: f32, spread: f32) -> BoxShadow {
-    BoxShadow {
-        color,
-        offset: point(px(0.), px(y)),
-        blur_radius: px(blur),
-        spread_radius: px(spread),
-        inset: false,
-    }
-}
-
 impl Render for Dialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The window holds the card alone, so VoiceOver reads it as the alert it is, and the
@@ -1389,16 +1379,13 @@ impl Render for Dialog {
                 question.cancel.clone(),
                 div().children(esc),
             )
-            // Its border is inside its edge, where Arc's label and chip are measured from.
-            .pl(px(LABEL_X - 1.))
-            .pr(px(CHIP_END - 1.))
+            .pl(px(LABEL_X))
+            .pr(px(CHIP_END))
             // Without its chip, its label is as far in from each side.
-            .when(rests, |button| button.gap_0().pr(px(LABEL_X - 1.)))
-            .border_1()
-            .border_color(palette.plate(CANCEL_BORDER))
-            .bg(palette.plate(CANCEL_FILL))
+            .when(rests, |button| button.gap_0().pr(px(LABEL_X)))
+            .bg(palette.plate(SECONDARY))
             .hover(move |style| style.bg(palette.plate(CANCEL_HOVERED)))
-            .active(move |style| style.bg(palette.state(CANCEL_FILL, STATE_PRESSED)))
+            .active(move |style| style.bg(palette.state(SECONDARY, STATE_PRESSED)))
             .text_color(palette.on_overlay(CANCEL_TEXT))
             .relative()
             .child(button_frame("cancel", asked))
@@ -1410,7 +1397,7 @@ impl Render for Dialog {
             .on_hover(cx.listener(|dialog, hovered, _, cx| dialog.hover("cancel", *hovered, cx)))
             .on_click(cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Cancel, cx)))
         });
-        // A text-only button in Cancel's look, its label as far in from each side.
+        // A text-only secondary button, as Cancel is, its label as far in from each side.
         let also = asked.also.clone().map(|label| {
             div()
                 .id("dialog-also")
@@ -1420,11 +1407,9 @@ impl Render for Dialog {
                 .items_center()
                 .rounded(px(BUTTON_RADIUS))
                 .text_size(px(text::BODY))
-                .border_1()
-                .border_color(palette.plate(CANCEL_BORDER))
-                .bg(palette.plate(CANCEL_FILL))
+                .bg(palette.plate(SECONDARY))
                 .hover(move |style| style.bg(palette.plate(CANCEL_HOVERED)))
-                .active(move |style| style.bg(palette.state(CANCEL_FILL, STATE_PRESSED)))
+                .active(move |style| style.bg(palette.state(SECONDARY, STATE_PRESSED)))
                 .text_color(palette.on_overlay(CANCEL_TEXT))
                 .when(a11y, |button| {
                     button.role(Role::Button).aria_label(label.clone())
@@ -1435,29 +1420,24 @@ impl Render for Dialog {
                 .on_hover(cx.listener(|dialog, hovered, _, cx| dialog.hover("also", *hovered, cx)))
                 .on_click(cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Also, cx)))
         });
-        let (fill, hovered, pressed, ledge, label): (Hsla, Hsla, Hsla, Hsla, Hsla) =
-            match question.tone {
-                Tone::Destructive => {
-                    let hovered = rgb(ACTION_HOVERED).into();
-                    (
-                        rgb(ACTION).into(),
-                        hovered,
-                        hovered,
-                        rgba(ACTION_LEDGE).into(),
-                        rgb(TEXT).into(),
-                    )
-                }
-                Tone::Accent => {
-                    let accent = Hsla::from(palette.accent);
-                    (
-                        accent,
-                        palette.accent_hovered(),
-                        palette.accent_pressed(),
-                        accent.opacity(0.2),
-                        palette.accent_label.into(),
-                    )
-                }
-            };
+        // The action is the main button, filled with the ink and labelled in the other look's ink
+        // (#4402), or the red one for what can't be undone. Neither has a shadow of its own.
+        let (fill, hovered, pressed, label): (Hsla, Hsla, Hsla, Hsla) = match question.tone {
+            Tone::Destructive => {
+                let hovered = rgb(ACTION_HOVERED).into();
+                (rgb(ACTION).into(), hovered, hovered, rgb(TEXT).into())
+            }
+            Tone::Accent => {
+                let label = palette.other_ink();
+                let (hovered, pressed) = ink_states(palette.ink, label);
+                (
+                    palette.ink.into(),
+                    hovered.into(),
+                    pressed.into(),
+                    label.into(),
+                )
+            }
+        };
         let return_chip = (question.on_return == Return::Action && !rests).then(|| {
             chip()
                 .w(px(RETURN_WIDTH))
@@ -1486,19 +1466,14 @@ impl Render for Dialog {
                     .bg(fill)
                     .hover(move |style| style.bg(hovered))
                     .active(move |style| style.bg(pressed))
-                    .shadow(vec![shadow(ledge, 2., 0., 0.)])
                     .text_color(label)
             })
-            // At rest, in Cancel's look: what fills is the answer ↩ gives, and ↩ isn't its.
+            // At rest, secondary as Cancel is: what fills is the answer ↩ gives, and ↩ isn't its.
             .when(rests, |button| {
                 button
-                    .pl(px(LABEL_X - 1.))
-                    .pr(px(LABEL_X - 1.))
-                    .border_1()
-                    .border_color(palette.plate(CANCEL_BORDER))
-                    .bg(palette.plate(CANCEL_FILL))
+                    .bg(palette.plate(SECONDARY))
                     .hover(move |style| style.bg(palette.plate(CANCEL_HOVERED)))
-                    .active(move |style| style.bg(palette.state(CANCEL_FILL, STATE_PRESSED)))
+                    .active(move |style| style.bg(palette.state(SECONDARY, STATE_PRESSED)))
                     .text_color(palette.on_overlay(CANCEL_TEXT))
             })
             .relative()

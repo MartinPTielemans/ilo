@@ -295,10 +295,8 @@ fn click(cx: &mut VisualTestContext, (x, y): (f32, f32)) {
 /// pop-up 8 before the trash, the arrow 8 before that, and the trash 24 across, 14 from the end.
 const BOX_WIDTH: f32 = PAGE_WIDTH;
 const RULE_ROW: f32 = CONTROL_HEIGHT + 2. * SHORT_PADDING;
-/// A group's rim, which its rows sit inside.
-const RIM: f32 = 1.;
-const CONDITION_LEFT: f32 = RIM + ROW_X;
-const SPACE_LEFT: f32 = BOX_WIDTH - RIM - ROW_X - CONTROL_HEIGHT - RULE_GAP - RULE_SPACE;
+const CONDITION_LEFT: f32 = ROW_X;
+const SPACE_LEFT: f32 = BOX_WIDTH - ROW_X - CONTROL_HEIGHT - RULE_GAP - RULE_SPACE;
 const CONDITION_X: f32 = CONDITION_LEFT + 40.;
 const SPACE_X: f32 = SPACE_LEFT + 40.;
 const ARROW_X: f32 = SPACE_LEFT - RULE_GAP - BUTTON_GLYPH / 2.;
@@ -374,11 +372,11 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
     let everything = otherwise(&view, cx);
     click(cx, everything);
     // Each menu puts the chosen item's text on its button's: a rule's 10 into its pop-ups, 8
-    // under the row's top, and Everything else's at its row's end, inside the group's 1 rim.
+    // under the row's top, and Everything else's at its row's end, as a group has no rim (#4402).
     let (otherwise_x, otherwise_y) = text_at(&view, Popup::Otherwise, cx);
     assert_eq!(
         otherwise_x,
-        BOX_WIDTH - RIM - ROW_X - RULE_SPACE + CONTROL_PADDING
+        BOX_WIDTH - ROW_X - RULE_SPACE + CONTROL_PADDING
     );
     assert!(
         otherwise_y > RULE_ROW + BUTTONS_TOP + CONTROL_HEIGHT + GROUP_GAP,
@@ -390,12 +388,12 @@ fn pop_ups_set_a_rules_condition_and_space(cx: &mut TestAppContext) {
             format!(
                 "{} {}: URL contains (checked), URL is equal to",
                 CONDITION_LEFT + CONTROL_PADDING,
-                RIM + SHORT_PADDING
+                SHORT_PADDING
             ),
             format!(
                 "{} {}: The Space in Front, Work (checked), Home, Little Window",
                 SPACE_LEFT + CONTROL_PADDING,
-                RIM + SHORT_PADDING
+                SHORT_PADDING
             ),
             format!(
                 "{otherwise_x} {otherwise_y}: The Space in Front (checked), Work, Home, Little Window"

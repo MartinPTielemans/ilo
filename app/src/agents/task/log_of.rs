@@ -278,11 +278,6 @@ fn logged(kind: &IloKind) -> bool {
         | IloKind::Helpers { .. }
         | IloKind::NotOurTools
         | IloKind::StartedWithout { .. }
-        | IloKind::KeptAt { .. }
-        | IloKind::SetBack { .. }
-        | IloKind::NotRestarted { .. }
-        | IloKind::NotRaised { .. }
-        | IloKind::LeftRunning { .. }
         | IloKind::EndedLeft { .. }
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }

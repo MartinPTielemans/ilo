@@ -22,8 +22,8 @@ use crate::palette::{self, Float, Palette};
 use crate::shell::KEY_CONTEXT;
 pub use crate::tokens::command_bar::{ABOVE_MIDDLE, RADIUS, WIDTH};
 use crate::tokens::command_bar::{
-    CHIP_RADIUS, DIM, FIELD_FADE, HOVERED, ICON_BOX, ICON_BOX_X, ICON_SIZE, LIST_X, PLATE_INSET,
-    PLATE_RADIUS, ROW_END, ROW_GLYPH, ROW_HEIGHT, SELECTED_DIM, TITLE, TITLE_X,
+    DIM, FIELD_FADE, HOVERED, ICON_BOX, ICON_BOX_X, ICON_SIZE, LIST_X, PLATE_INSET, PLATE_RADIUS,
+    ROW_END, ROW_GLYPH, ROW_HEIGHT, TITLE, TITLE_X,
 };
 use crate::tokens::tab_switcher::ROWS;
 use crate::tokens::text;
@@ -153,7 +153,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<TabSwitcher
         KeyBinding::new("ctrl-escape", Stay, Some("TabSwitcher")),
         KeyBinding::new("escape", Stay, Some("TabSwitcher")),
     ]);
-    let window = Level::Modal
+    let window = Level::Popover
         .panel_margin()
         .around(size(px(WIDTH), px(height(1))));
     let bounds = Bounds::new(point(px(0.), px(0.)), window);
@@ -318,18 +318,14 @@ impl TabSwitcher {
             return div().into_any_element();
         };
         let selected = at == shown.selected;
-        // The selected row keeps its accent under the pointer, as ⌘T's does.
+        // The selected row keeps its plate under the pointer, as ⌘T's does. It's the flat plate,
+        // with no colour, so its text and icon are every row's (#4402).
         let hovered = !selected && self.hovered == Some(at);
-        let (accent, label) = (Hsla::from(palette.accent), Hsla::from(palette.accent_label));
-        let (title, dim, glyph) = match selected {
-            true => (label, label.opacity(SELECTED_DIM), label),
-            false => (
-                palette.on_overlay(TITLE),
-                palette.on_overlay(DIM),
-                palette.on_overlay(ROW_GLYPH),
-            ),
-        };
-        // The icon sits on a tile of the accent's label in the selected row, as in ⌘T's.
+        let (title, dim, glyph) = (
+            palette.on_overlay(TITLE),
+            palette.on_overlay(DIM),
+            palette.on_overlay(ROW_GLYPH),
+        );
         let icon = div()
             .size(px(ICON_BOX))
             .mr(px(TITLE_X - ICON_BOX_X - ICON_BOX))
@@ -337,8 +333,6 @@ impl TabSwitcher {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(CHIP_RADIUS))
-            .when(selected, |icon| icon.bg(label))
             .when(item.sleeping, |icon| {
                 icon.opacity(crate::tokens::shell::SLEEPING_FAVICON)
             })
@@ -346,7 +340,7 @@ impl TabSwitcher {
                 Some(glyph) => svg()
                     .path(glyph)
                     .size(px(ICON_SIZE))
-                    .text_color(if selected { accent } else { glyph_ink(palette) })
+                    .text_color(glyph_ink(palette))
                     .into_any_element(),
                 None => icon(palette, &item.icon),
             });
@@ -361,7 +355,9 @@ impl TabSwitcher {
             .pr(px(ROW_END))
             .rounded(px(PLATE_RADIUS))
             .text_color(title)
-            .when(selected, |line| line.bg(accent))
+            .when(selected, |line| {
+                line.bg(palette.on_float(Float::TabSwitcher, palette.flat_plate()))
+            })
             .when(hovered, |line| {
                 line.bg(palette.on_float(Float::TabSwitcher, palette.plate(HOVERED)))
             })
@@ -529,9 +525,9 @@ impl Render for TabSwitcher {
             .size_full()
             .rounded(px(RADIUS))
             .border(px(1.))
-            .border_color(Level::Modal.rim_in(&palette));
+            .border_color(Level::Popover.rim_in(&palette));
         root.child(
-            Level::Modal.in_window(
+            Level::Popover.in_window(
                 div()
                     .id("tab-switcher")
                     .key_context("TabSwitcher")
