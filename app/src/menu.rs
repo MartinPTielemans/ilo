@@ -2019,6 +2019,20 @@ pub fn show(request: Request, cx: &mut App) {
         let layout = if blends { layout } else { layout.opaque() };
         // check.sh waits for this line before it chooses.
         log!("browser: menu shown {}", described(&request.items));
+        if request.reorder.is_some() {
+            // spaces.sh reads these lines, to drag a row from where it's drawn: the middle of each row of the first
+            // level, in the browser window's content, before the run scrolls.
+            let level = &layout.levels[0];
+            for (at, &item) in level.items.iter().enumerate() {
+                let row = level.row_bounds(at, &request.items);
+                log!(
+                    "browser: menu row {} at {} {}",
+                    request.items[item].title,
+                    f32::from(row.center().x).round(),
+                    f32::from(row.center().y).round()
+                );
+            }
+        }
         let frame = layout.frame;
         let origin = menu.fixed.unwrap_or(frame.origin);
         let search = (request.items.iter().any(|item| item.field)).then(|| {
@@ -2331,7 +2345,7 @@ impl ContextMenu {
             Outcome::Moved(item, after) => {
                 let moved = self.shown.as_ref().and_then(|shown| shown.reorder.clone());
                 if let Some(reorder) = moved {
-                    // Names no Space.
+                    // spaces.sh reads this line, which names no Space.
                     log!("browser: menu reordered a row");
                     cx.defer(move |cx| (reorder.moved)(item, after, cx));
                 }
@@ -2497,6 +2511,7 @@ impl ContextMenu {
             shown.tracking.sorting.start = Some(crate::motion::start(cx));
             shown.tracking.undo_move();
             if let Some(reorder) = shown.reorder.clone() {
+                // spaces.sh reads this line.
                 log!("browser: menu undid a reorder");
                 cx.defer(move |cx| (reorder.undo)(cx));
             }

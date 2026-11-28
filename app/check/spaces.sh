@@ -308,6 +308,30 @@ choose_space "$second_name" "$second"
 expect_tabs "$b" "$b" "after the Space button's menu showed Space $second"
 choose_space "$first_name" "$first"
 expect_tabs "$a" "$a" "after the Space button's menu showed Space $first"
+# A row of the Space button's menu held and moved past the next row's middle moves its Space there,
+# the menu staying open, and ⌘Z in the open menu puts it back before it would close the menu
+# (#4440). The rows are pressed where the menu logs them, and the core's order is read from the
+# app's own line once it reports it.
+post click "$(space_button)"
+expect "^browser: menu row $first_name at " "the Space button's menu didn't log where its rows are"
+menu_row() {
+  grep "^browser: menu row $1 at " "$log" | tail -1 | sed "s/^browser: menu row $1 at //"
+}
+first_row=$(menu_row "$first_name")
+second_row=$(menu_row "$second_name")
+[ -n "$first_row" ] && [ -n "$second_row" ] || fail "the Space button's menu didn't log its Spaces' rows"
+send move $first_row
+send press $first_row
+send dragto ${first_row% *} $((${second_row#* } + 6))
+send release ${first_row% *} $((${second_row#* } + 6))
+expect '^browser: menu reordered a row$' "a row held past the next row's middle didn't reorder the menu"
+expect "^browser: spaces $second $first\$" "the menu's row moved past the next didn't move its Space in the core"
+none_since '^browser: menu closed$' || fail "a row's drop closed the menu"
+send key z cmd
+expect '^browser: menu undid a reorder$' "⌘Z in the open menu didn't undo the reorder"
+expect "^browser: spaces $first $second\$" "⌘Z in the menu didn't put the Spaces back in the core"
+send key escape
+expect '^browser: menu closed$' "escape didn't close the Space button's menu"
 ../tools/window-screenshot.sh "$pid" "$out/spaces.png" || fail "no window to capture"
 
 # A tab whose page lets it go only after the Space switch typed straight after its ⌘W, as a loading
