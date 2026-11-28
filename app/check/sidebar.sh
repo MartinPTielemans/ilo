@@ -1,13 +1,14 @@
 # check.sh runs this at 665.
-# The sidebar's edge is GPUI's, not the page's (#4455): the pointer 5 points inside the docked
+# The sidebar's edge shows the resize arrows (#4455). The pointer 5 points inside the docked
 # sidebar's edge toward the page, which drags its width, hits one of GPUI's views and not the
-# page's, with the keyboard in the UI, with a click in the page first, and on the right after the
-# command bar's Move Sidebar to the Right. The driver's `cursor` also logs the app's cursor, but
-# its synthetic moves don't reach GPUI's cursor rects (over the command bar's field, which GPUI
-# sets to an I-beam, it read an arrow, run 46077244069), so the cursor is logged, never asserted;
-# the lib test (shell/edge_cursor_tests.rs) holds that a press there is the edge's, which GPUI
-# decides with the cursor by one topmost-hitbox rule. The Mac's alone, where the page's view is.
-
+# page's, and GPUI's ask for the resize arrows reaches the embedded view: the run logs each style
+# GPUI asks the Mac window for ("browser: cursor style <Style> applied", or dropped; the gpui_macos
+# patch, only with the driver), with the keyboard in the UI, with a click in the page first, and on
+# the right after the command bar's Move Sidebar to the Right. Asked there with the key window
+# Chromium's, it was dropped, so the view's cursor rect stayed an arrow (run 46088950116). The
+# driver's synthetic moves don't reach GPUI's cursor rects (over the command bar's field, which
+# GPUI sets to an I-beam, it read an arrow, run 46077244069), so what shows is the owner's to see.
+# The Mac's alone, where the page's view is and the window is Chromium's.
 if [ "$(uname)" != Darwin ]; then
   echo "skip: sidebar: the page's native view that could cover the edge is the Mac's."
 else
