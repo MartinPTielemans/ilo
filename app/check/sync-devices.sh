@@ -491,9 +491,13 @@ expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab d
 
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
 # the store): B's Settings › Passwords lists it. B removes it, and A's list hears it go.
+# A's window has shown no page since its ten tabs were closed, so ⌘L gives the keyboard to its
+# resting bar, the same bar as the command bar, drawn in the empty Space (#4140).
 device a
 forward
-go_from_bar "${site#http://}login.html"
+resting_key l "device A window"
+send insert "${site}login.html"
+send key return
 expect "^browser: loaded [0-9]* ${site}login.html\$" "A's login page didn't load"
 # By the page it loaded: a Today tab sync brings, such as the one B opened, says its title too.
 tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}login.html\$|\1|p" "$log" | tail -1)
