@@ -3737,6 +3737,11 @@ LRESULT CALLBACK HeldProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
           }
         });
       }
+    } else if (message == WM_SETTINGCHANGE && wparam == SPI_SETCLIENTAREAANIMATION &&
+               g_reduce_motion_changed) {
+      // FrameProc hears "Show animations in Windows" change once the window shows; till then the
+      // held window does, as the app follows it from launch.
+      g_reduce_motion_changed();
     }
   }
   return DefSubclassProc(hwnd, message, wparam, lparam);
