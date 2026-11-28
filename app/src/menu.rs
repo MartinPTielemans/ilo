@@ -2191,6 +2191,14 @@ pub fn dismissed(cx: &mut App) {
     update(cx, |menu, _, cx| menu.close(Closing::Left, cx));
 }
 
+/// ⌘Z at the menu, which the Mac's host hears before the window does and would close the menu
+/// with: undoes the last reorder the menu made, if it made one. Returns whether it did.
+pub fn undo_reorder(cx: &mut App) -> bool {
+    let mut undone = false;
+    update(cx, |menu, _, cx| undone = menu.undo_reorder(cx));
+    undone
+}
+
 /// Chooses the enabled item titled `title`, as the driver does. Returns whether there was one.
 pub fn choose(title: &str, cx: &mut App) -> bool {
     let mut chosen = false;
@@ -2495,8 +2503,29 @@ impl ContextMenu {
         cx.notify();
     }
 
+    /// Puts back the row this menu last moved, and tells the shell to undo the move, if there is
+    /// one. Returns whether there was.
+    fn undo_reorder(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(shown) = self
+            .shown
+            .as_mut()
+            .filter(|shown| shown.tracking.can_undo())
+        else {
+            return false;
+        };
+        shown.tracking.sorting.start = Some(crate::motion::start(cx));
+        shown.tracking.undo_move();
+        if let Some(reorder) = shown.reorder.clone() {
+            // spaces.sh reads this line.
+            log!("browser: menu undid a reorder");
+            cx.defer(move |cx| (reorder.undo)(cx));
+        }
+        cx.notify();
+        true
+    }
+
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let Some(shown) = self.shown.as_mut() else {
+        let Some(shown) = self.shown.as_ref() else {
             return;
         };
         // While an input method composes in a search's field, every key is the composition's: ↩
@@ -2517,17 +2546,9 @@ impl ContextMenu {
             && !modifiers.shift
             && !modifiers.alt
             && event.keystroke.key == "z"
-            && shown.tracking.can_undo()
+            && self.undo_reorder(cx)
         {
-            shown.tracking.sorting.start = Some(crate::motion::start(cx));
-            shown.tracking.undo_move();
-            if let Some(reorder) = shown.reorder.clone() {
-                // spaces.sh reads this line.
-                log!("browser: menu undid a reorder");
-                cx.defer(move |cx| (reorder.undo)(cx));
-            }
             cx.stop_propagation();
-            cx.notify();
             return;
         }
         if modifiers.platform || modifiers.control {
@@ -2542,6 +2563,9 @@ impl ContextMenu {
             if search.is_some() {
                 cx.stop_propagation();
             }
+            let Some(shown) = self.shown.as_mut() else {
+                return;
+            };
             let outcome = shown.tracking.key(key, Instant::now());
             self.outcome(outcome, cx);
             self.changed(cx);

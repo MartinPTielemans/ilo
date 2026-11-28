@@ -415,6 +415,14 @@ pub(crate) extern "C" fn menu_dismissed() {
     update_app(menu::dismissed);
 }
 
+/// ⌘Z typed at ilo's menu: whether the menu undid a reorder, rather than the key closing it.
+#[cfg(target_os = "macos")]
+pub(crate) extern "C" fn menu_undo() -> bool {
+    let mut undone = false;
+    update_app(|cx| undone = menu::undo_reorder(cx));
+    undone
+}
+
 /// The driver chooses `title` in ilo's menu.
 pub(crate) extern "C" fn menu_choose(title: *const c_char) -> bool {
     let title = unsafe { CStr::from_ptr(title) }

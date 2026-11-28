@@ -365,6 +365,8 @@ unsafe extern "C" {
     pub fn host_hide_dialog();
     pub fn host_dialog_leaving();
     pub fn host_add_site_controls(view: *mut c_void, dismissed: extern "C" fn());
+    #[cfg(target_os = "macos")]
+    pub fn host_menu_window_on_undo(undo: extern "C" fn() -> bool);
     pub fn host_add_menu_window(
         view: *mut c_void,
         pointer: extern "C" fn(kind: i32, x: f64, y: f64) -> bool,

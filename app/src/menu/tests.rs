@@ -2254,6 +2254,19 @@ fn command_z_undoes_the_last_reorder_before_it_closes_the_menu(cx: &mut TestAppC
     assert_eq!(*moved.borrow(), [(0, Some(1))]);
     assert_eq!(chosen.get(), None, "a drop leaves the menu open");
 
+    // The Mac's host hears ⌘Z first and asks the menu, which undoes the reorder, once.
+    let host_took = |cx: &mut VisualTestContext| cx.cx.update(super::undo_reorder);
+    assert!(host_took(cx), "the host's ⌘Z undid the reorder");
+    assert_eq!(undone.get(), 1);
+    assert!(!host_took(cx), "and has nothing to undo after");
+    assert_eq!(chosen.get(), None, "the menu stayed open");
+    cx.run_until_parked();
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(from + point(px(0.), px(6.)), None, Modifiers::none());
+    cx.simulate_mouse_move(over, None, Modifiers::none());
+    cx.simulate_mouse_up(over, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    undone.set(0);
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(undone.get(), 1, "⌘Z undid the reorder");
     assert_eq!(chosen.get(), None, "and the menu stayed open");
