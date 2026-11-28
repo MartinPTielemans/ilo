@@ -4,8 +4,11 @@
 
 use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, px, size};
+use gpui::{
+    App, Bounds, Entity, Pixels, Point, RenderImage, SharedString, Size, Window, point, px, size,
+};
 
+use crate::command_bar::CommandBar;
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
@@ -921,6 +924,20 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// A command bar to rest in this window's empty Space, whose page draws its field and rows
+    /// (#4140). It asks nothing of the core until it's typed in.
+    fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
+    /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
+    /// `home`, at the level `tier` the user picked there (#4140). Only the user's ↩ there calls
+    /// it: no agent has a path to it.
+    fn start_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        home: u64,
+        tier: crate::agents::tier::Tier,
+        cx: &mut App,
+    );
     /// Whether the user types in a field of a window over this one: find, the password offer, the
     /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
     /// gone back to the page with it still showing.
@@ -1015,6 +1032,8 @@ pub trait Browser {
     }
     /// Opens the Settings window, or brings it to the front.
     fn settings(&self, cx: &mut App);
+    /// Opens the Settings window on Agents' Off limits list, scrolled to it.
+    fn off_limits(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.
     fn shortcuts(&self, cx: &mut App);
     /// Opens the Settings window on its About tab.
@@ -1042,6 +1061,9 @@ pub trait Browser {
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
     /// changes.
     fn show_task(&self, agent: SharedString, cx: &mut App);
+    /// The command bar, just opened for a new tab, takes `asked` as an ask, as if the user had
+    /// typed it and pressed ⇥: an ended task's Start Again (#4105). Nothing is sent.
+    fn ask_again(&self, _asked: SharedString, _cx: &mut App) {}
     /// Asks for a picture of a task's page for its conversation, which the browser answers with
     /// `Shell::page_pictured` and `request`.
     fn task_picture(&self, tab: u64, request: u64, cx: &mut App);

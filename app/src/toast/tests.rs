@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use gpui::{Bounds, Pixels, TestAppContext, hsla};
+use gpui::{Bounds, Pixels, TestAppContext};
 
 use super::*;
 
@@ -31,14 +31,8 @@ const TIME: Duration = Duration::from_secs(5);
 
 fn open_toast(cx: &mut TestAppContext) -> Rc<Recorder> {
     let host = Rc::new(Recorder::default());
-    cx.update(|cx| {
-        open(
-            host.clone(),
-            |_| (hsla(0., 0., 0., 1.), Default::default()),
-            cx,
-        )
-    })
-    .expect("no toast window");
+    cx.update(|cx| open(host.clone(), |_| Default::default(), cx))
+        .expect("no toast window");
     host
 }
 
@@ -206,13 +200,7 @@ fn a_toast_with_buttons_takes_clicks_while_it_shows(cx: &mut TestAppContext) {
 fn voiceover_says_the_toast_as_it_comes(cx: &mut TestAppContext) {
     use gpui::{VisualTestContext, accesskit::Live};
     let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| {
-        open(
-            host.clone(),
-            |_| (hsla(0., 0., 0., 1.), Default::default()),
-            cx,
-        )
-    });
+    let window = cx.update(|cx| open(host.clone(), |_| Default::default(), cx));
     let mut window = VisualTestContext::from_window(window.expect("no toast window").into(), cx);
     window.simulate_a11y_activation();
     show_deleted(cx);
@@ -516,4 +504,185 @@ fn a_screen_reader_hears_what_the_toast_says(cx: &mut TestAppContext) {
         .map(|(_, node)| (node.live(), node.label(), node.value()));
     let said = Some("Space deleted! Use ⌘Z to undo.");
     assert_eq!(status, Some((Some(Live::Polite), said, said)));
+}
+
+/// The toast's window, for what happens in it.
+fn toast_window(cx: &mut TestAppContext) -> WindowHandle<Toast> {
+    cx.update(|cx| cx.global::<ToastWindow>().0)
+}
+
+/// The pointer comes onto the toast, or leaves it.
+fn point_at(cx: &mut TestAppContext, on: bool) {
+    let window = toast_window(cx);
+    cx.update(|cx| window.update(cx, |toast, _, cx| toast.hover(on, cx)))
+        .unwrap();
+    cx.run_until_parked();
+}
+
+fn show_saved(cx: &mut TestAppContext) {
+    let save = Button {
+        label: Label::Text("Save".into()),
+        name: "save",
+        run: Rc::new(|_, _| {}),
+    };
+    cx.update(|cx| show_with_buttons("Screenshot Copied to Clipboard", vec![save], TIME, cx));
+    cx.run_until_parked();
+}
+
+/// The pointer on a toast's buttons stops its time, and once it leaves the toast has what was left:
+/// 2 s counted, so 3 s after the pointer goes, however long it stayed.
+#[gpui::test]
+fn the_pointer_on_a_toast_holds_it_and_off_it_the_rest_of_its_time_counts(cx: &mut TestAppContext) {
+    let host = open_toast(cx);
+    show_saved(cx);
+    host.0.take();
+    after(cx, &host, 2.);
+    point_at(cx, true);
+    assert!(
+        after(cx, &host, 30.).is_empty(),
+        "it left under the pointer"
+    );
+    point_at(cx, false);
+    assert!(
+        after(cx, &host, 2.9).is_empty(),
+        "the time it had counted was lost"
+    );
+    assert_eq!(after(cx, &host, 0.1), ["clicks false"]);
+    assert_eq!(after(cx, &host, LEAVE), ["hide"]);
+}
+
+/// A toast without buttons lets the pointer through to the page, so nothing holds it there.
+#[gpui::test]
+fn the_pointer_holds_only_a_toast_with_buttons(cx: &mut TestAppContext) {
+    let host = open_toast(cx);
+    show_deleted(cx);
+    host.0.take();
+    point_at(cx, true);
+    assert!(after(cx, &host, 5.).is_empty());
+    assert_eq!(after(cx, &host, LEAVE), ["hide"]);
+}
+
+/// The keyboard in the toast holds it, until it goes.
+#[gpui::test]
+fn the_keyboard_in_a_toast_holds_it(cx: &mut TestAppContext) {
+    let host = open_toast(cx);
+    show_deleted(cx);
+    host.0.take();
+    after(cx, &host, 1.);
+    let window = toast_window(cx);
+    let focus = |cx: &mut TestAppContext, focused: bool| {
+        cx.update(|cx| {
+            window.update(cx, |toast, window, cx| match focused {
+                // The keyboard is in a window only while it's the key one.
+                true => {
+                    window.activate_window();
+                    window.focus(&toast.focus, cx)
+                }
+                false => window.blur(cx),
+            })
+        })
+        .unwrap();
+        draw(cx);
+        cx.run_until_parked();
+    };
+    focus(cx, true);
+    assert!(
+        after(cx, &host, 30.).is_empty(),
+        "it left with the keyboard in it"
+    );
+    focus(cx, false);
+    assert!(after(cx, &host, 3.9).is_empty());
+    after(cx, &host, 0.1);
+    assert_eq!(after(cx, &host, LEAVE), ["hide"]);
+}
+
+/// While the user is in another app the toast waits for them, and back, it has the rest of its
+/// time; one shown while they're away waits too.
+#[gpui::test]
+fn while_the_app_is_away_a_toast_waits(cx: &mut TestAppContext) {
+    let host = open_toast(cx);
+    show_deleted(cx);
+    host.0.take();
+    after(cx, &host, 3.);
+    cx.update(|cx| app_away(true, cx));
+    assert!(
+        after(cx, &host, 60.).is_empty(),
+        "it left while the app was away"
+    );
+    cx.update(|cx| app_away(false, cx));
+    assert!(after(cx, &host, 1.5).is_empty());
+    after(cx, &host, 0.5);
+    assert_eq!(after(cx, &host, LEAVE), ["hide"]);
+
+    cx.update(|cx| app_away(true, cx));
+    show_deleted(cx);
+    host.0.take();
+    assert!(
+        after(cx, &host, 60.).is_empty(),
+        "shown while away, it left"
+    );
+    cx.update(|cx| app_away(false, cx));
+    after(cx, &host, 5.);
+    assert_eq!(after(cx, &host, LEAVE), ["hide"]);
+}
+
+/// Each reason holds by itself: the pointer leaving while the app is away lets nothing go.
+#[gpui::test]
+fn two_reasons_hold_a_toast_until_both_go(cx: &mut TestAppContext) {
+    let host = open_toast(cx);
+    show_saved(cx);
+    host.0.take();
+    after(cx, &host, 1.);
+    point_at(cx, true);
+    cx.update(|cx| app_away(true, cx));
+    point_at(cx, false);
+    assert!(
+        after(cx, &host, 30.).is_empty(),
+        "the pointer going let the app's hold go"
+    );
+    cx.update(|cx| app_away(false, cx));
+    assert!(after(cx, &host, 3.9).is_empty());
+    assert_eq!(after(cx, &host, 0.1), ["clicks false"]);
+}
+
+/// A toast stays usable over a dialog: a press in it, off its buttons, closes neither the toast nor
+/// the dialog under it.
+#[gpui::test]
+fn a_press_in_a_toast_over_a_dialog_closes_neither(cx: &mut TestAppContext) {
+    struct Asked;
+    impl crate::dialog::Host for Asked {
+        fn show(&self, _: Option<u64>, _: Option<Bounds<Pixels>>, _: bool) {}
+        fn hide(&self) {}
+    }
+    cx.update(|cx| crate::dialog::open(Rc::new(Asked), cx))
+        .expect("no window for the dialog");
+    cx.update(|cx| {
+        let detail = "Its 3 tabs go with it. ⌘Z brings them back.".into();
+        crate::dialog::ask(
+            None,
+            "Delete “Work”?".into(),
+            detail,
+            "Delete",
+            Box::new(|_| {}),
+            cx,
+        )
+    });
+    let host = open_toast(cx);
+    resize(cx, 800.);
+    show_saved(cx);
+    rest(cx);
+    draw(cx);
+    let plate = host.1.take().pop().expect("the toast has no plate");
+    host.0.take();
+    let mut toast = gpui::VisualTestContext::from_window(toast_window(cx).into(), cx);
+    // In the plate, before its words.
+    let at = point(plate.origin.x + px(4.), plate.center().y);
+    toast.simulate_click(at, gpui::Modifiers::none());
+    toast.run_until_parked();
+    assert!(host.0.take().is_empty(), "the press took the toast");
+    assert!(cx.update(|cx| showing("Screenshot Copied to Clipboard", cx)));
+    assert!(
+        cx.update(|cx| crate::dialog::asking(cx)),
+        "the press closed the dialog"
+    );
 }

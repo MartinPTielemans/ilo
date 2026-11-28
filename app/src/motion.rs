@@ -20,7 +20,8 @@ use gpui::App;
 /// Long past the end of any motion here.
 const LONG_AGO: Duration = Duration::from_secs(10);
 
-/// Whether things are to keep still: the system's Reduce Motion (`App::reduce_motion`).
+/// Whether things are to keep still: the system's Reduce Motion (`App::reduce_motion`). Every
+/// motion asks here rather than read that itself; only main.rs's `set_reduce_motion` writes it.
 pub fn still(cx: &App) -> bool {
     cx.reduce_motion()
 }

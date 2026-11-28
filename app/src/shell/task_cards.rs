@@ -2,7 +2,7 @@
 //! each, of a player's shape and fill, oldest lowest, so the list's rows above never move as tasks
 //! come and go. The favicon's column holds the state's glyph; the title is a row's, over a status
 //! line where each step rolls in, the agent's question, or its result's line; its chips sit under
-//! that: the answers, Retry, Copy or Open. ✕ shows under the pointer. Three show, waiting first,
+//! that: the answers, Retry, its assistant's Sign in to … or Get …, or Open. ✕ shows under the pointer. Three show, waiting first,
 //! then working, then done, and a fourth plate says how many more there are and opens the foot to
 //! all of them. While ⌘T asks for a task, the foot holds an empty slot a plate tall, which the bar
 //! folds into and the card fills. The foot is the window's, as the players are, so switching Spaces
@@ -37,8 +37,12 @@ use super::{
     TILE_RADIUS, TITLE, TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate,
     selected_plate, title,
 };
+use crate::agents::runner::Cli;
+use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, TaskAction, foot_words, open_label, status_lead};
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::FIELD_PLATE as URL_FIELD;
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
+use crate::tokens::shell::MEDIA_BUTTON;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
     ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CHIPS,
@@ -51,7 +55,6 @@ use crate::tokens::shell::task::{
     GHOST_RADIUS, GLYPH, GLYPH_TOP, HEIGHT, LINE, QUESTION_LINE, SHIMMER_FROM, SHIMMER_HIGH,
     SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
 };
-use crate::tokens::shell::{MEDIA_BUTTON, URL_FIELD};
 use crate::tokens::text;
 use crate::tooltip::text_width;
 use glyph::{Glyph, State};
@@ -126,7 +129,8 @@ pub(super) struct Shape {
 enum Chip {
     Answer(SharedString),
     Retry,
-    Copy(&'static str),
+    /// A failure's fix, its assistant's row's own button.
+    Assistant(Cli, Offer),
     Open(SharedString),
 }
 
@@ -135,21 +139,21 @@ impl Chip {
         match self {
             Chip::Answer(answer) => answer.clone(),
             Chip::Retry => "Retry".into(),
-            Chip::Copy(_) => "Copy".into(),
+            Chip::Assistant(cli, offer) => offer.label(*cli).unwrap_or_default().into(),
             Chip::Open(label) => label.clone(),
         }
     }
 }
 
-/// A card's chips: the ask's answers, Limit's Retry, Copy for the command that fixes a failure, or
+/// A card's chips: the ask's answers, Limit's Retry, a failure's fix from its assistant's row, or
 /// Done's Open <site> or Open 3 pages.
 fn chips(card: &Card) -> Vec<Chip> {
     let mut chips: Vec<Chip> = card.answers.iter().cloned().map(Chip::Answer).collect();
     if card.retry {
         chips.push(Chip::Retry);
     }
-    if let Some(command) = card.command {
-        chips.push(Chip::Copy(command));
+    if let Some((cli, offer)) = card.fix {
+        chips.push(Chip::Assistant(cli, offer));
     }
     if let Some(label) = open_label(&card.open) {
         chips.push(Chip::Open(label));
@@ -807,7 +811,7 @@ impl Shell {
     /// the slot's plate.
     fn sync_foot(&mut self, took: Option<SharedString>, cx: &mut Context<Self>) {
         let now = clock();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let animate = self.foot.primed;
         let moves = animate && !still;
         self.foot.still = still;
@@ -971,7 +975,7 @@ impl Shell {
     /// whose card fades in then, or, where it couldn't fold, hidden, and the card fades in at once.
     pub fn fold_started(&mut self, folded: bool, cx: &mut Context<Self>) {
         let now = clock();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let Some(plate) = (self.foot.plates.iter_mut())
             .find(|plate| plate.holds == Holds::Slot && !plate.leaving)
         else {
@@ -999,7 +1003,7 @@ impl Shell {
     /// shimmer draw on the loading dots' clock instead, as they move all the while it works.
     pub(super) fn step_foot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = clock();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         self.foot.still = still;
         self.foot.primed = true;
         if let Some(opening) = &self.foot.opening {
@@ -1112,7 +1116,7 @@ impl Shell {
             self.fold_later(agent.clone(), 0.);
         }
         if let Some(from) = from
-            && !cx.reduce_motion()
+            && !crate::motion::still(cx)
             && !tabs.is_empty()
         {
             let origin = self.sidebar_origin.get();
@@ -1221,7 +1225,7 @@ impl Shell {
         }
         let now = clock();
         let flies =
-            self.foot.primed && !cx.reduce_motion() && !self.one_space() && self.foot_drawn();
+            self.foot.primed && !crate::motion::still(cx) && !self.one_space() && self.foot_drawn();
         let from = self
             .foot
             .plates_drawn
@@ -1811,10 +1815,17 @@ impl Shell {
                             shell.open_task_pages(agent.clone(), None, from, cx);
                         }))
                     }
-                    Chip::Copy(command) => element.on_click(cx.listener(move |shell, _, _, cx| {
-                        cx.stop_propagation();
-                        shell.copy(command, "Command Copied", cx);
-                    })),
+                    Chip::Assistant(cli, Offer::Get) => {
+                        element.on_click(cx.listener(move |shell, _, _, cx| {
+                            cx.stop_propagation();
+                            log!("browser: assistant install page {} via sidebar", cli.id());
+                            shell.browser.open_page(cli.install_page(), cx);
+                        }))
+                    }
+                    Chip::Assistant(_, Offer::Cancel) => {
+                        element.on_click(act(agent, TaskAction::CancelSignIn, cx))
+                    }
+                    Chip::Assistant(..) => element.on_click(act(agent, TaskAction::SignIn, cx)),
                 };
                 Some(element.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
             });
@@ -2050,9 +2061,9 @@ pub(super) fn card_chip(
         .flex()
         .items_center()
         .rounded(px(NAV_RADIUS))
-        .bg(palette.plate(URL_FIELD))
-        .hover(|style| style.bg(palette.state(URL_FIELD, STATE_HOVERED)))
-        .active(|style| style.bg(palette.state(URL_FIELD, STATE_PRESSED)))
+        .bg(palette.ground_plate(Ground::Field, URL_FIELD))
+        .hover(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_HOVERED)))
+        .active(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_PRESSED)))
         .text_size(px(text::SMALL))
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette.text(TITLE))

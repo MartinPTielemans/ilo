@@ -5,7 +5,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, BoxShadow, MouseButton, Rgba, ScrollHandle, Window,
+    AnyElement, App, Bounds, BoxShadow, MouseButton, Pixels, Rgba, ScrollHandle, SharedString,
+    TitlebarOptions, Window, WindowBounds, WindowKind, WindowOptions,
     accesskit::{Orientation, Role},
     div, point,
     prelude::*,
@@ -17,12 +18,35 @@ use crate::settings_card::Follow;
 use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::radius;
 use crate::tokens::settings::{
-    COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, FOOT_TEXT, NAME, PLATE_GAP,
-    SEARCH_DIMMED, SEARCH_GAP, SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP,
-    SECTION_GROUP_GAP, SECTION_HOVERED, SECTION_SELECTED, SECTION_SELECTED_LIGHT, SECTION_SHADOW,
-    SECTION_SHADOW_BLUR, SECTION_SHADOW_Y, SECTION_TEXT, SECTION_X,
+    COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, HEADING, LABEL_BOTTOM,
+    LABEL_LINE, LABEL_TOP, MIN_HEIGHT, MIN_WIDTH, PLATE_GAP, SEARCH_DIMMED, SEARCH_GAP,
+    SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP, SECTION_HOVERED, SECTION_SELECTED,
+    SECTION_SELECTED_GLYPH, SECTION_SELECTED_LIGHT, SECTION_SHADOW, SECTION_SHADOW_BLUR,
+    SECTION_SHADOW_Y, SECTION_TEXT, SECTION_X,
 };
 use crate::tokens::shell::{PLATE_HEIGHT, PLATE_INSET};
+use crate::tokens::text::SMALL;
+
+/// Settings' window at `bounds`, titled `title`, as the app opens it and the preview shows it: the
+/// column runs under the window's buttons, which sit where the browser window's do, and off the Mac
+/// there's no title bar of the window manager's, as the UI draws the close button.
+pub fn window_options(bounds: Bounds<Pixels>, title: SharedString) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some(title),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.), px(16.))),
+        }),
+        #[cfg(target_os = "linux")]
+        window_decorations: Some(gpui::WindowDecorations::Client),
+        kind: WindowKind::Normal,
+        is_resizable: true,
+        is_minimizable: false,
+        window_min_size: Some(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT))),
+        ..Default::default()
+    }
+}
 
 #[cfg(test)]
 mod tests;
@@ -31,6 +55,7 @@ mod tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
     General,
+    Appearance,
     TabsAndSidebar,
     Features,
     Agents,
@@ -51,6 +76,7 @@ impl Section {
     pub const GROUPS: [&'static [Section]; 3] = [
         &[
             Section::General,
+            Section::Appearance,
             Section::TabsAndSidebar,
             Section::Features,
             Section::Agents,
@@ -66,6 +92,9 @@ impl Section {
         &[Section::Sync, Section::ImportExport, Section::About],
     ];
 
+    /// The small label over each of `GROUPS`, in its order (#4092).
+    pub const LABELS: [&'static str; 3] = ["Browser", "Private", env!("APP_NAME")];
+
     /// Every section, in the column's order.
     pub fn all() -> impl Iterator<Item = Section> {
         Section::GROUPS.into_iter().flatten().copied()
@@ -75,6 +104,7 @@ impl Section {
     pub fn name(self) -> &'static str {
         match self {
             Section::General => "General",
+            Section::Appearance => "Appearance",
             Section::TabsAndSidebar => "Tabs & Sidebar",
             Section::Features => "Features",
             Section::Agents => "Agents",
@@ -93,6 +123,7 @@ impl Section {
     pub fn glyph(self) -> &'static str {
         match self {
             Section::General => "icons/settings.svg",
+            Section::Appearance => "icons/contrast.svg",
             Section::TabsAndSidebar => "icons/panel-left.svg",
             Section::Features => "icons/shapes.svg",
             Section::Agents => "icons/square-mouse-pointer.svg",
@@ -140,6 +171,8 @@ pub fn column(
     a11y: bool,
 ) -> gpui::Div {
     let base = if dark { rgb(PAPER) } else { rgb(INK) };
+    // The labels and the foot, at the headings' alpha.
+    let quiet = base.opacity(HEADING);
     let groups = Section::GROUPS
         .into_iter()
         .enumerate()
@@ -185,15 +218,22 @@ pub fn column(
                         section.glyph(),
                         SECTION_GLYPH,
                         base.opacity(match selected {
-                            true => NAME,
+                            true => SECTION_SELECTED_GLYPH,
                             false => SECTION_GLYPH_ALPHA,
                         }),
                     ))
                     .child(section.name())
             });
-            div()
-                .when(index > 0, |group| group.mt(px(SECTION_GROUP_GAP)))
-                .children(plates)
+            // The group's label, on the plates' text column; the list's tab stops are the plates.
+            let label = div()
+                .pt(px(LABEL_TOP))
+                .pb(px(LABEL_BOTTOM))
+                .pl(px(PLATE_INSET + SECTION_X))
+                .text_size(px(SMALL))
+                .line_height(px(LABEL_LINE))
+                .text_color(quiet)
+                .child(Section::LABELS[index]);
+            div().child(label).children(plates)
         });
     // Drawn now, as the foot takes `logged` after them.
     let groups: Vec<gpui::Div> = groups.collect();
@@ -204,16 +244,22 @@ pub fn column(
         .tab_index(0)
         .focus_from_keys_only()
         .focus_visible(ring(base))
-        .text_color(base.opacity(FOOT_TEXT))
+        .text_size(px(SMALL))
+        .text_color(quiet)
         .child(drawn("chromium settings".into(), logged))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| foot(window, cx))
-        .child(glyph(
-            "icons/external-link.svg",
-            FOOT_GLYPH,
-            base.opacity(FOOT_GLYPH_ALPHA),
-        ))
-        .child("Chromium settings");
+        .child("Chromium settings")
+        // After its name, as a link out of the window is marked.
+        .child(
+            glyph(
+                "icons/external-link.svg",
+                FOOT_GLYPH,
+                base.opacity(FOOT_GLYPH_ALPHA),
+            )
+            .mr_0()
+            .ml(px(SECTION_GLYPH_GAP)),
+        );
     let list = div()
         .id("sections")
         .when(a11y, |sections| {
@@ -255,7 +301,13 @@ pub fn column(
                 .min_h_0()
                 .child(sections.follow.before())
                 .child(list)
-                .child(sections.follow.after(sections.scroll.clone(), 0., 0.)),
+                // A label's height kept above the section the keys move to, so a group's first
+                // brings its label into sight, and General the list's top.
+                .child(sections.follow.after(
+                    sections.scroll.clone(),
+                    LABEL_TOP + LABEL_LINE + LABEL_BOTTOM,
+                    0.,
+                )),
         )
         .child(
             div()
@@ -286,7 +338,7 @@ fn plate(base: Rgba, selected: bool, dark: bool) -> gpui::Div {
         .pl(px(SECTION_X))
         .flex()
         .items_center()
-        .rounded(px(radius::ROW))
+        .rounded(px(radius::CONTROL + PLATE_INSET))
         .whitespace_nowrap()
         .text_color(base.opacity(if selected { 1. } else { SECTION_TEXT }))
         // A press on a plate picks it, and doesn't move the window.

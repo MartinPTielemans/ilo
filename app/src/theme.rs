@@ -582,13 +582,6 @@ pub(crate) fn oklab_to_linear([l, a, b]: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// How far along the window's diagonal, from its top left (0) to its bottom right (1), the point
-/// `x` and `y` of the way across and down is, in a window `width` by `height`: a 135° CSS
-/// gradient's line, whose ends' perpendiculars pass through those corners.
-pub fn diagonal(x: f32, y: f32, width: f32, height: f32) -> f32 {
-    ((x * width + y * height) / (width + height).max(1.)).clamp(0., 1.)
-}
-
 pub use crate::tokens::theme::{GRAIN_STRENGTH, INACTIVE_TEXTURE};
 
 /// A texture's side, in device pixels: a tile the window repeats.

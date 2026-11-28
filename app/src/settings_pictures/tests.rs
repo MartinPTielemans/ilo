@@ -29,7 +29,6 @@ impl Render for Pair {
                 rgb(INK),
                 false,
                 self.right,
-                Buttons::HERE,
                 window.is_a11y_active(),
                 self.logged.clone(),
                 move |side, _, cx| {
@@ -180,7 +179,6 @@ impl Render for Appearances {
                 &Look::settings(false),
                 rgb(INK),
                 self.chosen,
-                Buttons::HERE,
                 window.is_a11y_active(),
                 self.logged.clone(),
                 move |appearance, _, cx| {
@@ -281,6 +279,16 @@ fn arrows_walk_the_three_and_stop_at_the_ends(cx: &mut TestAppContext) {
             Appearance::Automatic
         ]
     );
+}
+
+/// End picks the last of the three and Home the first, and either on the one chosen picks nothing.
+#[gpui::test]
+fn home_and_end_pick_the_ends(cx: &mut TestAppContext) {
+    let (view, cx) = appearances(Appearance::Automatic, cx);
+    cx.update(|window, cx| window.focus_next(cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("home end end home");
+    assert_eq!(picked(&view, cx), [Appearance::Dark, Appearance::Automatic]);
 }
 
 #[gpui::test]

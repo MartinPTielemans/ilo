@@ -16,7 +16,7 @@ use gpui::{
     Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
     RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
-    canvas, div, img, linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
+    canvas, div, img, list, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -76,7 +76,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::library::COLUMN;
 use crate::tokens::shell::library::COLUMN_EDGE;
 use crate::tokens::shell::library::COLUMN_WIDTH;
@@ -450,6 +450,8 @@ pub(super) struct Library {
     /// Spaces' keyboard, which has no search field, and the card its ring is on, by its Space.
     cards: gpui::FocusHandle,
     keyed_card: Option<u64>,
+    /// The cards' Spaces as the ring last saw them, for the card that takes a gone one's place.
+    cards_seen: Vec<u64>,
     /// The row the field's keys ring, by its line in `items` and, in Media, its tile's column, and
     /// where it was last drawn, for return to open it from there as a click does.
     keyed_row: Option<(usize, usize)>,
@@ -522,11 +524,26 @@ impl Only {
 }
 
 /// Where the ring goes as the list's lines change under it: the same line, where it is now, else
-/// none.
+/// the row that took its place (`list_keys::took_place`), else none.
 fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
     let (line, column) = library.keyed_row?;
     let item = library.items.get(line)?;
-    let at = items.iter().position(|each| each == item)?;
+    if let Some(at) = items.iter().position(|each| each == item) {
+        return Some((at, column));
+    }
+    // Headings, Clear and a past page's sites take no ring, so none takes its place.
+    let rows = |items: &[Item]| -> Vec<Item> {
+        let rings = |each: &&Item| {
+            *each == item || !matches!(each, Item::Heading(_) | Item::Clear | Item::PastSite(_))
+        };
+        items.iter().filter(rings).copied().collect()
+    };
+    let took = crate::list_keys::took_place(item, &rows(&library.items), &rows(items))?;
+    let at = items.iter().position(|each| *each == took)?;
+    let column = match took {
+        Item::Media(tiles) => tiles.iter().position(Option::is_some)?,
+        _ => 0,
+    };
     Some((at, column))
 }
 
@@ -573,6 +590,13 @@ enum Medium {
 const FIELD: &str = "space-field";
 
 impl Shell {
+    /// Whether the Library's search field has the keyboard, for tests outside the Library.
+    #[cfg(test)]
+    pub(in crate::shell) fn library_search_keys(&self, window: &Window, cx: &App) -> bool {
+        (self.library.as_ref())
+            .is_some_and(|library| library.search.focus_handle(cx).is_focused(window))
+    }
+
     /// The archive changed, all of it, newest first.
     pub fn set_archive(&mut self, archive: Vec<Archived>, cx: &mut Context<Self>) {
         // A tab closed since a task was dismissed is what ⇧⌘T reopens: the core's to reopen, as
@@ -1066,6 +1090,7 @@ impl Shell {
             _search: observe,
             cards: cx.focus_handle().tab_stop(true),
             keyed_card: None,
+            cards_seen: Vec::new(),
             keyed_row: None,
             row_drawn: Rc::default(),
             new_board_drawn: Rc::default(),
@@ -1992,8 +2017,8 @@ impl Shell {
                 .justify_center()
                 .rounded(px(SEARCH_RADIUS))
                 .bg(self.palette.plate(LIBRARY_PLATE))
-                .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
+                .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
                 .block_mouse_except_scroll()
                 .text_size(px(text::BODY))
                 .text_color(self.palette.text(FORM_TEXT))
@@ -2207,13 +2232,8 @@ impl Shell {
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
         let palette = self.palette_of(id);
-        let underlay = Hsla::from(palette.underlay);
-        let window_at = |y: f32| underlay.blend(Hsla::from(self.space_color_at(id, 0.5, y)));
-        let fill = linear_gradient(
-            180.,
-            linear_color_stop(window_at(0.), 0.),
-            linear_color_stop(window_at(1.), 1.),
-        );
+        let height = f32::from(self.viewport.height);
+        let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
                 let clear = still_clear(&palette, space.clears_last(space.shown));
@@ -2282,7 +2302,7 @@ impl Shell {
             }
         });
         let rows: Vec<_> = rows.collect();
-        let field = self.card_field(space, &palette, window_at(0.), cx);
+        let field = self.card_field(space, &palette, Hsla::from(palette.underlay), cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
         let half = URL_BUTTON_SIZE / 2.;
@@ -2323,7 +2343,8 @@ impl Shell {
             .h_full()
             .overflow_hidden()
             .rounded(px(CARD_RADIUS))
-            .bg(fill)
+            .bg(palette.underlay)
+            .child(glow)
             .shadow(Level::Resting.shadow())
             .block_mouse_except_scroll()
             .on_click(cx.listener(move |shell, _, _, cx| shell.pick_space(id, cx)))
@@ -2343,7 +2364,9 @@ impl Shell {
                     .absolute()
                     .inset_0()
                     .rounded(px(CARD_RADIUS))
-                    .group_hover("space-card", |style| style.bg(palette.plate(STATE_HOVERED)))
+                    .group_hover("space-card", |style| {
+                        style.bg(palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .can_drop(move |dragged, _, _| {
                         dragged
                             .downcast_ref::<CardTab>()
@@ -2780,8 +2803,12 @@ impl Shell {
                     .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
                         shell.point_history(Pointed::Closed(id), *hovered, cx)
                     }))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
+                    .active(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
+                    })
                     .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                         shell.open_archived(id, event.position(), event.modifiers(), cx)
                     }))
@@ -2836,8 +2863,12 @@ impl Shell {
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
+                    .active(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
+                    })
                     .on_click(cx.listener(move |shell, _, _, cx| {
                         shell.restore_archived_task(agent.clone(), cx)
                     }))
@@ -2969,7 +3000,9 @@ impl Shell {
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .children(drawn)
                     .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_task(&opened, cx)))
                     .child(
@@ -3064,7 +3097,7 @@ impl Shell {
             .rounded(px(ARCHIVED_RADIUS))
             .text_size(px(text::SMALL))
             .text_color(self.palette.text(SECONDARY))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+            .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
             .child(label)
     }
 
@@ -3384,7 +3417,9 @@ impl Shell {
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .when(!boost.on, |row| row.opacity(0.5))
                     .on_mouse_down(MouseButton::Left, cx.listener(menu(site.clone())))
                     .on_mouse_down(MouseButton::Right, cx.listener(menu(site.clone())))
