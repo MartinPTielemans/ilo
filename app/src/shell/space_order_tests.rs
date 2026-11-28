@@ -51,7 +51,7 @@ fn report_gliding(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u6
 fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u64]) {
     report_gliding(shell, cx, order);
     shell.update(cx, |shell, cx| {
-        shell.space_slides.clear();
+        shell.space_sent.slides.clear();
         cx.notify();
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -60,7 +60,11 @@ fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u64]) {
 /// How far right of its place `space`'s card started its glide, or 0 if it has none.
 fn glide_from(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> f32 {
     shell.read_with(cx, |shell, _| {
-        shell.space_slides.get(&space).map_or(0., |&(from, _)| from)
+        shell
+            .space_sent
+            .slides
+            .get(&space)
+            .map_or(0., |&(from, _)| from)
     })
 }
 
@@ -109,6 +113,7 @@ fn handle(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Poin
 }
 
 /// Draws a frame, as the screen would while the pointer holds a card, so its copy is drawn whole.
+#[allow(dead_code)]
 fn frame(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
@@ -132,7 +137,8 @@ fn moved(
 fn aside(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<(u64, f32)> {
     let mut aside: Vec<_> = shell.read_with(cx, |shell, _| {
         shell
-            .space_shifts
+            .space_sent
+            .to
             .iter()
             .map(|(&id, &by)| (id, by))
             .collect()
@@ -189,14 +195,11 @@ fn the_release_lands_in_the_open_slot(cx: &mut TestAppContext) {
         "the drag was a click on the card"
     );
 
-    let drawn = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.space_places()[&2])
-    };
-    let before = drawn(&shell, cx);
     report_gliding(&shell, cx, &[2, 1, 3]);
+    let from = glide_from(&shell, cx, 2);
     assert!(
-        (drawn(&shell, cx) - before).abs() < 1.,
-        "the card passed doesn't jump when the order is reported"
+        (from - PITCH).abs() < 1.,
+        "the card passed starts where it was drawn: {from}"
     );
     assert!(aside(&shell, cx).is_empty());
     assert!(shell.update(cx, |shell, cx| shell.undo(cx)));

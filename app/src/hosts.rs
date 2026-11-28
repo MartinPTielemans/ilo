@@ -44,6 +44,7 @@ pub(crate) fn show_menu(
                     area,
                     look,
                     chosen,
+                    reorder: None,
                 },
                 cx,
             );

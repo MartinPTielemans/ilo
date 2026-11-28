@@ -1607,10 +1607,7 @@ pub struct Shell {
     /// to their places after the Spaces' order changed, and where the one let go was along its
     /// row, which glides from there.
     space_drag: Option<space_order::SpaceDrag>,
-    space_slides: space_order::SpaceSlides,
-    /// Where each card's been sent from its place, which the springs go on to, until the browser
-    /// reports the order a drop made.
-    space_shifts: HashMap<u64, f32>,
+    space_sent: crate::sortable::Sent<u64>,
     /// The card drawn over the others: the one dragged, and while it settles.
     space_lifted: Option<u64>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
@@ -2265,8 +2262,7 @@ impl Shell {
             window_drag: None,
             dragged: false,
             space_drag: None,
-            space_slides: HashMap::new(),
-            space_shifts: HashMap::new(),
+            space_sent: Default::default(),
             space_lifted: None,
             putting_back: false,
             swipe: None,
@@ -6057,7 +6053,7 @@ fn settle_progress(start: Instant) -> Option<f32> {
 }
 
 /// How far the list's motion is `t` seconds in, or None once it's done.
-fn row_spring(t: f32) -> Option<f32> {
+pub(crate) fn row_spring(t: f32) -> Option<f32> {
     spring(t, ROW_RESPONSE, ROW_DAMPING)
 }
 

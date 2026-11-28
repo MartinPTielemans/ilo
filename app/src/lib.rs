@@ -281,6 +281,7 @@ pub mod settling;
 pub mod shell;
 pub mod site_controls;
 pub mod sort_by_site;
+pub mod sortable;
 pub mod space_icon;
 pub mod space_transparency;
 pub mod tab_switcher;

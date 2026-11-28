@@ -639,6 +639,7 @@ fn show_menu(cx: &mut VisualTestContext) -> Rc<Cell<Option<Closed>>> {
             area: area(),
             look: Look::dark(),
             chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
         };
         super::show(request, cx);
     });
@@ -1000,6 +1001,7 @@ fn holding_option_shows_and_picks_an_items_alternate(cx: &mut TestAppContext) {
                 area: area(),
                 look: Look::dark(),
                 chosen: Box::new(move |closed: Closed, _| answer.set(Some(closed.chosen()))),
+                reorder: None,
             };
             super::show(request, cx);
         });
@@ -1553,6 +1555,7 @@ fn show_items(items: Vec<MenuEntry>, cx: &mut VisualTestContext) -> Rc<Cell<Opti
             area: area(),
             look: Look::dark(),
             chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
         };
         super::show(request, cx);
     });
@@ -1876,6 +1879,7 @@ fn what_a_row_that_stays_does_may_close_the_menu_or_show_another(cx: &mut TestAp
             area: area(),
             look: Look::dark(),
             chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
         };
         super::show(request, cx);
         true
@@ -2076,6 +2080,7 @@ fn a_menu_led_by_a_drag_highlights_the_row_under_it_and_closes_with_it(cx: &mut 
             area: area(),
             look: Look::dark(),
             chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: None,
         };
         super::show(request, cx);
     });
@@ -2113,4 +2118,86 @@ fn a_menu_led_by_a_drag_highlights_the_row_under_it_and_closes_with_it(cx: &mut 
         !cx.cx
             .update(|cx: &mut App| cx.has_global::<super::LedByDrag>())
     );
+}
+
+/// The Space button's menu with four Spaces that reorder, as the shell opens it.
+fn sortable_menu() -> Tracking {
+    let spaces = (0..4)
+        .map(|at| MenuEntry {
+            scrolls: true,
+            reorders: true,
+            ..item(&format!("Space {at}"))
+        })
+        .chain([MenuEntry::line(), item("New Space…")])
+        .collect();
+    let mut menu = opened(spaces, 100., 100.);
+    menu.sorting.on = true;
+    menu
+}
+
+fn order(menu: &Tracking) -> Vec<usize> {
+    menu.layout.levels[0].items[..4].to_vec()
+}
+
+/// A Space's row dragged past the next one's middle lets go in its slot: the menu stays open, the
+/// rows are in the new order, and it says which row it followed; ⌘Z puts them back.
+#[test]
+fn a_row_dragged_past_the_next_lands_in_its_slot_and_the_menu_stays_open() {
+    let mut menu = sortable_menu();
+    let (from, over) = (row_of(&menu, 0), row_of(&menu, 1));
+    assert!(menu.pressed(from));
+    let to = over + point(px(0.), px(8.));
+    menu.moved(to, Instant::now());
+    assert!(menu.is_held(0));
+    assert_eq!(
+        menu.sorting.sent.to.get(&1),
+        Some(&-24.),
+        "the row passed makes room"
+    );
+    assert_eq!(menu.sorting.sent.to.get(&2), None, "and only that one");
+    assert_eq!(menu.released(to), Outcome::Moved(0, Some(1)));
+    assert_eq!(order(&menu), [1, 0, 2, 3]);
+    assert!(!menu.is_held(0));
+    assert!(menu.can_undo());
+    assert!(menu.undo_move());
+    assert_eq!(order(&menu), [0, 1, 2, 3]);
+    assert!(!menu.can_undo());
+}
+
+/// Esc puts a row held back, and the release moves nothing; a drag back where it started moves
+/// nothing either, and a press let go on its row is a pick as before.
+#[test]
+fn escape_and_a_drag_back_move_nothing_and_a_click_still_picks() {
+    let mut menu = sortable_menu();
+    let (from, over) = (row_of(&menu, 0), row_of(&menu, 2));
+    menu.pressed(from);
+    menu.moved(over, Instant::now());
+    assert_eq!(menu.sorting.sent.to.get(&1), Some(&-24.));
+    menu.key(Key::Escape, Instant::now());
+    assert!(!menu.is_held(0));
+    assert!(menu.sorting.sent.to.is_empty(), "the rows spring back");
+    assert_eq!(menu.released(over), Outcome::Stay);
+    assert_eq!(order(&menu), [0, 1, 2, 3]);
+    assert!(!menu.can_undo());
+
+    menu.pressed(from);
+    menu.moved(over, Instant::now());
+    menu.moved(from + point(px(0.), px(2.)), Instant::now());
+    assert!(matches!(menu.released(from), Outcome::Stay));
+    assert_eq!(order(&menu), [0, 1, 2, 3]);
+
+    menu.pressed(from);
+    assert_eq!(menu.released(from), Outcome::Pick(0));
+}
+
+/// A menu a tab's drag opened (`led`), or any that isn't asked to reorder, takes no row for a drag.
+#[test]
+fn a_menu_not_asked_to_reorder_holds_no_row() {
+    let mut menu = sortable_menu();
+    menu.sorting.on = false;
+    let (from, over) = (row_of(&menu, 0), row_of(&menu, 2));
+    menu.pressed(from);
+    menu.moved(over, Instant::now());
+    assert!(!menu.is_held(0));
+    assert_eq!(menu.released(over), Outcome::Pick(2));
 }

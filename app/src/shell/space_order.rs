@@ -4,14 +4,14 @@
 //! browser once. GPUI holds the drag, as it holds a Library card's tab, but draws nothing for it.
 
 use std::collections::HashMap;
-use std::time::Instant;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton, MouseUpEvent, Pixels,
     Point, Render, WeakEntity, Window, canvas, div, prelude::*,
 };
 
-use super::{Curve, Edit, Shell, What};
+use super::{Edit, Shell, What, row_spring};
+use crate::sortable::{self, gap_at};
 use crate::tokens::shell::library::{CARD_GAP, CARD_WIDTH, SPACES_LEFT};
 
 /// A Space's card handle pressed and dragged, as GPUI holds it. Which Space is the Shell's to
@@ -33,9 +33,6 @@ pub(super) struct SpaceDrag {
     /// The gap among the others the card's middle is over, None before it has moved.
     slot: Option<usize>,
 }
-
-/// The cards still gliding to their places: how far right of its place each one started, and when.
-pub(super) type SpaceSlides = HashMap<u64, (f32, Instant)>;
 
 impl Shell {
     /// The card dragged, while GPUI still holds it.
@@ -105,50 +102,36 @@ impl Shell {
 
     /// The card dragged's middle along the row with the pointer at `x`.
     fn held_middle(drag: &SpaceDrag, x: f32) -> f32 {
-        x - drag.grab + drag.width / 2.
+        sortable::held_middle(x, drag.grab, drag.width)
     }
 
     /// How far right of its place the card dragged is drawn with its middle at `middle`.
     fn held_offset(&self, space: u64, middle: f32) -> f32 {
         let (cells, left) = self.cells();
-        let Some(index) = self.spaces.iter().position(|each| each.id == space) else {
-            return 0.;
-        };
-        middle - (left + cells[..index].iter().sum::<f32>() + cells[index] / 2.)
+        match self.spaces.iter().position(|each| each.id == space) {
+            Some(index) => sortable::held_offset(middle, left, cells[index], index),
+            None => 0.,
+        }
     }
 
     /// How far each of the others goes aside for the card dragged from the `from`th cell to be in
-    /// the open slot `gap` among them: one cell for each it has passed.
+    /// the open slot `gap` among them.
     fn shifts_for(&self, from: usize, gap: usize) -> HashMap<u64, f32> {
         let (cells, _) = self.cells();
         let pitch = cells.first().copied().unwrap_or(0.);
-        let mut shifts = HashMap::new();
-        let others = self.spaces.iter().enumerate().filter(|&(at, _)| at != from);
-        for (other, (at, space)) in others.enumerate() {
-            let now = if other < gap { other } else { other + 1 };
-            if at != now {
-                shifts.insert(space.id, (now as f32 - at as f32) * pitch);
-            }
-        }
-        shifts
+        sortable::shifts_for(cells.len(), from, gap, pitch)
+            .into_iter()
+            .map(|(at, by)| (self.spaces[at].id, by))
+            .collect()
     }
 
-    /// Sends every card to the shift in `shifts`, none for the ones left out, from where it's drawn:
-    /// on a spring that goes on from there if it was going, and `held` is where the card just let
-    /// go is drawn, which the pointer was holding.
+    /// Sends every card to the shift in `shifts`, none for the ones left out, from where it's drawn
+    /// on a spring that goes on from there, and `held` is where the card just let go is drawn,
+    /// which the pointer was holding.
     fn shift_spaces(&mut self, shifts: HashMap<u64, f32>, held: Option<(u64, f32)>, cx: &App) {
         let now = crate::motion::start(cx);
-        for space in self.spaces.iter().map(|space| space.id).collect::<Vec<_>>() {
-            let to = shifts.get(&space).copied().unwrap_or(0.);
-            let drawn = match held {
-                Some((held, offset)) if held == space => offset,
-                _ => self.space_shift(space),
-            };
-            if drawn != to {
-                self.space_slides.insert(space, (drawn - to, now));
-            }
-        }
-        self.space_shifts = shifts;
+        let spaces: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
+        self.space_sent.send(spaces, shifts, held, now, row_spring);
     }
 
     /// How far right of its place `space`'s card is drawn: with the pointer if it's the one
@@ -159,7 +142,7 @@ impl Shell {
         {
             return self.held_offset(space, Self::held_middle(drag, x));
         }
-        self.space_shifts.get(&space).copied().unwrap_or(0.) + self.space_slide(space)
+        self.space_sent.drawn(space, row_spring)
     }
 
     /// The pointer holding a card moved over the window: the card follows it along x, and the
@@ -227,19 +210,27 @@ impl Shell {
             return self.shift_spaces(HashMap::new(), Some(held), cx);
         };
         let mut shifts = self.shifts_for(from, gap);
-        shifts.insert(space, (gap as f32 - from as f32) * cells[0]);
+        shifts.insert(space, sortable::slot_shift(from, gap, cells[0]));
         self.shift_spaces(shifts, Some(held), cx);
         // check.sh waits for this line.
         log!("browser: dropped space {space} after {after}");
-        if let Some(back) = self.move_space(space, after, cx) {
-            self.keep(
-                What::MOVE_SPACE,
-                Some(Edit::MoveSpace { space, after: back }),
-                cx,
-            );
-        } else {
+        if !self.reorder_space(space, after, cx) {
             self.shift_spaces(HashMap::new(), None, cx);
         }
+    }
+
+    /// Moves `space` to right after `after`, or first for 0, and keeps the move for ⌘Z, as the
+    /// Library's cards and the Space button's menu's rows do. Whether it moved.
+    pub(super) fn reorder_space(&mut self, space: u64, after: u64, cx: &mut Context<Self>) -> bool {
+        let Some(back) = self.move_space(space, after, cx) else {
+            return false;
+        };
+        self.keep(
+            What::MOVE_SPACE,
+            Some(Edit::MoveSpace { space, after: back }),
+            cx,
+        );
+        true
     }
 
     /// Esc while a card is dragged: it springs home, the others spring back, and the release moves
@@ -314,13 +305,13 @@ impl Shell {
     /// were drawn to their places, which for the ones already sent there is nowhere. Under Reduce
     /// Motion they're in their places from the first frame.
     pub(super) fn glide_spaces(&mut self, before: HashMap<u64, f32>, moved: bool, cx: &App) {
-        let shifts = std::mem::take(&mut self.space_shifts);
+        let shifts = std::mem::take(&mut self.space_sent.to);
         let now = crate::motion::start(cx);
         if !moved {
             // Nothing came of the move: the cards stay drawn where they were, and go home.
             for (space, shift) in shifts {
-                self.space_slides
-                    .insert(space, (shift + self.space_slide(space), now));
+                let by = shift + self.space_sent.slide(space, row_spring);
+                self.space_sent.slides.insert(space, (by, now));
             }
             return;
         }
@@ -332,34 +323,23 @@ impl Shell {
                 continue;
             };
             if from != at {
-                self.space_slides
-                    .insert(key, (from - at + self.space_slide(key), now));
+                let by = from - at + self.space_sent.slide(key, row_spring);
+                self.space_sent.slides.insert(key, (by, now));
             }
         }
     }
 
-    /// How far right of its place `space`'s card is drawn while it glides there.
-    pub(super) fn space_slide(&self, space: u64) -> f32 {
-        self.space_slides.get(&space).map_or(0., |&(from, start)| {
-            Curve::Slide
-                .at(start.elapsed().as_secs_f32())
-                .map_or(0., |done| from * (1. - done))
-        })
-    }
-
     /// Drops the glides that are done, and keeps frames coming for the rest.
     pub(super) fn step_space_slides(&mut self, window: &mut Window) {
-        let gliding = !self.space_slides.is_empty();
-        self.space_slides
-            .retain(|_, (_, start)| Curve::Slide.at(start.elapsed().as_secs_f32()).is_some());
-        if !self.space_slides.is_empty() {
+        let (moving, settled) = self.space_sent.step(row_spring);
+        if moving {
             window.request_animation_frame();
-        } else if gliding {
+        } else if settled {
             // check.sh waits for this line before it presses a card that moved: a press goes to
             // the card drawn there, which can still be the one that was there (#2026).
             log!("browser: spaces settled");
         }
-        if self.space_slides.is_empty() && self.space_drag().is_none() {
+        if !moving && self.space_drag().is_none() {
             self.space_lifted = None;
         }
     }
@@ -387,46 +367,11 @@ impl Shell {
     }
 }
 
-/// The gap among the cells but the `from`th that `x`, from the row's left, is over, with the
-/// first cell starting at `left`: how many of the others' middles are left of it.
-fn gap_at(cells: &[f32], mut left: f32, from: usize, x: f32) -> usize {
-    let mut gap = 0;
-    for (index, &cell) in cells.iter().enumerate() {
-        if index != from && left + cell / 2. < x {
-            gap += 1;
-        }
-        left += cell;
-    }
-    gap
-}
-
 /// What GPUI holds while a Space is dragged: nothing to draw, as the card itself follows the pointer.
 pub(super) struct SpaceGhost;
 
 impl Render for SpaceGhost {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::gap_at;
-
-    /// Three cells 34 wide, centred in 216: they start at 57, so their middles are at 74, 108 and
-    /// 142.
-    const CELLS: [f32; 3] = [34.; 3];
-    const LEFT: f32 = 57.;
-
-    /// The gap is how many of the others' middles the card's middle is past; its own cell is the
-    /// gap it came from.
-    #[test]
-    fn the_gap_counts_the_other_cards_the_middle_is_past() {
-        assert_eq!(gap_at(&CELLS, LEFT, 1, 0.), 0);
-        assert_eq!(gap_at(&CELLS, LEFT, 1, 80.), 1);
-        assert_eq!(gap_at(&CELLS, LEFT, 1, 108.), 1);
-        assert_eq!(gap_at(&CELLS, LEFT, 1, 150.), 2);
-        assert_eq!(gap_at(&CELLS, LEFT, 0, 120.), 1);
-        assert_eq!(gap_at(&CELLS, LEFT, 0, 216.), 2);
     }
 }

@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+use std::rc::Rc;
+
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
@@ -96,6 +98,9 @@ pub struct MenuEntry {
     /// One of a run of rows that scrolls once it's longer than [menu] `scroll-rows`, as the Space
     /// button's menu's Spaces do.
     pub scrolls: bool,
+    /// One of a run of rows that a press on and a drag along the run reorders (#4440), as the
+    /// Space button's menu's Spaces do: the others make room as its middle passes theirs.
+    pub reorders: bool,
 }
 
 impl MenuEntry {
@@ -137,6 +142,7 @@ impl MenuEntry {
             icon: None,
             mark: None,
             scrolls: false,
+            reorders: false,
         }
     }
 
@@ -1846,6 +1852,30 @@ impl Shell {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        // Its Spaces reorder by a drag along them (#4440): the menu tells of each move by the rows'
+        // places, which are these Spaces' as it opened, and ⌘Z in it is the window's.
+        let ids: Vec<u64> = (self.spaces.iter())
+            .filter(|space| space.agent.is_empty())
+            .map(|space| space.id)
+            .collect();
+        let shell = cx.weak_entity();
+        let moved = {
+            let shell = shell.clone();
+            Rc::new(move |item: usize, after: Option<usize>, cx: &mut App| {
+                let (Some(&space), after) = (ids.get(item), after.and_then(|at| ids.get(at)))
+                else {
+                    return;
+                };
+                let after = after.copied().unwrap_or(0);
+                shell
+                    .update(cx, |shell, cx| shell.reorder_space(space, after, cx))
+                    .ok();
+            })
+        };
+        let undo = Rc::new(move |cx: &mut App| {
+            shell.update(cx, |shell, cx| shell.undo(cx)).ok();
+        });
+        crate::menu::reorder_next(crate::menu::Reorder { moved, undo }, cx);
         self.show_menu(items, at, None, cx);
         self.space_switcher_up = self.menu_open;
         cx.notify();
@@ -1866,6 +1896,7 @@ impl Shell {
             let id = space.id;
             let mut entry = MenuEntry::named(space.name.clone(), true).checked(id == self.space);
             entry.scrolls = true;
+            entry.reorders = true;
             match SpaceIcon::parse(&space.icon).glyph_path() {
                 Some(path) => entry.icon = Some(path),
                 None => entry.mark = Some(crate::space_icon::letter(&space.name).into()),
