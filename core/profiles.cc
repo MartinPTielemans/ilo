@@ -18,6 +18,7 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/auto_archive.h"
@@ -59,7 +60,13 @@
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/pref_names.h"
+#include "components/language/core/browser/language_prefs.h"
+#include "components/language/core/browser/pref_names.h"
+#include "components/spellcheck/browser/pref_names.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/base_window.h"
@@ -409,7 +416,40 @@ void ApplyEveryday(std::optional<Everyday> changed) {
           ContentSettingsType::NOTIFICATIONS,
           settings.notification_prompts ? CONTENT_SETTING_ASK : CONTENT_SETTING_BLOCK);
     }
+    const settings_values::Values& values = settings.values;
+    // Allow is Chrome's own default, which still blocks them in private windows.
+    if (writes(Everyday::kThirdPartyCookies, !values.block_third_party_cookies)) {
+      profile->GetPrefs()->SetInteger(
+          prefs::kCookieControlsMode,
+          static_cast<int>(values.block_third_party_cookies
+                               ? content_settings::CookieControlsMode::kBlockThirdParty
+                               : content_settings::CookieControlsMode::kIncognitoOnly));
+    }
+    if (writes(Everyday::kSpellCheck, values.spell_check)) {
+      profile->GetPrefs()->SetBoolean(spellcheck::prefs::kSpellCheckEnable, values.spell_check);
+    }
+    // Through LanguagePrefs, which makes accept-languages from the selected ones as it's set.
+    if (values.languages && writes(Everyday::kLanguages, false)) {
+      language::LanguagePrefs(profile->GetPrefs())
+          .SetUserSelectedLanguagesList(base::SplitString(
+              *values.languages, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
+    }
   }
+}
+
+std::string EverydayLanguages() {
+  if (const std::optional<std::string>& chosen = UserSettings().values.languages) {
+    return *chosen;
+  }
+  Profile* profile = StartProfile();
+  return profile ? profile->GetPrefs()->GetString(language::prefs::kAcceptLanguages)
+                 : std::string();
+}
+
+bool ChromiumTakesLanguages(const std::string& languages) {
+  const std::vector<std::string> tags =
+      base::SplitString(languages, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  return l10n_util::KeepAcceptedLanguages(tags).size() == tags.size();
 }
 
 Profile* StartPrivateSession(Profile* profile) {

@@ -62,11 +62,23 @@ void ReleaseProfiles();
 // default chosen in Chrome's settings stays.
 void ApplyAutoPictureInPicture(bool changed);
 // Chromium's settings Settings shows, browser-wide (session.h's Settings): one the user changed.
-enum class Everyday { kAskWhereToSave, kPageZoom, kNotificationPrompts };
+enum class Everyday {
+  kAskWhereToSave,
+  kPageZoom,
+  kNotificationPrompts,
+  kThirdPartyCookies,
+  kSpellCheck,
+  kLanguages,
+};
 // Writes them into every profile loaded, as the user has them: each that isn't Chromium's own
 // default, and the one that |changed|, so a profile's choice in chrome://settings stays until the
 // user changes the row. Notifications' default alone: each site's own choice stays.
 void ApplyEveryday(std::optional<Everyday> changed);
+// The languages in order, as the user chose them, else as the start profile has them from
+// Chromium: its accept-languages.
+std::string EverydayLanguages();
+// Whether Chromium takes each of |languages|' tags (l10n_util's accept languages).
+bool ChromiumTakesLanguages(const std::string& languages);
 // |profile|'s off-the-record profile, made if there's none: the session its private windows
 // share. Chrome destroys it once the last of their Browsers has gone, which ends the session, and
 // then private_session_ended. A session that has ended isn't handed out again while Chrome waits

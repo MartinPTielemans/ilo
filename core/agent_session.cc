@@ -13,6 +13,7 @@
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_permissions.h"
+#include "browser_core/agent_tabs_close.h"
 #include "browser_core/handed.h"
 #include "browser_core/held_page.h"
 #include "browser_core/host.h"
@@ -78,6 +79,7 @@ void AgentActed(const std::string& agent, bc_id tab) {
   if (Sessions().insert_or_assign(tab, agent).second) {
     Blur(tab);
   }
+  ThreadActed(agent);
 }
 
 bool EndAgentSession(const std::string& agent, bc_id tab, int why) {

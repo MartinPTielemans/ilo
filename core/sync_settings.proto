@@ -14,4 +14,7 @@ message SettingEntity {
   optional bool on = 2;
   // A number's, such as a time in seconds.
   optional double number = 3;
+  // A text's, such as the languages in order. A version from before it keeps it as an unknown
+  // field and reads the rest.
+  optional string text = 4;
 }

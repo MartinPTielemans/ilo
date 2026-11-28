@@ -714,6 +714,7 @@ std::optional<std::string> ToJson(const Saved& saved) {
   if (saved.settings.ad_block_filters) {
     settings.Set("ad_block_filters", *saved.settings.ad_block_filters);
   }
+  settings_values::Write(saved.settings.values, settings);
   return base::WriteJson(root);
 }
 
@@ -1033,6 +1034,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
     const int appearance = settings->FindInt("appearance").value_or(0);
     saved.settings.appearance = appearance >= 0 && appearance <= 2 ? appearance : 0;
     saved.settings.space_header = settings->FindBool("space_header").value_or(false);
+    saved.settings.values = settings_values::Read(*settings);
   }
   return saved;
 }
