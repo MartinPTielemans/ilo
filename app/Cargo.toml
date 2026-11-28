@@ -99,7 +99,8 @@ tiny-skia = "0.11"
 rusqlite = { version = "0.41", features = ["bundled"] }
 # The models ilo calls itself with the user's key or at their own server (src/agents/model/http.rs):
 # blocking, on a thread per turn, so the browser starts no async runtime for it, and TLS with
-# rustls and the Mozilla roots built in, alike on every system. Its log feature is off.
+# rustls and the Mozilla roots built in, alike on every system. Its log lines go nowhere, as the
+# app sets no logger; one added would need ureq filtered out, as its TRACE prints the key's header.
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 # The session and the timeout of the shell Connect reads the user's PATH from
