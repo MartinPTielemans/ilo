@@ -2201,3 +2201,63 @@ fn a_menu_not_asked_to_reorder_holds_no_row() {
     assert!(!menu.is_held(0));
     assert_eq!(menu.released(over), Outcome::Pick(2));
 }
+
+/// ⌘Z in the open menu, through its key handler: after a reorder it undoes that, before the
+/// shortcut closes the menu, which stays open; with nothing left to undo it closes it as every
+/// other shortcut does, and undoes nothing more.
+#[gpui::test]
+fn command_z_undoes_the_last_reorder_before_it_closes_the_menu(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let moved = Rc::new(RefCell::new(Vec::new()));
+    let undone = Rc::new(Cell::new(0));
+    let chosen = Rc::new(Cell::new(None));
+    let (said, undid, answer) = (moved.clone(), undone.clone(), chosen.clone());
+    let items: Vec<MenuEntry> = (0..4)
+        .map(|at| MenuEntry {
+            scrolls: true,
+            reorders: true,
+            ..item(&format!("Space {at}"))
+        })
+        .chain([MenuEntry::line(), item("New Space…")])
+        .collect();
+    let rows = opened(items.clone(), 100., 100.);
+    cx.cx.update(|cx: &mut App| {
+        let reorder = super::Reorder {
+            moved: Rc::new(move |item, after, _| said.borrow_mut().push((item, after))),
+            undo: Rc::new(move |_| undid.set(undid.get() + 1)),
+        };
+        let request = Request {
+            items,
+            at: at(100., 100.),
+            area: area(),
+            look: Look::dark(),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+            reorder: Some(reorder),
+        };
+        super::show(request, cx);
+    });
+    cx.run_until_parked();
+    let origin = host.shown.borrow()[0].0.origin;
+    let (from, over) = (
+        row_of(&rows, 0) - origin,
+        row_of(&rows, 1) - origin + point(px(0.), px(8.)),
+    );
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(from + point(px(0.), px(6.)), None, Modifiers::none());
+    cx.simulate_mouse_move(over, None, Modifiers::none());
+    cx.simulate_mouse_up(over, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(*moved.borrow(), [(0, Some(1))]);
+    assert_eq!(chosen.get(), None, "a drop leaves the menu open");
+
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(undone.get(), 1, "⌘Z undid the reorder");
+    assert_eq!(chosen.get(), None, "and the menu stayed open");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(undone.get(), 1, "nothing left to undo");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise), "so it closed");
+}

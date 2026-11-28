@@ -1508,15 +1508,16 @@ impl Tracking {
                 let (pitch, _) = self.run_cells(first);
                 let panel = f32::from(held.y - level.bounds.origin.y);
                 let middle = panel - held.offset + pitch / 2.;
-                let toward = if middle < scroll.top + REORDER_SCROLL_EDGE {
-                    -1.
-                } else if middle > scroll.top + scroll.shown - REORDER_SCROLL_EDGE {
-                    1.
-                } else {
-                    0.
-                };
-                if toward != 0. {
-                    let by = scroll.by + toward * REORDER_SCROLL_SPEED * dt;
+                let step = crate::sortable::edge_scroll(
+                    middle,
+                    scroll.top,
+                    scroll.shown,
+                    REORDER_SCROLL_EDGE,
+                    REORDER_SCROLL_SPEED,
+                    dt,
+                );
+                if step != 0. {
+                    let by = scroll.by + step;
                     self.layout.levels[0].scroll = Some(scroll.to(by));
                     self.aim();
                 }

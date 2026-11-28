@@ -4942,7 +4942,7 @@ impl Render for Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window, cx);
-        self.step_space_slides(window);
+        self.step_space_slides(window, cx);
         self.step_space_button(window);
         self.step_form_going(cx);
         // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
@@ -5746,7 +5746,7 @@ impl Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window, cx);
-        self.step_space_slides(window);
+        self.step_space_slides(window, cx);
         self.step_space_button(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);

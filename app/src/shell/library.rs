@@ -103,7 +103,6 @@ use crate::tokens::shell::library::CARD_FIELD_HEIGHT;
 use crate::tokens::shell::library::CARD_FIELD_INSET;
 use crate::tokens::shell::library::CARD_FIELD_PLATE;
 use crate::tokens::shell::library::CARD_FIELD_RADIUS;
-use crate::tokens::shell::library::CARD_GAP;
 use crate::tokens::shell::library::CARD_NAME_COLOR;
 use crate::tokens::shell::library::CARD_NAME_GAP;
 use crate::tokens::shell::library::CARD_NAME_HEIGHT;
@@ -120,6 +119,7 @@ use crate::tokens::shell::library::PLUS_SIZE;
 use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
+use crate::tokens::shell::library::{CARD_GAP, CARD_LIFT_SCALE};
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
 use crate::tokens::shell::{
@@ -2204,7 +2204,9 @@ impl Shell {
                 let id = space.id;
                 let card = self.space_card(space, cx).left(px(self.space_shift(id)));
                 match self.space_lifted(id) {
-                    true => deferred(card).with_priority(1).into_any_element(),
+                    true => deferred(super::scaled::scaled_from_middle(card, CARD_LIFT_SCALE))
+                        .with_priority(1)
+                        .into_any_element(),
                     false => card.into_any_element(),
                 }
             })

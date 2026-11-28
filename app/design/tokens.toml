@@ -2343,6 +2343,11 @@ spaces-inset = 48.0
 card-width = 240.0
 card-radius = 16.0
 card-gap = 24.0
+# A card dragged by its handle along the row (#4452) is lifted to this scale, and scrolls the row
+# while its middle is within `card-scroll-edge` of the row's ends, this many points a second.
+card-lift-scale = 1.02
+card-scroll-edge = 48.0
+card-scroll-speed = 480.0
 # Once its cards don't fit, the section leaves the page this much of the window, however narrow,
 # and its cards scroll across (Arc 1.171 ax: 500 → 444, 1100 → 1044, live as the window resizes).
 spaces-page = 56.0

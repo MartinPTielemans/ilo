@@ -52,6 +52,18 @@ pub fn slot_shift(from: usize, gap: usize, pitch: f32) -> f32 {
     (gap as f32 - from as f32) * pitch
 }
 
+/// How far to scroll a list that's `shown` long from `top` in `dt` seconds with the held one's
+/// middle at `middle`: toward whichever end it's within `edge` of, `speed` a second, none between.
+pub fn edge_scroll(middle: f32, top: f32, shown: f32, edge: f32, speed: f32, dt: f32) -> f32 {
+    if middle < top + edge {
+        -speed * dt
+    } else if middle > top + shown - edge {
+        speed * dt
+    } else {
+        0.
+    }
+}
+
 /// How far along a spring is `t` seconds in, or None once it's there.
 pub type Ease = fn(f32) -> Option<f32>;
 
@@ -122,7 +134,15 @@ impl<K: Copy + Eq + Hash> Sent<K> {
 
 #[cfg(test)]
 mod tests {
-    use super::{gap_at, held_offset, shifts_for, slot_shift};
+    use super::{edge_scroll, gap_at, held_offset, shifts_for, slot_shift};
+
+    /// Only a middle within the edge of an end scrolls, toward that end.
+    #[test]
+    fn a_middle_at_an_end_scrolls_toward_it() {
+        assert_eq!(edge_scroll(5., 0., 100., 12., 200., 0.5), -100.);
+        assert_eq!(edge_scroll(95., 0., 100., 12., 200., 0.5), 100.);
+        assert_eq!(edge_scroll(50., 0., 100., 12., 200., 0.5), 0.);
+    }
 
     /// Three cells 34 long from 57, so their middles are at 74, 108 and 142.
     const CELLS: [f32; 3] = [34.; 3];

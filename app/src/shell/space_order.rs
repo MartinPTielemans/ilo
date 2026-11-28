@@ -4,6 +4,7 @@
 //! browser once. GPUI holds the drag, as it holds a Library card's tab, but draws nothing for it.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton, MouseUpEvent, Pixels,
@@ -12,7 +13,9 @@ use gpui::{
 
 use super::{Edit, Shell, What, row_spring};
 use crate::sortable::{self, gap_at};
-use crate::tokens::shell::library::{CARD_GAP, CARD_WIDTH, SPACES_LEFT};
+use crate::tokens::shell::library::{
+    CARD_GAP, CARD_SCROLL_EDGE, CARD_SCROLL_SPEED, CARD_WIDTH, SPACES_LEFT,
+};
 
 /// A Space's card handle pressed and dragged, as GPUI holds it. Which Space is the Shell's to
 /// keep, in its SpaceDrag.
@@ -32,6 +35,8 @@ pub(super) struct SpaceDrag {
     pointer: Option<f32>,
     /// The gap among the others the card's middle is over, None before it has moved.
     slot: Option<usize>,
+    /// When the row last scrolled under the card, for how long to scroll it.
+    last: Option<Instant>,
 }
 
 impl Shell {
@@ -74,6 +79,7 @@ impl Shell {
                     width,
                     pointer: None,
                     slot: None,
+                    last: None,
                 });
                 shell.space_lifted = Some(space);
                 cx.notify();
@@ -157,22 +163,36 @@ impl Shell {
             return;
         };
         let space = drag.space;
-        let middle = Self::held_middle(drag, x);
-        let slot = drag.slot;
-        let from = self.spaces.iter().position(|each| each.id == space);
         if let Some(drag) = self.space_drag.as_mut() {
             drag.pointer = Some(x);
         }
-        if let (true, Some(from)) = (over, from) {
-            let (cells, left) = self.cells();
-            let gap = gap_at(&cells, left, from, middle);
-            if slot.unwrap_or(from) != gap {
-                let shifts = self.shifts_for(from, gap);
-                self.shift_spaces(shifts, None, cx);
-            }
-            if let Some(drag) = self.space_drag.as_mut() {
-                drag.slot = Some(gap);
-            }
+        if over {
+            self.place_space(space, cx);
+        }
+        cx.notify();
+    }
+
+    /// Makes room for `space`'s card, dragged, where its middle is now: the others spring aside
+    /// when it has crossed another's middle.
+    fn place_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        let Some(drag) = self.space_drag() else {
+            return;
+        };
+        let (Some(pointer), slot) = (drag.pointer, drag.slot) else {
+            return;
+        };
+        let middle = Self::held_middle(drag, pointer);
+        let Some(from) = self.spaces.iter().position(|each| each.id == space) else {
+            return;
+        };
+        let (cells, left) = self.cells();
+        let gap = gap_at(&cells, left, from, middle);
+        if slot.unwrap_or(from) != gap {
+            let shifts = self.shifts_for(from, gap);
+            self.shift_spaces(shifts, None, cx);
+        }
+        if let Some(drag) = self.space_drag.as_mut() {
+            drag.slot = Some(gap);
         }
         cx.notify();
     }
@@ -330,7 +350,10 @@ impl Shell {
     }
 
     /// Drops the glides that are done, and keeps frames coming for the rest.
-    pub(super) fn step_space_slides(&mut self, window: &mut Window) {
+    pub(super) fn step_space_slides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scroll_cards_under_drag(Instant::now(), cx) {
+            window.request_animation_frame();
+        }
         let (moving, settled) = self.space_sent.step(row_spring);
         if moving {
             window.request_animation_frame();
@@ -342,6 +365,48 @@ impl Shell {
         if !moving && self.space_drag().is_none() {
             self.space_lifted = None;
         }
+    }
+
+    /// While a card is held with its middle within `CARD_SCROLL_EDGE` of the row's ends, the row
+    /// scrolls under it, as the menu's run does for a row (`sortable::edge_scroll`): the pointer
+    /// holds still on the screen, so it's further along the row, and the card makes room anew.
+    /// Returns whether a frame is wanted, which is while a card is held.
+    pub(super) fn scroll_cards_under_drag(&mut self, now: Instant, cx: &mut Context<Self>) -> bool {
+        let Some(drag) = self.space_drag() else {
+            if let Some(drag) = self.space_drag.as_mut() {
+                drag.last = None;
+            }
+            return false;
+        };
+        let Some(pointer) = drag.pointer else {
+            return false;
+        };
+        let dt = drag
+            .last
+            .map_or(0., |last| now.duration_since(last).as_secs_f32().min(0.05));
+        let (space, middle) = (drag.space, Self::held_middle(drag, pointer));
+        if let Some(drag) = self.space_drag.as_mut() {
+            drag.last = Some(now);
+        }
+        let (room, at) = (self.cards_room(), self.cards_at());
+        let step = sortable::edge_scroll(
+            middle - at,
+            0.,
+            self.library_width(),
+            CARD_SCROLL_EDGE,
+            CARD_SCROLL_SPEED,
+            dt,
+        );
+        let by = (at + step).clamp(0., room) - at;
+        if by == 0. {
+            return true;
+        }
+        self.scroll_cards_to(at + by);
+        if let Some(drag) = self.space_drag.as_mut() {
+            drag.pointer = Some(pointer + by);
+        }
+        self.place_space(space, cx);
+        true
     }
 
     /// The release that ends a card's drag anywhere in the window, heard before GPUI lets go of

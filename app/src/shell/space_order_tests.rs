@@ -256,3 +256,41 @@ fn a_card_back_where_it_started_moves_nothing(cx: &mut TestAppContext) {
     assert!(host.take_edits().is_empty());
     assert!(shell.read_with(cx, |shell, _| shell.library_open));
 }
+
+/// A card held at the row's right end scrolls the row under it as long as it's there, and the
+/// cards beyond make room as it passes them (#4452); held in the middle, nothing scrolls.
+#[gpui::test]
+fn a_card_held_at_the_row_s_end_scrolls_the_row(cx: &mut TestAppContext) {
+    let (shell, cx, _) = library(cx);
+    let order: Vec<u64> = (1..=12).collect();
+    report(&shell, cx, &order);
+    let (from, width) = (
+        handle(&shell, cx, 1),
+        shell.read_with(cx, |shell, _| shell.library_width()),
+    );
+    assert!(shell.read_with(cx, |shell, _| shell.cards_room()) > 0.);
+    let end = point(px(COLUMN_WIDTH + width - 10.), from.y);
+    hold(cx, from, end);
+    let base = std::time::Instant::now();
+    let step = |cx: &mut VisualTestContext, after: u64| {
+        let now = base + std::time::Duration::from_millis(after);
+        shell.update(cx, |shell, cx| shell.scroll_cards_under_drag(now, cx));
+    };
+    let before = shell.read_with(cx, |shell, _| shell.cards_at());
+    step(cx, 0);
+    step(cx, 50);
+    let after = shell.read_with(cx, |shell, _| shell.cards_at());
+    assert!(
+        (after - before - 24.).abs() < 1.,
+        "50 ms at the end scrolls 24: {before} to {after}"
+    );
+    let now = shell.read_with(cx, |shell, _| shell.space_dragged(1));
+    assert!(now, "the drag goes on");
+
+    let middle = point(px(COLUMN_WIDTH + width / 2.), from.y);
+    cx.simulate_mouse_move(middle, MouseButton::Left, Modifiers::none());
+    step(cx, 100);
+    step(cx, 150);
+    let held = shell.read_with(cx, |shell, _| shell.cards_at());
+    assert_eq!(held, after, "in the middle it doesn't");
+}
