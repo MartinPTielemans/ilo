@@ -632,6 +632,8 @@ case "$stopped" in
   *"$product stopped this: "*) ;;
   *) fail "the agent's change at Work on pages answered: $stopped" ;;
 esac
+expect '^browser: task [^ ]* NeedsYou told$' \
+  "ilo didn't tell a screen reader the agent's task needs the user as it refused its change"
 says "$at" "Needs you" "NVDA didn't say the agent's task needs the user as ilo refused its change"
 spoken "the agent's change refused"
 arrival=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tr '\n' ' ')

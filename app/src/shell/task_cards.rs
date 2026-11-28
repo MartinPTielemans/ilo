@@ -465,15 +465,25 @@ impl Shell {
         for card in &cards {
             let was = self.task_cards.iter().find(|old| old.agent == card.agent);
             // The window in front tells it, and nothing where its notification was posted.
-            if read
-                && was.is_none_or(|was| was.dot != card.dot)
+            if was.is_none_or(|was| was.dot != card.dot)
                 && let Some((came, false)) = crate::needs_you::came(&card.agent, cx)
             {
-                match drawn.as_ref() == Some(&card.agent) {
+                // check.sh reads this line: whether a screen reader is told, and by what, or why
+                // not.
+                let how = match (read, drawn.as_ref() == Some(&card.agent)) {
+                    (false, _) if !self.a11y => "not told, no screen reader",
+                    (false, _) => "not told, the window isn't active",
                     // Its conversation is drawn: its own line says a need, and the answer a finish.
-                    true => answered |= came == Told::Done && card.replies,
-                    false => told = Some(crate::needs_you::said(card, came)),
-                }
+                    (true, true) => {
+                        answered |= came == Told::Done && card.replies;
+                        "told by its conversation"
+                    }
+                    (true, false) => {
+                        told = Some(crate::needs_you::said(card, came));
+                        "told"
+                    }
+                };
+                log!("browser: task {} {:?} {how}", card.agent, came);
             }
             if was.is_none_or(|was| (&was.status, was.dot) != (&card.status, card.dot)) {
                 // check.sh reads this line.
