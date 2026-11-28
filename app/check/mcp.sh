@@ -4537,11 +4537,11 @@ send state
 [ "$(grep '^browser: window [0-9]* shows ' "$log" | tail -1 | cut -d' ' -f5)" = "$front_tab" ] ||
   fail "the relaunch's page, tab $front_tab, isn't the one the window shows: $(grep '^browser: window [0-9]* shows ' "$log" | tail -1)"
 quit
-# An agent's tab has a page size of its own, whatever the user's window shows (#3788): on a new
-# profile's Welcome, with no page for Chromium's tab strip to size it by, it's still pictured, and
-# with a page in a smaller window it's pictured at the same size, laid out alike. A pop-up its
-# page opens has its size too. The page's buttons follow its width, so its outline says which
-# layout it has.
+# An agent's tab has a page size from the start, the page area of the user's frontmost window
+# (#4355, which replaced the fixed size of #3788): on a new profile's Welcome, with no page for
+# Chromium's tab strip to size it by, it's still pictured, and in a smaller window it's pictured
+# smaller, laid out as that width asks. A pop-up its page opens has its opener's size. The page's
+# buttons follow its width, so its outline says which layout it has.
 own_size_said=
 if engine_has ../core/window.cc ../core/agent_page.cc; then
   printf '%s' '<!doctype html><title>Widths</title><style>
@@ -4640,11 +4640,19 @@ say(); middle.onchange = say;
     [ "$(echo "$said" | cut -d' ' -f1)" = "$(echo "$said" | cut -d' ' -f3)" ] ||
       fail "the pop-up the agent's page opened took another size than its opener's: $(cat "$out/mcp-own-size.txt")"
   done
-  [ "${welcome%% *}" = "${paged%% *}" ] ||
-    fail "the agent's page took another size with a page in the user's smaller window: $(cat "$out/mcp-own-size.txt")"
-  [ "$(echo "$welcome" | cut -d' ' -f2)" = "$(echo "$paged" | cut -d' ' -f2)" ] ||
-    fail "the agent's page was laid out otherwise with a page in the user's smaller window: $(cat "$out/mcp-own-size.txt")"
-  own_size_said="ok: an agent's tab has a page size of its own, ${welcome%% *}, pictured on a new profile's Welcome and laid out alike with a page in the user's smaller window, and a pop-up its page opens has it too"
+  # The window made 900 by 640 is narrower and shorter than the one a new profile opens, so the
+  # agent's page, made in it, is too, and the layout its width asks for is the one it has.
+  w_width=${welcome%%x*}; w_height=$(echo "${welcome%% *}" | cut -dx -f2)
+  p_width=${paged%%x*}; p_height=$(echo "${paged%% *}" | cut -dx -f2)
+  [ "$p_width" -lt "$w_width" ] && [ "$p_height" -lt "$w_height" ] ||
+    fail "the agent's page didn't take the user's smaller window's size (#4355): $(cat "$out/mcp-own-size.txt")"
+  layout_of() {
+    if [ "$1" -lt 500 ]; then echo Narrow; elif [ "$1" -lt 850 ]; then echo Middle; else echo Wide; fi
+  }
+  [ "$(echo "$welcome" | cut -d' ' -f2)" = "$(layout_of "$w_width")" ] &&
+    [ "$(echo "$paged" | cut -d' ' -f2)" = "$(layout_of "$p_width")" ] ||
+    fail "the agent's page was laid out otherwise than its width asks: $(cat "$out/mcp-own-size.txt")"
+  own_size_said="ok: an agent's tab has the user's window's page size from the start (#4355), ${welcome%% *} pictured on a new profile's Welcome and ${paged%% *} with a page in the user's smaller window, laid out as each width asks, and a pop-up its page opens has its opener's"
 else
   own_size_said="skip: an agent's tab's own page size (#3788): not run on an engine without it"
 fi
