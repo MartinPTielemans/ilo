@@ -545,6 +545,11 @@ typedef enum bc_agent_failure {
   BC_AGENT_FAILURE_PASSWORD_FIELD = 9,
   // The select has no option with the text asked for.
   BC_AGENT_FAILURE_NO_OPTION = 10,
+  // The browser is signing the tab in for an agent (bc_agent_sign_in), and no agent may act in it
+  // until that's answered.
+  BC_AGENT_FAILURE_SIGNING_IN = 11,
+  // The step is the user's, such as a sign-in only they may finish: the app hands them the tab.
+  BC_AGENT_FAILURE_USER_STEP = 12,
 } bc_agent_failure;
 
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
@@ -1700,6 +1705,44 @@ typedef struct bc_host {
   // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
   // app is quitting. |answer| lasts only for the call.
   void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
+  // The answer to bc_agent_sign_in's |request| for |tab|, from a task of its own, once a call.
+  // |signed_in| means the sign-in form was submitted and has gone from the page, never that the
+  // site let the agent in: the page it led to may ask for a code or say the password was wrong.
+  // |text| says what came of it, for the agent: with |signed_in|, that it's to read the page to see
+  // where it is. It never says which account, how many there are or whether there were any.
+  // |submitted| is the app's alone, never told to an agent: whether the core submitted a form, so
+  // the app can tell a saved login that didn't work from nothing to fill. |failure| is a
+  // bc_agent_failure value: a refusal, such as BC_AGENT_FAILURE_HELD, or
+  // BC_AGENT_FAILURE_USER_STEP when the step is the user's, else BC_AGENT_FAILURE_NONE.
+  void (*agent_sign_in_done)(void* context,
+                             bc_id tab,
+                             uint64_t request,
+                             bool signed_in,
+                             bool submitted,
+                             const char* text,
+                             int failure);
+  // The user's step in bc_agent_sign_in's |request|: |tab|'s page, at |site|, has |count| saved
+  // logins, whose usernames are |accounts|, "" for one saved without. Show them in an ilo line and
+  // answer with bc_tab_sign_in_choose; the core waits for the answer, with no timer. The usernames
+  // are for that line alone, in memory: the app keeps them out of its 30-day file, every log line
+  // and anything an agent can read, and the core logs none. Never told to an agent. The strings
+  // last only for the call.
+  void (*sign_in_choose)(void* context,
+                         bc_id tab,
+                         uint64_t request,
+                         const char* site,
+                         const char* const* accounts,
+                         size_t count);
+  // The core signed |tab|'s page at |site| in for the agent with the id |agent|, with the login
+  // saved for |account|, "" for one saved without a username: its form was submitted and has gone.
+  // For the user's ilo line and an activity-log entry. |account| is for that line alone, in memory:
+  // the app keeps it out of its 30-day file, every log line and anything an agent can read, and
+  // the core logs it nowhere. Never told to an agent. The strings last only for the call.
+  void (*agent_signed_in)(void* context,
+                          const char* agent,
+                          bc_id tab,
+                          const char* site,
+                          const char* account);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1957,7 +2000,7 @@ BC_EXPORT size_t bc_space_agent_name(bc_id space, char* name, size_t capacity);
 // may do, the tab is in that agent's own Space, and Chromium shows its page, not the system's
 // engine, where the browser can't keep an agent's rules. Agents may add_to_split, back, click,
 // close_tab, forward, hand_off, list_split, navigate, pin_tab, press_key, read_page, remove_tab,
-// request, screenshot, scroll, select_option, separate_tab, snapshot, split_tabs, type and
+// request, screenshot, scroll, select_option, separate_tab, sign_in, snapshot, split_tabs, type and
 // unpin_tab; ad_blocking, devtools, passwords, profile_settings (a profile's search engine, archive
 // timing, download folder, offers to save and saved data, and Clear Browsing Data) and any other
 // action are refused. Agent code calls it once for each call an agent makes on a tab, before
@@ -2126,7 +2169,9 @@ BC_EXPORT void bc_agent_request(const char* agent,
 // whether one had it, and holds the tab: no agent may act in it (bc_agent_may_act refuses) until
 // bc_tab_hand_back. The user's: agents get none. Chrome fills, suggests and offers to save the
 // user's passwords, addresses, cards and passkeys in a held tab as in any of theirs, and none of
-// them in an agent's tab it doesn't hold; its sign-in form fills at once, without a reload.
+// them in an agent's tab it doesn't hold; its sign-in form fills at once, without a reload. It ends
+// a sign-in under way in the tab (bc_agent_sign_in): what the core filled is emptied, and the agent
+// hears BC_AGENT_FAILURE_HELD.
 BC_EXPORT bool bc_tab_take_back(bc_id tab);
 
 // The agent with the id |agent| hands |tab|, in its Space, to the user, for a step only they may
@@ -2135,11 +2180,52 @@ BC_EXPORT bool bc_tab_take_back(bc_id tab);
 // bc_agent_may_act.
 BC_EXPORT bool bc_agent_hand_off(const char* agent, bc_id tab);
 
-// The user hands |tab| back to agents, and returns whether they held it. The user's.
+// The user hands |tab| back to agents, and returns whether they held it. Before an agent's next
+// action in its page runs, the main frame's password fields and the fields Chrome filled for the
+// user are emptied. The user's.
 BC_EXPORT bool bc_tab_hand_back(bc_id tab);
 
 // Whether the user holds |tab| from agents.
 BC_EXPORT bool bc_tab_held(bc_id tab);
+
+// The agent with the id |agent| asks the browser to sign |tab|'s page in with a login the user
+// saved, which the agent never sees: the core fills and submits it. Then agent_sign_in_done with
+// |request|, from a task of its own. Agent code calls it after bc_agent_may_act with "sign_in", and
+// only where the user's settings let agents sign in.
+// - The login: one saved for the main frame's exact origin, an https one. Never one for another
+//   subdomain or a site grouped or affiliated with it, a federated one, or one for a site the user
+//   said never to save for. With more than one, the user picks it (sign_in_choose).
+// - The form: the main frame's, with a username and a current password, never a new one, its
+//   password field visible and not in a shadow root. Nothing is filled in any frame in the page,
+//   of the page's own origin or another. A username alone, as on the first page of a sign-in that
+//   asks for the password on the next, is filled and submitted, then the password once its field
+//   shows, on the same origin alone, in the same call.
+// - Filling and submitting: each field as Chrome fills a saved login for the user, then Enter in
+//   the field filled last, once a form and never again in the call. The password goes from the
+//   profile's store to the page and nowhere else.
+// - The hold: an action under way in the tab answers first, and then until agent_sign_in_done no
+//   agent may act in the tab: bc_agent_may_act refuses with BC_AGENT_FAILURE_SIGNING_IN. Once the
+//   page has settled, each field the core filled that's still in the page is emptied, whether or
+//   not the form has gone, before the answer.
+// - The tab is the user's if the page shows what was filled: before the hold lifts, the core looks
+//   for the password in all an agent could read of the page, every frame's fields and the text of
+//   its outline and its read, and if it's there anywhere the answer is BC_AGENT_FAILURE_USER_STEP
+//   and the tab stays held, as bc_tab_take_back holds it.
+// - A login Chrome fills only after the user's own check, such as Touch ID, isn't filled: the
+//   answer is BC_AGENT_FAILURE_USER_STEP. The core never asks for the check in an agent's tab.
+// Refused with a bc_agent_failure value as bc_agent_may_act refuses: a tab not in the agent's
+// Space, held, or signing in already. Not signed in, with no failure, for a page that isn't https,
+// or one with nothing the core can fill, whether or not the user saved a login for it.
+BC_EXPORT void bc_agent_sign_in(const char* agent, bc_id tab, uint64_t request);
+
+// Whether the core is signing |tab| in for an agent (bc_agent_sign_in), for the app to show.
+BC_EXPORT bool bc_tab_signing_in(bc_id tab);
+
+// The user's answer to sign_in_choose for |tab|'s |request|: the index of the account in its
+// |accounts|, or SIZE_MAX for none, which leaves the page as it is and answers the agent with
+// BC_AGENT_FAILURE_USER_STEP. Returns whether the core was still asking. The user's: agents get
+// none.
+BC_EXPORT bool bc_tab_sign_in_choose(bc_id tab, uint64_t request, size_t account);
 
 // What came of bc_file_field_choose (file_field_done).
 // The user's files are in the field, |count| of them.
