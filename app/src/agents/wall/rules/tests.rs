@@ -209,29 +209,30 @@ fn every_line_closes_what_it_opens() {
     }
 }
 
-/// Every shape a text is made for: each assistant and level, with and without each place, the
-/// program by its folder and alone, with and without an app's Developer folder, and three folders
-/// above.
+/// Every shape a text is made for: each assistant, kept or not, the program by its folder and
+/// alone, with and without an app's Developer folder, and three folders above.
 fn shapes() -> Vec<Shape> {
     let mut shapes = Vec::new();
     for cli in Cli::ALL {
-        for level in Tier::ALL {
-            for (folder, attached) in [(true, false), (false, true), (true, true)] {
-                for (program_folder, developer) in [true, false]
-                    .into_iter()
-                    .flat_map(|one| [(one, false), (one, true)])
-                {
-                    shapes.push(Shape {
-                        cli,
-                        level,
-                        folder,
-                        attached,
-                        program_folder,
-                        port: 49152,
-                        ancestors: 3,
-                        developer,
-                    });
-                }
+        // Only Claude Code keeps a run (kept.rs `keeps`).
+        let projects: &[bool] = if cli == Cli::Claude {
+            &[false, true]
+        } else {
+            &[false]
+        };
+        for &project in projects {
+            for (program_folder, developer) in [true, false]
+                .into_iter()
+                .flat_map(|one| [(one, false), (one, true)])
+            {
+                shapes.push(Shape {
+                    cli,
+                    project,
+                    program_folder,
+                    port: 49152,
+                    ancestors: 3,
+                    developer,
+                });
             }
         }
     }
@@ -278,54 +279,69 @@ fn ours(text: &str) -> &str {
         .expect("the base comes first, whole")
 }
 
-/// The operations of the one allow on `key`'s subpath, as the text writes them.
-fn place_line_ops<'t>(text: &'t str, key: &str) -> Option<Vec<&'t str>> {
-    let end = format!(" (subpath (param \"{key}\")))");
-    let line = text
-        .lines()
-        .find(|line| line.starts_with("(allow ") && line.ends_with(&end))?;
-    Some(
-        line["(allow ".len()..line.len() - end.len()]
-            .split(' ')
-            .collect(),
-    )
-}
-
+/// Nothing the user picked or attached is in any text: no parameter but the box's own, and no
+/// subpath but the run's own, its program's, the system's and a kept run's folder.
 #[test]
-fn each_place_gets_its_level_cell_by_cell() {
+fn no_text_holds_a_folder_or_a_file_of_the_users() {
+    let own = [TASK_DIR, TMP, PROGRAM_DIR, PROJECT, DEVELOPER, CLI_HOME];
     for shape in shapes() {
         let text = text(&shape);
-        for (key, given, place) in [
-            (FOLDER, shape.folder, Place::Folder),
-            (ATTACHED, shape.attached, Place::Attached),
-        ] {
-            let Some(ops) = place_line_ops(&text, key) else {
-                assert!(!given, "{shape:?}");
-                continue;
-            };
-            assert!(given, "{shape:?}");
-            for op in Op::ALL {
-                let asked = seatbelt(op);
-                if files::allows(shape.level, place, op) {
-                    assert!(
-                        asked.iter().all(|each| ops.contains(each)),
-                        "{shape:?} {op:?}"
-                    );
-                } else {
-                    // Some part of what a refused cell needs is missing, so the system refuses it.
-                    assert!(
-                        !asked.iter().all(|each| ops.contains(each)),
-                        "{shape:?} {op:?}"
-                    );
-                }
-            }
-            // And nothing no cell asks for.
-            let every: Vec<&str> = (Op::ALL.iter())
-                .filter(|op| files::allows(shape.level, place, **op))
-                .flat_map(|op| seatbelt(*op).iter().copied())
-                .collect();
-            assert!(ops.iter().all(|op| every.contains(op)), "{shape:?}");
+        for (at, _) in ours(&text).match_indices("(subpath (param \"") {
+            let rest = &ours(&text)[at + "(subpath (param \"".len()..];
+            let key = &rest[..rest.find('"').unwrap()];
+            assert!(own.contains(&key), "{shape:?} {key}");
         }
+        for never in ["FOLDER", "ATTACHED", "Documents", "Desktop", "Downloads"] {
+            assert!(!text.contains(never), "{shape:?} {never}");
+        }
+    }
+}
+
+/// A kept run writes its own folder under the home's `projects` and makes `projects` itself as
+/// a folder where it isn't, both after the home's denies, which refuse `projects` whole; nothing
+/// but plain files and folders is made in its folder. A run that keeps nothing has none of it.
+#[test]
+fn a_kept_run_writes_its_own_folder_of_projects_alone() {
+    for shape in shapes() {
+        let text = text(&shape);
+        let lines: Vec<&str> = ours(&text).lines().collect();
+        let named: Vec<usize> = (lines.iter().enumerate())
+            .filter(|(_, line)| line.contains("\"PROJECT"))
+            .map(|(at, _)| at)
+            .collect();
+        if !shape.project {
+            assert!(named.is_empty(), "{shape:?}");
+            continue;
+        }
+        assert_eq!(named.len(), 3, "{shape:?}");
+        let denied = (lines.iter())
+            .position(|line| line.starts_with("(deny file-write* (") && line.contains("projects"))
+            .unwrap();
+        assert!(named.iter().all(|at| *at > denied), "{shape:?}");
+        assert_eq!(
+            lines[named[0]],
+            "(allow file-read* file-test-existence file-write* (subpath (param \"PROJECT\")))"
+        );
+        assert!(lines[named[1]].starts_with("(deny file-write-create (require-all (subpath"));
+        assert!(lines[named[1]].contains("(require-not (vnode-type REGULAR-FILE))"));
+        assert!(lines[named[1]].contains("(require-not (vnode-type DIRECTORY))"));
+        assert_eq!(
+            lines[named[2]],
+            "(allow file-write-create (require-all (literal (param \"PROJECTS\")) \
+             (vnode-type DIRECTORY)))"
+        );
+    }
+}
+
+/// No service that names a host is looked up from inside: the box reaches no resolver, so no
+/// name leaves it as a lookup.
+#[test]
+fn nothing_inside_looks_up_a_name() {
+    for shape in shapes() {
+        let text = text(&shape);
+        assert!(!text.contains("DNSConfiguration"), "{shape:?}");
+        assert!(!text.contains("mDNSResponder"), "{shape:?}");
+        assert!(!text.contains("(remote udp"), "{shape:?}");
     }
 }
 
@@ -349,8 +365,8 @@ fn the_base_comes_first_whole_and_the_mark_last_of_the_lookups() {
 #[test]
 fn every_parameter_is_one_of_the_named() {
     let named = [
-        FOLDER,
-        ATTACHED,
+        PROJECTS,
+        PROJECT,
         TASK_DIR,
         CONFIG,
         CONFIG_MD,
@@ -584,7 +600,9 @@ fn the_network_is_the_listener_and_the_sockets_alone() {
 
 #[test]
 fn the_home_writes_come_after_every_other_write_allow() {
-    for shape in shapes() {
+    // A kept run's own folder comes after them, as `a_kept_run_writes_its_own_folder_of_projects`
+    // reads.
+    for shape in shapes().into_iter().filter(|shape| !shape.project) {
         let text = text(&shape);
         let lines: Vec<&str> = ours(&text).lines().collect();
         let denied = lines
@@ -615,8 +633,7 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         std::fs::create_dir_all(&path).unwrap();
         path
     };
-    let (granted, task, tmp, program, home) = (
-        made("granted"),
+    let (task, tmp, program, home) = (
         made("Tasks/task"),
         made("Tasks/.tmp/0123456789abcdef"),
         made("program"),
@@ -627,8 +644,6 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
     let place = Places::make(&folder.0.join("places")).unwrap();
     let config = folder.0.join("Tasks/task.json");
     let paths = Paths {
-        folder: Some(&granted),
-        attached: None,
         task_dir: &task,
         config: &config,
         tmp: &tmp,
@@ -637,9 +652,10 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         bridge: &bridge,
         cli_home: &home,
         claude_config: None,
+        project: None,
         developer: None,
     };
-    let rules = rules(Cli::Codex, Tier::Work, 49152, &paths, place.mark()).unwrap();
+    let rules = rules(Cli::Codex, 49152, &paths, place.mark()).unwrap();
     let keys: Vec<&str> = rules.params.iter().map(|(key, _)| *key).collect();
     for (at, key) in keys.iter().enumerate() {
         assert!(!keys[..at].contains(key), "{key}");
@@ -675,11 +691,11 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         .max()
         .unwrap();
     assert!(longest + PARAMETERS_MAX * (64 + 16) < super::super::launch::HANDOFF_MAX);
-    // A folder deeper than the parameters reach isn't walled.
-    let deep = (0..PARAMETERS_MAX).fold(granted.clone(), |path, at| path.join(at.to_string()));
+    // A run's folder deeper than the parameters reach isn't boxed.
+    let deep = (0..PARAMETERS_MAX).fold(task.clone(), |path, at| path.join(at.to_string()));
     std::fs::create_dir_all(&deep).unwrap();
     let paths = Paths {
-        folder: Some(&deep),
+        task_dir: &deep,
         ..paths
     };
     let refused = rules_for(&paths, place.mark()).unwrap_err();
@@ -721,8 +737,6 @@ fn the_bridge_is_its_own_literal_and_nothing_of_the_bundle_is_a_subpath() {
     let place = Places::make(&folder.0.join("places")).unwrap();
     let config = folder.0.join("Tasks/task.json");
     let paths = Paths {
-        folder: None,
-        attached: None,
         task_dir: &task,
         config: &config,
         tmp: &tmp,
@@ -731,6 +745,7 @@ fn the_bridge_is_its_own_literal_and_nothing_of_the_bundle_is_a_subpath() {
         bridge: &bridge,
         cli_home: &home,
         claude_config: None,
+        project: None,
         developer: None,
     };
     let rules = rules_for(&paths, place.mark()).unwrap();
@@ -748,14 +763,15 @@ fn the_bridge_is_its_own_literal_and_nothing_of_the_bundle_is_a_subpath() {
 }
 
 fn rules_for(paths: &Paths, mark: &Mark) -> io::Result<Rules> {
-    rules(Cli::Codex, Tier::Work, 49152, paths, mark)
+    rules(Cli::Codex, 49152, paths, mark)
 }
 
-/// The first run of the whole text: the system takes it, and a shell started inside it at Work
-/// makes a file in its folder, can't delete it, and reads nothing beside the folder.
+/// The first run of the whole text: the system takes it, and a shell started inside it makes a
+/// file in its own temporary folder alone, and reads and writes nothing of a folder of the
+/// user's beside its own.
 #[cfg(target_os = "macos")]
 #[test]
-fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
+fn a_shell_starts_inside_the_whole_text_and_reaches_no_folder_of_the_users() {
     use std::process::Stdio;
     let folder = Folder::new("shell");
     let made = |name: &str| {
@@ -763,8 +779,8 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
         std::fs::create_dir_all(&path).unwrap();
         path
     };
-    let (granted, task, tmp, home) = (
-        made("granted"),
+    let (users, task, tmp, home) = (
+        made("Documents"),
         made("Tasks/task"),
         made("Tasks/.tmp/0123456789abcdef"),
         made("home"),
@@ -774,8 +790,6 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
     let place = Places::make(&folder.0.join("places")).unwrap();
     let config = folder.0.join("Tasks/task.json");
     let paths = Paths {
-        folder: Some(&granted),
-        attached: None,
         task_dir: &task,
         config: &config,
         tmp: &tmp,
@@ -784,17 +798,19 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
         bridge: Path::new("/bin/sh"),
         cli_home: &home,
         claude_config: None,
+        project: None,
         developer: None,
     };
     let rules = rules_for(&paths, place.mark()).unwrap();
-    let wall = super::super::Wall::inside(None, &rules, &[]).unwrap();
+    let wall = super::super::Wall::inside(&rules, &[]).unwrap();
     let mut command = wall.command(Path::new("/bin/sh"));
-    let script = "echo made > \"$0/new\" && /bin/cat \"$0/new\"; \
+    let script = "echo made > \"$0/new\" 2>/dev/null || echo refused; \
                   /bin/cat \"$1\" 2>/dev/null || echo refused; \
-                  /bin/rm \"$0/new\" 2>/dev/null || echo kept";
+                  /bin/ls \"$0\" >/dev/null 2>&1 || echo refused; \
+                  echo made > \"$2/new\" && /bin/cat \"$2/new\"";
     command
         .args(["-c", script])
-        .args([&granted, &outside])
+        .args([&users, &outside, &tmp])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -806,7 +822,7 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
     assert_eq!(risen, Ok(()), "{err}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "made\nrefused\nkept\n",
+        "refused\nrefused\nrefused\nmade\n",
         "{err}"
     );
 }
@@ -831,8 +847,6 @@ fn a_program_named_alone_starts_inside_the_whole_text() {
     let place = Places::make(&folder.0.join("places")).unwrap();
     let config = folder.0.join("Tasks/task.json");
     let paths = Paths {
-        folder: None,
-        attached: None,
         task_dir: &task,
         config: &config,
         tmp: &tmp,
@@ -841,11 +855,12 @@ fn a_program_named_alone_starts_inside_the_whole_text() {
         bridge: Path::new("/bin/sh"),
         cli_home: &home,
         claude_config: None,
+        project: None,
         developer: None,
     };
     let rules = rules_for(&paths, place.mark()).unwrap();
     assert!(!rules.text.contains(PROGRAM_DIR));
-    let wall = super::super::Wall::inside(None, &rules, &[]).unwrap();
+    let wall = super::super::Wall::inside(&rules, &[]).unwrap();
     let mut command = wall.command(Path::new("/bin/sh"));
     command
         .args(["-c", "echo started"])
@@ -1015,8 +1030,7 @@ fn the_developer_folder_joins_only_while_the_parameters_fit() {
         std::fs::create_dir_all(&path).unwrap();
         path
     };
-    let (granted, task, tmp, program, home) = (
-        made("granted"),
+    let (task, tmp, program, home) = (
         made("Tasks/task"),
         made("Tasks/.tmp/0123456789abcdef"),
         made("program"),
@@ -1028,8 +1042,6 @@ fn the_developer_folder_joins_only_while_the_parameters_fit() {
     let place = Places::make(&folder.0.join("places")).unwrap();
     let config = folder.0.join("Tasks/task.json");
     let paths = Paths {
-        folder: Some(&granted),
-        attached: None,
         task_dir: &task,
         config: &config,
         tmp: &tmp,
@@ -1038,6 +1050,7 @@ fn the_developer_folder_joins_only_while_the_parameters_fit() {
         bridge: &bridge,
         cli_home: &home,
         claude_config: None,
+        project: None,
         developer: Some(&developer_dir),
     };
     let root = std::fs::canonicalize(&folder.0).unwrap();
@@ -1064,13 +1077,13 @@ fn the_developer_folder_joins_only_while_the_parameters_fit() {
     assert!(!(without.params.iter()).any(|(key, _)| *key == DEVELOPER));
     assert!(!without.text.contains(DEVELOPER));
     assert!(!up(&without, &root.join("Applications")));
-    // The deepest granted folder that fits without it: with it, the same task starts, without it.
+    // The deepest run folder that fits without it: with it, the same run starts, without it.
     let deepest = (0..PARAMETERS_MAX)
-        .map(|depth| (0..depth).fold(granted.clone(), |path, at| path.join(at.to_string())))
+        .map(|depth| (0..depth).fold(task.clone(), |path, at| path.join(at.to_string())))
         .take_while(|deep| {
             std::fs::create_dir_all(deep).unwrap();
             let paths = Paths {
-                folder: Some(deep),
+                task_dir: deep,
                 developer: None,
                 ..paths
             };
@@ -1080,7 +1093,7 @@ fn the_developer_folder_joins_only_while_the_parameters_fit() {
         .unwrap();
     let full = rules_for(
         &Paths {
-            folder: Some(&deepest),
+            task_dir: &deepest,
             ..paths
         },
         place.mark(),

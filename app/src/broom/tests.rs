@@ -293,6 +293,7 @@ impl StandIn {
             program: self.folder.join("claude"),
             path: Some(path),
             model: None,
+            boxed: false,
         }
     }
 

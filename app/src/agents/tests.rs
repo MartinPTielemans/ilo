@@ -7171,6 +7171,18 @@ mod tasks {
         let found = sort(cx).expect("Claude signed in sorts");
         assert!(agents.read_with(cx, |agents, _| agents.sorts()));
         assert_eq!((found.program, found.model), (program, None));
+        // Where there's no sandbox it runs outside a box, where there is it runs in its own, and
+        // where Claude Code has no box it doesn't run.
+        assert!(!found.boxed, "no sandbox");
+        let boxes = |available, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, _| agents.tasks.box_available = Some(available));
+        };
+        boxes(Ok(()), cx);
+        assert!(sort(cx).expect("boxed").boxed, "a sort runs in its box");
+        boxes(Err(crate::agents::wall::Unavailable::NotBuilt), cx);
+        assert!(sort(cx).is_none(), "no box");
+        assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
+        agents.update(cx, |agents, _| agents.tasks.box_available = None);
         set_found(&agents, Ready::SignedOut, cx);
         assert!(sort(cx).is_none(), "signed out");
         assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
@@ -15308,6 +15320,8 @@ fn a_threads_hand_off_returns_at_once_and_an_outside_clients_waits() {
     assert!(description("claude-code").contains("this waits until"));
 }
 
+#[cfg(unix)]
+mod boxed;
 mod fenced;
 mod holds;
 mod installs;
@@ -15319,8 +15333,6 @@ mod not_our_tools;
 mod notes;
 mod other_apps;
 mod permission_stopped;
-#[cfg(unix)]
-mod rewall;
 #[cfg(unix)]
 mod searches;
 mod sensitive;

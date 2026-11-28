@@ -127,7 +127,7 @@ pub enum Nowhere {
 pub enum Keeps {
     /// Never: each run keeps nothing.
     Never,
-    /// Each run that can be: one with no files (`decide`).
+    /// Each run.
     Always,
 }
 
@@ -142,14 +142,32 @@ pub const fn keeps(cli: Cli) -> Keeps {
     }
 }
 
-/// What a new run of `cli` keeps: nothing the user sets decides it. A `walled` run, a task's
-/// with files, keeps nothing: its assistant can't write where it keeps conversations. The runner
-/// is told only what comes of it, never the reason.
-pub fn decide(cli: Cli, walled: bool) -> Keep {
-    match (keeps(cli), walled) {
-        (Keeps::Always, false) => Keep::New(Id::new()),
-        (Keeps::Always, true) | (Keeps::Never, _) => Keep::Nothing,
+/// What a new run of `cli` keeps: nothing the user sets decides it. The runner is told only
+/// what comes of it, never the reason.
+pub fn decide(cli: Cli) -> Keep {
+    match keeps(cli) {
+        Keeps::Always => Keep::New(Id::new()),
+        Keeps::Never => Keep::Nothing,
     }
+}
+
+/// The longest name Claude Code files a folder's conversations under as it is: a longer one it
+/// shortens with a hash ilo doesn't make, so a run in such a folder keeps nothing.
+const PROJECT_NAME_MAX: usize = 200;
+
+/// The name of the folder Claude Code keeps the conversations of a run in `dir` in, as it makes
+/// it: `dir`'s real path, each character that isn't an ASCII letter or digit made a dash for each
+/// of its UTF-16 units, as JavaScript counts them. None where it would shorten it, so the box
+/// gives a kept run the one folder its conversation goes in.
+pub fn project_name(dir: &Path) -> Option<String> {
+    let mut name = String::new();
+    for each in dir.to_str()?.chars() {
+        match each.is_ascii_alphanumeric() {
+            true => name.push(each),
+            false => name.extend(std::iter::repeat_n('-', each.len_utf16())),
+        }
+    }
+    (name.len() <= PROJECT_NAME_MAX).then_some(name)
 }
 
 /// Claude Code's arguments for a run that keeps what `keep` says, from a run's that keeps nothing.

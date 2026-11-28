@@ -621,8 +621,8 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
 /// ended, picked-up, gone, not-kept or codex-ended; or of one a run of the browser before left,
 /// brought back from the Archive: past, past-no-profile or past-no-space; or of one with helpers
-/// (#4102): helpers, helper, helpers-limit or helpers-ended; or of one with files whose assistant
-/// ilo couldn't limit to them (#4101): files-wall.
+/// (#4102): helpers, helper, helpers-limit or helpers-ended; or of one started without what the
+/// user gave it (#4101): files-wall.
 pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = states::var("PREVIEW_TASK") else {
         return;
@@ -728,12 +728,10 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 working(10, "Clicking “Place order”"),
             ]
         }
-        // A task with files whose assistant ilo couldn't limit to them (#4101), each line where
-        // it comes: started without the folder and the file, set back under the level the user
-        // set, and stopped once the folder was taken back, with what its run left running.
+        // A task started without the folder the user gave it (#4101), each line where it comes:
+        // without the folder, a change of level, and what a run before had left running, which
+        // ilo ended.
         "files-wall" => {
-            use browser::agents::task::ilo::{LeftOut, Reach};
-            let folder = || gpui::SharedString::from("Lisbon trip");
             let said = |key, kind| ilo(key, kind, true);
             talk.about = format!("{PRODUCT} · Stopped").into();
             talk.stoppable = false;
@@ -742,13 +740,8 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 said(
                     100,
                     IloKind::StartedWithout {
-                        left: LeftOut::Folder(folder()),
-                    },
-                ),
-                said(
-                    101,
-                    IloKind::StartedWithout {
-                        left: LeftOut::File("boarding passes.pdf".into()),
+                        folder: "Lisbon trip".into(),
+                        why: browser::agents::task::ilo::NotGiven::Gone,
                     },
                 ),
                 done(0, before),
@@ -761,26 +754,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                         to: Tier::Full,
                     },
                 ),
-                said(
-                    103,
-                    IloKind::SetBack {
-                        at: Tier::Work,
-                        refused: Tier::Full,
-                        folder: folder(),
-                    },
-                ),
-                said(
-                    104,
-                    IloKind::NotRestarted {
-                        left: LeftOut::Folder(folder()),
-                    },
-                ),
-                said(
-                    105,
-                    IloKind::LeftRunning {
-                        reach: Reach::Folder(folder()),
-                    },
-                ),
+                said(103, IloKind::EndedLeft),
             ]
         }
         // A task that has ended (#4105): with its reply field, the first one's line saying where
