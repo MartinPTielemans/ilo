@@ -298,10 +298,7 @@ fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
 /// gives it or it's gone by now: this is the one place a folder is granted (`Granted::picked`),
 /// and the start checks it again.
 fn granted(picked: &std::path::Path) -> Option<Granted> {
-    let never = Never::here(None);
-    let root = task_files::resolved(picked);
-    let root = root.filter(|root| !task_files::never_grantable(root, &never))?;
-    Granted::picked(root).ok()
+    task_files::grant(picked, &Never::here(None))
 }
 
 /// The selected row's plate, the keyboard's, and its kind's ink, text-2, each the ink at its tone's.

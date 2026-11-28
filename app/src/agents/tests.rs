@@ -15323,6 +15323,7 @@ fn a_threads_hand_off_returns_at_once_and_an_outside_clients_waits() {
 #[cfg(unix)]
 mod boxed;
 mod fenced;
+mod folders;
 mod holds;
 mod installs;
 pub(crate) mod kept;

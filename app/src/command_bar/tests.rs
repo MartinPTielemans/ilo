@@ -5678,14 +5678,13 @@ fn an_open_logs_its_frame_drawn_then_its_window_on_screen_once(cx: &mut TestAppC
     );
 }
 
-/// A folder the test makes, with the files named in it, as the system's panel gives them: beside
-/// the build, as ilo may give that on every system the tests run on, where the system's temporary
-/// folder is one ilo never gives on the Mac. Each is its own, as the tests run side by side.
+/// A folder the test makes, with the files named in it, as the system's panel gives them, where
+/// the floor gives one on every checkout (`files::test_folders`). Each is its own, as the tests
+/// run side by side.
 fn made(name: &str, files: &[&str]) -> std::path::PathBuf {
     static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/ilo-test-folders")
+    let folder = (crate::agents::files::test_folders())
         .join(format!("{name}-{}-{made}", std::process::id()))
         .join(name);
     _ = std::fs::remove_dir_all(&folder);
