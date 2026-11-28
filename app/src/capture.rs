@@ -17,6 +17,7 @@ use gpui::{
 };
 use image::{Frame, RgbaImage};
 
+use crate::dismissal::{By, Close, Why};
 use crate::elevation::Level;
 use crate::menu::Look;
 use crate::toast;
@@ -487,7 +488,8 @@ fn start_now(
     update(cx, |capture, window, cx| {
         if capture.session.is_some() {
             if press.is_none() {
-                capture.leave("toggle", window, cx);
+                // ⇧⌘2 again.
+                capture.leave(Close::new(Why::Toggled, By::Keyboard), window, cx);
             }
             return;
         }
@@ -660,9 +662,8 @@ pub fn element_box(tab: u64, at: Point<Pixels>, box_: Option<Bounds<Pixels>>, cx
 /// The user left capture mode: a click outside it, another window or another app. The host has
 /// hidden it already.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |capture, window, cx| {
-        capture.leave("dismissed", window, cx)
-    });
+    let close = Close::left(cx.active_window().is_none());
+    update(cx, |capture, window, cx| capture.leave(close, window, cx));
 }
 
 /// The tab closed, and capture mode over it.
@@ -676,7 +677,7 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
             .as_ref()
             .is_some_and(|session| session.tab == tab)
         {
-            capture.leave("tab closed", window, cx);
+            capture.leave(Close::new(Why::FocusLeft, By::Code), window, cx);
         }
     });
 }
@@ -714,6 +715,9 @@ fn snapshot(png: &[u8]) -> Option<Snapshot> {
         grey: image(grey)?,
     })
 }
+
+/// The app leaving capture mode by itself, as it can't go on.
+const GAVE_UP: Close = Close::new(Why::FocusLeft, By::Code);
 
 impl Capture {
     fn request(&mut self) -> u64 {
@@ -779,7 +783,7 @@ impl Capture {
         };
         if session.snapshot_request == request {
             let Some(png) = png else {
-                return self.leave("no picture of the page", window, cx);
+                return self.left(GAVE_UP, Some("no picture of the page"), window, cx);
             };
             // Decoded away from the main thread, as a full screen page is millions of pixels.
             let decoded = cx.background_spawn(async move { snapshot(&png) });
@@ -808,7 +812,9 @@ impl Capture {
                 Action::Board(at) => session.boards.get(at).cloned(),
                 _ => None,
             };
-            self.leave(action.name(), window, cx);
+            // A click or Return chose it (boards.rs's), which run doesn't hear apart.
+            let close = Close::new(Why::Chosen, By::Pointer);
+            self.left(close, Some(action.name()), window, cx);
             match (png, chosen) {
                 (Some(png), Some(chosen)) if !marks.is_empty() => {
                     // check.sh reads this line.
@@ -874,7 +880,7 @@ impl Capture {
             return;
         };
         let Some(snapshot) = snapshot else {
-            return self.leave("no picture of the page", window, cx);
+            return self.left(GAVE_UP, Some("no picture of the page"), window, cx);
         };
         session.snapshot = Some(snapshot);
         let frame = session.frame;
@@ -935,8 +941,20 @@ impl Capture {
         }
     }
 
-    /// Leaves capture mode: the window hides, the page has the keyboard again.
-    fn leave(&mut self, why: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// Leaves capture mode for `close`: the window hides, the page has the keyboard again.
+    fn leave(&mut self, close: Close, window: &mut Window, cx: &mut Context<Self>) {
+        self.left(close, None, window, cx)
+    }
+
+    /// Leaves for `close`, which the log says in its reason's words or in `finer` ones, which
+    /// check.sh reads: what was chosen, or why the app gave up.
+    fn left(
+        &mut self,
+        close: Close,
+        finer: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.session.take() else {
             return;
         };
@@ -950,7 +968,14 @@ impl Capture {
             window.drop_image(snapshot.grey).ok();
         }
         // check.sh reads this line.
-        log!("browser: capture left ({why})");
+        let words = finer.unwrap_or(match close.why {
+            Why::Toggled => "toggle",
+            Why::Escape => "escape",
+            Why::PressOutside | Why::WindowLeft => "dismissed",
+            Why::FocusLeft => "tab closed",
+            Why::Chosen | Why::CloseCommand | Why::PointerLeft => "left",
+        });
+        log!("browser: capture left ({words})");
         cx.notify();
     }
 
@@ -1012,7 +1037,8 @@ impl Capture {
         }
         // A click away from the menu leaves, as a click outside any menu closes it (interim).
         if session.chosen.is_some() {
-            return self.leave("click", window, cx);
+            let close = Close::new(Why::PressOutside, By::Pointer);
+            return self.left(close, Some("click"), window, cx);
         }
         session.press = Some(at);
     }
@@ -1179,7 +1205,7 @@ impl Capture {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = look.palette();
-        let highlight = look.highlight;
+        let highlight = look.accent;
         let (width, height) = bar_size();
         let parts = Part::all().map(|part| {
             let chosen = part == Part::Tool(editing.tool) || part == Part::Colour(editing.colour);
@@ -1258,10 +1284,10 @@ impl Capture {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = look.palette();
-        let highlight = look.highlight;
+        let highlight = look.plate();
         let lit = move |action: Action| lit.contains(&Some(action));
-        // A row of ilo's menu: the Space's accent under the pointer, with its title and glyph in
-        // the label solved on it, as menu.rs lights a row. Lit from state, where the pointer is
+        // A row of ilo's menu: the plate under the pointer, with its title and glyph in its label,
+        // as menu.rs lights a row. Lit from state, where the pointer is
         // over the menu, as a hover's text colour never reaches the title (#3137).
         let row = |action: Action| {
             div()
@@ -1395,7 +1421,7 @@ impl Capture {
                     true => capture.cancel_edit(cx),
                     // esc closes only Add to Board's submenu while it shows, as menu.rs's does.
                     false if capture.close_submenu(cx) => {}
-                    false => capture.leave("escape", window, cx),
+                    false => capture.leave(Close::new(Why::Escape, By::Keyboard), window, cx),
                 }
             }))
             .on_action(cx.listener(|capture, _: &Done, _, cx| {
@@ -1486,7 +1512,7 @@ impl Capture {
                 .w(lit.size.width + px(2. * RING))
                 .h(lit.size.height + px(2. * RING))
                 .border(px(RING))
-                .border_color(look.highlight.fill)
+                .border_color(look.accent.fill)
                 .rounded(px(RING_RADIUS))
         });
         let pill = session.chosen.is_none().then(|| {

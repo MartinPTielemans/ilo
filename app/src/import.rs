@@ -56,9 +56,9 @@ use crate::settings_rows::{
 use crate::theme::Theme;
 use crate::tokens::radius;
 use crate::tokens::settings::{
-    BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
-    CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, HEADER_GAP, ROW_X, STEP,
+    BOX_GAP, BUTTONS_TOP, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS, CONTROL_GAP,
+    DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE, GLYPH_PLATE_GAP,
+    HEADER_GAP, ROW_X, STEP,
 };
 use crate::tokens::shell::import::BADGE;
 use crate::tokens::text;
@@ -910,7 +910,10 @@ impl ImportView {
         let (title, line, button, corner) = match &self.step {
             Step::List => (
                 "Bring your stuff.".to_string(),
-                format!("From the browser you used. It all stays on {here}."),
+                format!(
+                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
+                     all stays on {here}."
+                ),
                 (!self.sources.is_empty())
                     .then(|| format!("Import from {}", name(self.picked_row))),
                 Corner::Skip,
@@ -999,7 +1002,10 @@ impl ImportView {
             ),
             _ => (
                 "Bring your stuff.".to_string(),
-                format!("From the browser you used. It all stays on {here}."),
+                format!(
+                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
+                     all stays on {here}."
+                ),
                 None,
                 Corner::Skip,
             ),
@@ -1057,6 +1063,22 @@ impl ImportView {
     #[cfg(test)]
     pub(crate) fn offer(&mut self, tabs: Vec<Tab>) {
         self.suggested = Some(tabs);
+    }
+
+    /// Where it last logged `name` drawn, the point check.sh clicks, for a test outside it.
+    #[cfg(test)]
+    pub(crate) fn drawn_place(&self, name: &str) -> Option<gpui::Point<gpui::Pixels>> {
+        let infix = format!(" {name} at ");
+        let lines = self.drawn_at.borrow();
+        let line = (lines.lines().iter().rev()).find_map(|line| {
+            let at = line.find(&infix)?;
+            Some(line[at + infix.len()..].to_string())
+        })?;
+        let (x, y) = line.split_once(' ')?;
+        Some(gpui::point(
+            gpui::px(x.parse().ok()?),
+            gpui::px(y.parse().ok()?),
+        ))
     }
 
     /// The step last drawn, as check.sh reads it from the log.
@@ -2131,7 +2153,7 @@ impl ImportView {
             .items_center()
             .gap(px(CONTROL_GAP))
             .child(format!("Turn on {app}"))
-            .child(switch(look, true, 1., look.accent));
+            .child(switch(look, true, 1., look.on));
         let steps = [
             step(
                 1,
@@ -2465,13 +2487,7 @@ impl ImportView {
                         .on_click(
                             cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
                         )
-                        .child(checked_row(
-                            look,
-                            on,
-                            name.clone(),
-                            look.accent,
-                            rgb(CHECK_TICK),
-                        ))
+                        .child(checked_row(look, on, name.clone(), look.on, look.knob_on))
                 });
                 Some(group(look, rows.map(|row| div().child(row))))
             }
@@ -2627,7 +2643,8 @@ impl ImportView {
     }
 
     /// A browser's row in the guided list, which a click picks: the one picked on a plate, with
-    /// the ↩ that brings it at its end.
+    /// its tick at its end and the others' empty, neutral as the sheet's controls are; the
+    /// step's button says the one ↩ brings.
     fn guided_row(
         &self,
         index: usize,
@@ -2638,18 +2655,28 @@ impl ImportView {
     ) -> gpui::Div {
         let look = &self.look;
         let picked = index == self.picked_row;
-        let enter = picked.then(|| {
-            svg()
-                .path("icons/corner-down-left.svg")
-                .size(px(DISCLOSURE_GLYPH))
-                .text_color(look.detail)
-                .into_any_element()
-        });
+        let tick = div()
+            .flex_none()
+            .size(px(BADGE))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(picked, |tick| {
+                tick.bg(look.ink).child(
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(BADGE * 0.75))
+                        .text_color(look.surface),
+                )
+            })
+            .when(!picked, |tick| tick.border_1().border_color(look.detail))
+            .into_any_element();
         let line = (!line.is_empty()).then(|| line.into());
         let row = frame()
             .child(self.app_plate(index))
             .child(self.row_words(source, line))
-            .children(enter.map(|enter| end([enter])));
+            .child(end([tick]));
         let hovered = look.hovered;
         div().child(
             div()
@@ -2667,11 +2694,11 @@ impl ImportView {
         )
     }
 
-    /// The guided list's files, as one quiet line: a bookmarks file or a passwords file, each a
-    /// link, in the ink, to the system's open panel.
+    /// The guided list's files, as one quiet line under it: a bookmarks file or a passwords
+    /// file, each a link, in the ink, to the system's open panel.
     fn file_links(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
-        let said = "Or bring a bookmarks file or a passwords file.";
+        let said = "Another browser or computer? Bring a bookmarks file or a passwords file.";
         let range = |part: &str| {
             let start = said.find(part).unwrap_or_default();
             start..start + part.len()
@@ -2700,8 +2727,6 @@ impl ImportView {
         );
         div()
             .px(px(ROW_X))
-            .flex()
-            .justify_center()
             .text_size(px(text::SMALL))
             .text_color(look.detail)
             .child(text)
@@ -2852,7 +2877,7 @@ impl ImportView {
                 .id(("import-kind", kind as usize))
                 .when(self.a11y, |toggle| named_switch(toggle, kind.label(), on))
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle(kind, cx)))
-                .child(switch(look, on, slid, look.accent));
+                .child(switch(look, on, slid, look.on));
             let chips = (read.as_ref())
                 .filter(|_| kind == Kind::Spaces)
                 .map(|read| chips(look, &read.found.spaces));
@@ -2960,7 +2985,7 @@ impl ImportView {
                     .id("import-pick-passwords-switch")
                     .when(self.a11y, |toggle| named_switch(toggle, "Passwords", *on))
                     .on_click(cx.listener(|view, _, _, cx| view.toggle_passwords(cx)))
-                    .child(switch(look, *on, 1., look.accent));
+                    .child(switch(look, *on, 1., look.on));
                 let said = format!("**{}**, read by Chromium's importer", file_name(file));
                 (said, *on, toggle.into_any_element())
             }
@@ -3583,7 +3608,7 @@ impl Render for ImportView {
                                 div()
                                     .size(px(BADGE))
                                     .rounded_full()
-                                    .bg(look.accent)
+                                    .bg(look.on)
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -3591,7 +3616,7 @@ impl Render for ImportView {
                                         svg()
                                             .path("icons/check.svg")
                                             .size(px(BADGE * 0.75))
-                                            .text_color(gpui::white()),
+                                            .text_color(look.knob_on),
                                     ),
                             );
                         let counts = (!came.counts.is_empty()).then(|| came.counts.clone());

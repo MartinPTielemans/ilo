@@ -384,6 +384,107 @@ fn task() -> crate::agents::task::ArchivedTask {
     }
 }
 
+/// A task that ended in a run before is there to reply to after a quit (#4105), on the agents as
+/// they are after that quit and the launch (`after_a_quit`), the test doing the app's part between
+/// them and the window. Its row is in History; a click on it brings its card back to the Space of
+/// its own profile and no other, with its conversation open and the reply field in it, though it
+/// has no Space of its own. A reply is its task's, and once its run opens a page the area is the
+/// Space made for it, and goes with that Space.
+#[cfg(unix)]
+#[gpui::test]
+fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
+    use crate::agents::task::TaskAction;
+    use crate::agents::tests::kept::past::{after_a_quit, opens_a_page};
+
+    let (agents, past) = after_a_quit("Lisbon seats", cx);
+    cx.update(|cx| {
+        crate::shell::commands::bind_keys(cx);
+        crate::text_input::bind_keys(cx);
+    });
+    let (shell, host, cx) = history(Vec::new(), cx);
+    // What the app sends its windows as the agents change, by the way it sends it.
+    let give = |cx: &mut VisualTestContext| {
+        let (status, cards, archived) = agents.read_with(cx, |agents, cx| {
+            (
+                agents.status(),
+                agents.shown_cards(cx),
+                agents.archived_tasks(cx),
+            )
+        });
+        assert!(
+            cards.iter().all(|card| card.home == 1),
+            "a card outside its profile's Space"
+        );
+        let conversation = |agent: &str, cx: &gpui::App| agents.read(cx).conversation(agent, cx);
+        let shells = [shell.downgrade()];
+        cx.update(|_, cx| {
+            crate::shell::send_agents(status, cards, archived, conversation, &shells, cx)
+        });
+        cx.run_until_parked();
+    };
+    give(cx);
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, Vec::new(), false, cx);
+    assert_eq!(items(&shell, cx).len(), 2, "today's heading and the task");
+    let shown = |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.talk_agent());
+    assert_eq!(shown(cx), None);
+
+    made(&host);
+    cx.simulate_click(row(0), Modifiers::none());
+    let asked = made(&host);
+    assert!(asked.contains(&format!("task {past} Restore")), "{asked:?}");
+    assert!(!library_open(&shell, cx));
+    let (_, back) = agents.update(cx, |agents, cx| {
+        agents.task_action(&past, TaskAction::Restore, cx)
+    });
+    assert_eq!(back.as_deref(), Some(past.as_str()));
+    let own = agents.read_with(cx, |agents, _| agents.task(&past).unwrap().space);
+    assert_eq!(own, 0);
+    give(cx);
+    assert_eq!(shown(cx).as_deref(), Some(past.as_str()));
+    assert!(made(&host).contains(&format!("show task {past}")));
+    // The window asked for its conversation, which the agents send as they send the rest.
+    give(cx);
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let reply = shell.read_with(cx, |shell, cx| shell.reply_drawn(cx));
+    assert!(reply.is_some(), "no reply field");
+
+    cx.simulate_input("And for Sunday?");
+    cx.simulate_keystrokes("enter");
+    let said = format!(r#"task {past} Reply("And for Sunday?")"#);
+    assert!(made(&host).contains(&said));
+    let reply = TaskAction::Reply("And for Sunday?".into());
+    agents.update(cx, |agents, cx| _ = agents.task_action(&past, reply, cx));
+    let own = opens_a_page(&agents, &past, cx);
+    assert_ne!(own, 0);
+    // The cards come before the core tells of the Space, and the conversation stays where it is.
+    give(cx);
+    assert_eq!(shown(cx).as_deref(), Some(past.as_str()));
+    let spaces = |own: Option<u64>, cx: &mut VisualTestContext| {
+        let mut spaces = vec![space(1, PROFILE), space(2, 8)];
+        if let Some(own) = own {
+            host.space_agents
+                .borrow_mut()
+                .insert(own, past.clone().into());
+            let mut entry = space(own, PROFILE);
+            entry.5 = "Claude".into();
+            spaces.push(entry);
+        } else {
+            host.space_agents.borrow_mut().clear();
+        }
+        shell.update(cx, |shell, cx| shell.set_spaces(spaces, cx));
+        cx.run_until_parked();
+    };
+    spaces(Some(own), cx);
+    assert_eq!(shown(cx).as_deref(), Some(past.as_str()));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_open()), Some(own));
+    // The Space gone, as when the task goes for good, its area goes with it.
+    spaces(None, cx);
+    assert_eq!(shown(cx), None);
+}
+
 /// A search asks the browser for the pages with its words. Until it answers, the pages listed are
 /// searched as typed; its answer is the list, though a page's title doesn't hold the text as typed.
 #[gpui::test]
@@ -893,4 +994,26 @@ fn a_section_stop_leaves_the_windows_shortcuts_as_they_are(cx: &mut TestAppConte
         "Tab left the field"
     );
     assert_eq!(calls(with), calls(without));
+}
+
+/// A ringed row removed by code, here a closed tab reopened elsewhere, gives the ring to the row
+/// that took its place, as one the user closes does (#4108).
+#[gpui::test]
+fn a_ringed_row_removed_gives_the_ring_to_the_row_in_its_place(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    cx.update(|_, cx| crate::shell::commands::bind_keys(cx));
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    let pages = vec![page("mail", at(9, 14)), page("docs", at(8, 10))];
+    answer(&shell, first, pages, false, cx);
+    let search = shell.read_with(cx, |shell, cx| {
+        gpui::Focusable::focus_handle(&*shell.library.as_ref().unwrap().search.read(cx), cx)
+    });
+    cx.update(|window, cx| window.focus(&search, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down");
+    assert_eq!(ringed(&shell, cx).as_deref(), Some("closed news"));
+    shell.update(cx, |shell, cx| shell.set_archive(Vec::new(), cx));
+    cx.run_until_parked();
+    assert_eq!(ringed(&shell, cx).as_deref(), Some("visited mail"));
 }

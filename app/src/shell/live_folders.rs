@@ -16,7 +16,7 @@ use gpui::{
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
-    FAVICON_DRAWN, FOLDER_INDENT, HOVERED, PLATE_INSET, ROW_PITCH, SECONDARY, Shell, Slot, Space,
+    FAVICON_DRAWN, FOLDER_INDENT, PLATE_INSET, ROW_PITCH, SECONDARY, Shell, Slot, Space,
     TITLE_END_INSET, plate, row_box, rows::with_host, title,
 };
 use crate::tokens::shell::live_folder::{DRAFT, FAILED_MARK, HEADING_HEIGHT, HEADING_X};
@@ -730,7 +730,7 @@ impl Shell {
                 .items_center()
                 .text_size(px(text::SMALL))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(self.palette.text(SECONDARY))
+                .text_color(self.palette.gray(SECONDARY))
                 .child(list.heading())
                 .into_any_element(),
             LiveRow::Item { item, new } => self.live_row(folder, inset, item, *new, cx),
@@ -773,7 +773,7 @@ impl Shell {
         let plate = plate(glyph, label)
             .when(draft, |plate| plate.opacity(DRAFT))
             .id("plate")
-            .hover(|plate| plate.bg(self.palette.plate(HOVERED)));
+            .hover(|plate| plate.bg(self.palette.hovered_row()));
         row_box()
             .pl(px(inset))
             // Keyed by its item, not its place: an answer that moves the rows between press and
@@ -806,7 +806,7 @@ impl Shell {
         let label = title(&self.palette, "Sign in to GitHub".into(), false).pr(px(TITLE_END_INSET));
         let plate = plate(glyph, label)
             .id("plate")
-            .hover(|plate| plate.bg(self.palette.plate(HOVERED)));
+            .hover(|plate| plate.bg(self.palette.hovered_row()));
         row_box()
             .pl(px(inset))
             .id("live-sign-in")

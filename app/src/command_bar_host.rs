@@ -195,6 +195,11 @@ impl command_bar::Host for Bar {
             name: agent.cli.name().into(),
             glyph: agent.cli.glyph(),
             model: agents.task_model_name(agent.cli),
+            model_id: agents.task_model(agent.cli).to_string(),
+            default_row: browser::agents::task::model_default(agent.cli).into(),
+            default_model: (agents.task_default_model(agent.cli))
+                .map(|name| name.to_string().into()),
+            models: agents.task_models(agent.cli),
             resets: agent.resets,
         });
         Some(command_bar::TaskAgents {
@@ -284,7 +289,7 @@ impl command_bar::Host for Bar {
         // The bar folds into the slot at the foot that its task's card takes, where the window
         // shows one; elsewhere it hides, and the card fades in.
         let window = front().0;
-        let still = cx.reduce_motion();
+        let still = browser::motion::still(cx);
         let from = rgba_u32(browser::palette::current(cx).overlay);
         let folded = match update_window_in(window, cx, |shell, _| shell.fold_target()).flatten() {
             Some((to, radius, fill)) => {
@@ -318,7 +323,17 @@ impl command_bar::Host for Bar {
         });
         agents_core::update(move |agents, cx| {
             // The card takes the slot as it comes; one that didn't start leaves it empty.
-            if agents.start_task(cli, &asked, page, home, cx).is_none() {
+            if agents
+                .start_task(
+                    cli,
+                    &asked,
+                    page,
+                    home,
+                    browser::agents::tier::Tier::default(),
+                    cx,
+                )
+                .is_none()
+            {
                 update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
             }
         });

@@ -31,7 +31,7 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, agent_request, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
+    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
     log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
     toast, tooltip, updates, zoom_hud,
@@ -267,7 +267,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     // the agent card's.
     update_tab_window(tab, |shell, cx| {
         shell.leave_keys("page", cx);
-        shell.leave_card_keys(cx);
+        shell.leave_ilo_keys(cx);
     });
     if let Some(kept) = link_card_key(tab, unsafe { &*key }) {
         return (kept, "link card");
@@ -289,7 +289,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     // Focus Agent Question's key gives an agent's card the keyboard while one shows (#3869).
     if update_tab_window(tab, |shell, cx| {
-        shell.run_agent_card_page_key(&keystroke, repeat, cx)
+        shell.run_ilo_page_key(&keystroke, repeat, cx)
     })
     .unwrap_or(false)
     {
@@ -367,10 +367,11 @@ fn open_saved_windows(cx: &mut App) {
     }
 }
 
-/// A window brought back in a Space an agent left, which this launch deletes once it has moved its
-/// tabs to the user's (`end_old_tasks`), as a run quit with no window left can't (#1676), shows the
-/// user's Space of its profile instead. The pages the launch opens then go there and stay in front,
-/// where they went to the agent's Space and the window then showed another tab.
+/// A window brought back in a Space an agent left, which this launch deletes, an outside agent's
+/// once it has moved its tabs to the user's (`end_old_tasks`), as a run quit with no window left
+/// can't (#1676), shows the user's Space of its profile instead. The pages the launch opens then go
+/// there and stay in front, where they went to the agent's Space and the window then showed
+/// another tab.
 fn leave_agent_space(window: bc::bc_id) {
     let shown = unsafe { bc::bc_window_space(window) };
     if shown == 0 || name(bc::bc_space_agent, shown).is_empty() {
@@ -612,6 +613,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The transparency level the window and what floats over it are drawn at, before the
+        // first window draws (#4128).
+        browser::transparency::level(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
         // which the host writes as the first window opens, under its AppUserModelID.
         if let (Ok(title), Ok(switch)) = (
@@ -860,11 +864,18 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
 }
 
+/// Off to another app: a toast showing waits until the user is back.
+extern "C" fn resigning_active() {
+    quitting::launch_picture_on_resigning();
+    update_app_later(|cx| browser::toast::app_away(true, cx));
+}
+
 /// Back from another app, such as System Settings, where the user may have changed the default
 /// browser, given the app Full Disk Access or changed when scroll bars show.
 extern "C" fn became_active() {
     // Later: AppKit can say so from inside the update that activated the app to show a window.
     update_app_later(|cx| {
+        browser::toast::app_away(false, cx);
         settings::check_default_browser(cx);
         import_host::became_active(cx);
         daily_count_host::became_active(cx);
@@ -925,6 +936,7 @@ fn profile_dir() -> String {
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
+    browser::palette::set_window_material(unsafe { platform::host_has_window_material() });
     let profile = profile_dir();
     // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
     // portal, which asks the user, rather than through a grant of every device (#3166). Without a

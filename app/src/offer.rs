@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use crate::{
-    palette::{Palette, STATE_HOVERED, STATE_PRESSED},
+    palette::{Ground, Palette, STATE_HOVERED, STATE_PRESSED},
     settling::Settling,
     shell,
     text_input::{FieldMenu, TextInput},
@@ -196,7 +196,7 @@ pub fn open(
     let window = cx.open_window(options, |window, cx| {
         let input = cx.new(|cx| {
             TextInput::new("Username", cx)
-                .placeholder_color(look(cx).1.text(PLACEHOLDER))
+                .placeholder_color(look(cx).1.gray(PLACEHOLDER))
                 .caret_color(look(cx).1.accent)
                 .selection_color(look(cx).1.selection())
         });
@@ -384,15 +384,18 @@ impl OfferPrompt {
         cx.notify();
     }
 
-    /// Return saves, once an input method has committed what it was composing.
+    /// Return saves, unless it was an input method's, composing in the field (dismissal's rule).
     fn accept(&mut self, _: &Accept, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.input.read(cx).composing() {
+        if crate::dismissal::submits([&self.input.clone()], cx) {
             self.answer(Answer::Accept, cx);
         }
     }
 
+    /// Escape declines, unless it was an input method's, composing in the field.
     fn not_now(&mut self, _: &NotNow, _: &mut Window, cx: &mut Context<Self>) {
-        self.answer(Answer::NotNow, cx);
+        if crate::dismissal::Close::escape_from([&self.input.clone()], cx).is_some() {
+            self.answer(Answer::NotNow, cx);
+        }
     }
 
     /// Shows the page's usernames under the field, and puts the one chosen in it.
@@ -466,7 +469,7 @@ impl Render for OfferPrompt {
         // opened.
         self.input.update(cx, |input, _| {
             input.set_colors(
-                palette.text(PLACEHOLDER),
+                palette.gray(PLACEHOLDER),
                 palette.accent.into(),
                 palette.selection(),
             )
@@ -482,9 +485,14 @@ impl Render for OfferPrompt {
                     label,
                 )
             } else {
-                let hovered = palette.state(PLATE, STATE_HOVERED);
-                let pressed = palette.state(PLATE, STATE_PRESSED);
-                (palette.plate(PLATE), hovered, pressed, palette.text(TITLE))
+                let hovered = palette.ground_state(Ground::Offer, PLATE, STATE_HOVERED);
+                let pressed = palette.ground_state(Ground::Offer, PLATE, STATE_PRESSED);
+                (
+                    palette.ground_plate(Ground::Offer, PLATE),
+                    hovered,
+                    pressed,
+                    palette.text(TITLE),
+                )
             };
             div()
                 .id(id)
@@ -512,7 +520,7 @@ impl Render for OfferPrompt {
                 .items_center()
                 .pl(px(FIELD_X))
                 .rounded(px(PLATE_RADIUS))
-                .bg(palette.plate(PLATE))
+                .bg(palette.ground_plate(Ground::Offer, PLATE))
         };
         let chevron = div()
             .id("usernames")
@@ -544,7 +552,7 @@ impl Render for OfferPrompt {
             .when(offer.usernames.len() > 1, |row| row.pr_0().child(chevron));
         let password = row()
             .overflow_hidden()
-            .text_color(palette.text(DETAIL))
+            .text_color(palette.gray(DETAIL))
             .child("•".repeat(offer.password_length));
         // An address's first line, its name, then the rest on one; a card's name and last digits,
         // then its expiry.
@@ -564,7 +572,7 @@ impl Render for OfferPrompt {
             true => (username, password),
             false => (
                 line(first),
-                line(rest.join(", ").into()).text_color(palette.text(DETAIL)),
+                line(rest.join(", ").into()).text_color(palette.gray(DETAIL)),
             ),
         };
         let buttons = div()
@@ -608,7 +616,7 @@ impl Render for OfferPrompt {
                         div()
                             .text_size(px(text::SMALL))
                             .line_height(px(SITE_LINE))
-                            .text_color(palette.text(DETAIL))
+                            .text_color(palette.gray(DETAIL))
                             .truncate()
                             .child(offer.site),
                     )

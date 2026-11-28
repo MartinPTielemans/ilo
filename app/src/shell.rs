@@ -34,9 +34,7 @@ use crate::{
 
 mod access;
 mod agent_bar;
-mod agent_card_keys;
 mod agent_pointer;
-mod agent_question;
 #[cfg(test)]
 mod app_menu_tests;
 mod arrange;
@@ -457,7 +455,6 @@ use crate::tokens::shell::SPACE_GLYPH;
 // What's in a folder sits this far in from it (Arc).
 use crate::tokens::shell::FOLDER_INDENT;
 const NEW_FOLDER: &str = "New Folder";
-use crate::tokens::shell::DROP;
 use crate::tokens::shell::DROP_LINE;
 use crate::tokens::shell::DROP_LINE_END;
 use crate::tokens::shell::DROP_RING;
@@ -556,6 +553,7 @@ use crate::tokens::shell::CANCEL_BOTTOM;
 use crate::tokens::shell::CANCEL_HEIGHT;
 use crate::tokens::shell::CREATE_BOTTOM;
 
+use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::CHOSEN;
 use crate::tokens::shell::CLEAR;
 use crate::tokens::shell::CLEAR_HOVERED;
@@ -572,7 +570,6 @@ use crate::tokens::shell::SLEEPING_FAVICON;
 use crate::tokens::shell::TILE;
 use crate::tokens::shell::TITLE;
 use crate::tokens::shell::UNSELECTED_TITLE;
-use crate::tokens::shell::URL_FIELD;
 /// A tile, and the URL field, under the pointer: the ladder's hover over its resting plate.
 pub(crate) const TILE_HOVERED: f32 =
     crate::palette::state_alpha(TILE, crate::palette::STATE_HOVERED);
@@ -1523,8 +1520,9 @@ pub struct Shell {
     split_folds: HashMap<u64, split_fold::Fold>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
-    /// last drawn.
+    /// last drawn, and the rows it last went over, for the one that takes a gone row's place.
     keyed: Option<u64>,
+    keyed_rows: Vec<u64>,
     sidebar_keys: FocusHandle,
     focus_keys: bool,
     keyed_drawn: Rc<Cell<Option<(u64, Bounds<Pixels>)>>>,
@@ -1569,6 +1567,9 @@ pub struct Shell {
     empty_settled: bool,
     /// The first run's welcome takes the empty card until a page shows (set_welcome).
     welcome: bool,
+    /// The command bar an empty Space's card rests on, made as the card comes to show no page and
+    /// dropped as a page shows (#4140).
+    resting: Option<empty::composer::Resting>,
     /// A new profile's first launch, or Help › Welcome to ilo, over the window while it shows.
     onboarding: Option<onboarding::Onboarding>,
     /// The first launch's import, made at its first step and kept for the window's life, so an
@@ -1880,25 +1881,6 @@ pub struct Shell {
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// What an agent asks the user first, in every window (agent_question.rs).
-    agent_question: Option<crate::agents::Question>,
-    agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Each row of a card of several changes as it was drawn, its text and where the agent's mark
-    /// is in it, which the tests read.
-    #[cfg(test)]
-    agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
-    /// Where the request card's "See the whole request" is, which check.sh clicks (#3548).
-    agent_request_see_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// The request card's "See the whole request", where Escape in the whole request puts the
-    /// keyboard back (#3548).
-    agent_request_see: FocusHandle,
-    /// The agent card's buttons, in its buttons' order, which Focus Agent Question gives the
-    /// keyboard (#3869).
-    agent_card_buttons: [FocusHandle; agent_card_keys::MOST_BUTTONS],
-    /// The room the agent card's key chips have, as last drawn.
-    agent_card_room: Rc<Cell<agent_card_keys::CardRoom>>,
-    /// The keyboard on the agent card's buttons, while it is.
-    card_keys: Option<agent_card_keys::CardKeys>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
@@ -1924,10 +1906,16 @@ pub struct Shell {
     /// page area shows of one (task_area.rs).
     task_spaces: Vec<Space>,
     task_area: Option<task_area::TaskArea>,
+    /// The task's view as it stood at a close of the window its pages haven't answered.
+    task_closing: Option<task_area::Closing>,
     /// The task Space the core shows while one of its pages is watched, else 0.
     task_core: u64,
     task_live_logged: Option<u64>,
     task_strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether a task's conversation stands beside the page it watches, with what the strip under
+    /// the page says in it, and the composer's row under its reply (#4095, #4094). Only the preview
+    /// sets it until the task's ilo lines are wired (#4086).
+    talk_beside: bool,
     /// The words the strip last said, and for which tab, which check.sh reads as they change.
     task_strip_said: RefCell<Option<(u64, String)>>,
     /// The tabs whose player × put away until their page plays again.
@@ -2036,7 +2024,7 @@ pub struct Shell {
     /// What the chrome draws with, for the Space shown (palette.rs), and each theme's, worked
     /// out once.
     palette: Palette,
-    palettes: RefCell<Vec<((Option<Theme>, Tone), Palette)>>,
+    palettes: RefCell<Vec<(themes::PaletteKey, Palette)>>,
     /// The system's appearance as the window last drew, or the one View › Appearance chose in its
     /// place, which a Space without a theme, or with an automatic one, follows; the preview's own
     /// where it forces one; whether the window is the active one, as its texture shows; and the
@@ -2199,6 +2187,7 @@ impl Shell {
             pinned_turn: None,
             split_folds: HashMap::new(),
             keyed: None,
+            keyed_rows: Vec::new(),
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
             keyed_drawn: Rc::default(),
@@ -2220,6 +2209,7 @@ impl Shell {
             card_back: None,
             empty_settled: false,
             welcome: false,
+            resting: None,
             onboarding: None,
             importing: None,
             in_hint: false,
@@ -2366,15 +2356,6 @@ impl Shell {
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
-            agent_question: None,
-            agent_question_drawn: Rc::default(),
-            #[cfg(test)]
-            agent_question_rows: RefCell::default(),
-            agent_request_see_drawn: Rc::default(),
-            agent_request_see: cx.focus_handle(),
-            agent_card_buttons: std::array::from_fn(|_| cx.focus_handle()),
-            agent_card_room: Rc::default(),
-            card_keys: None,
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
@@ -2386,9 +2367,11 @@ impl Shell {
             agent_status: Vec::new(),
             task_spaces: Vec::new(),
             task_area: None,
+            task_closing: None,
             task_core: 0,
             task_live_logged: None,
             task_strip_drawn: Rc::default(),
+            talk_beside: false,
             task_strip_said: RefCell::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
@@ -3107,7 +3090,7 @@ impl Shell {
         let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
             of.iter().copied().filter(|id| with.contains(id)).collect()
         };
-        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
+        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order), cx);
         self.live_profiles_changed(&reprofiled, cx);
         self.settle_theme_preview();
         if let Some(form) = &self.form
@@ -4624,8 +4607,6 @@ impl Render for Shell {
                 cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
             }
         }
-        self.see_gone_keyboard(window, cx);
-        self.step_card_keys(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
@@ -4955,6 +4936,15 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
+        // Onboarding's transparency step shows the window's glass alone (onboarding.rs).
+        let bare = self.onboarding_bare();
+        let normal = normal && !bare;
+        let task_area = task_area.filter(|_| !bare);
+        let empty_card = self.empty_card(window, cx);
+        let (under, sidebar, over, edge) = match bare {
+            true => (None, None, None, None),
+            false => (under, sidebar, over, edge),
+        };
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5038,7 +5028,7 @@ impl Render for Shell {
                             .flatten(),
                     )
                     .children(self.picture_element(cx))
-                    .children(self.empty_card(cx))
+                    .children(empty_card)
                     .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
                     .children(self.pane_gaps(cx))
                     .children(self.pane_handles(cx))
@@ -5179,8 +5169,6 @@ impl Shell {
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.task_foot(cx))
-                    // Over the tasks' plates, which a tall request's card reaches past (#3548).
-                    .children(self.agent_question_card(cx))
                     // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
@@ -5519,12 +5507,13 @@ impl Shell {
     /// `depth` folders in, with a ring at its start, as Arc's (docs/ux-spec.md › Tab rows).
     fn drop_line(&self, y: f32, depth: usize, room: f32) -> impl IntoElement + use<> {
         let left = PLATE_INSET + depth as f32 * FOLDER_INDENT + DROP_RING_X;
+        let colour = self.palette.drop_line();
         let ring = div()
             .flex_none()
             .size(px(DROP_RING))
             .rounded_full()
             .border(px(DROP_LINE))
-            .border_color(rgba(DROP));
+            .border_color(colour);
         div()
             .absolute()
             .top(px(room + y - DROP_RING / 2.))
@@ -5534,7 +5523,7 @@ impl Shell {
             .flex()
             .items_center()
             .child(ring)
-            .child(div().flex_1().h(px(DROP_LINE)).bg(rgba(DROP)))
+            .child(div().flex_1().h(px(DROP_LINE)).bg(colour))
     }
 
     /// What the reveal's window shows: the sidebar in a panel, as far out as it is.
@@ -5631,9 +5620,25 @@ impl Shell {
                     .bottom(px(REVEAL_INSET))
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
-                    .border(px(0.5))
-                    .border_color(self.palette.faint(REVEAL_BORDER))
-                    .bg(self.gradient(Some(self.palette.underlay.into())))
+                    .border(px(HAIRLINE))
+                    .border_color(gpui::black().opacity(REVEAL_BORDER))
+                    .shadow(vec![BoxShadow {
+                        color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
+                        inset: true,
+                    }])
+                    .bg(self.palette.underlay)
+                    .children(self.paged_weights().into_iter().map(|(space, weight)| {
+                        self.foot_glow(
+                            space,
+                            self.width(),
+                            f32::from(window.viewport_size().height) - 2. * REVEAL_INSET,
+                            REVEAL_RADIUS,
+                        )
+                        .opacity(weight)
+                    }))
                     .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
@@ -6186,7 +6191,7 @@ fn selected_plate(
     hover: f32,
     developer: bool,
 ) -> gpui::Div {
-    let fill = palette.selected(hover);
+    let fill = palette.shown(hover);
     let firmer = if developer {
         DEVELOPER_SELECTED - crate::palette::STATE_SELECTED
     } else {
@@ -6197,8 +6202,8 @@ fn selected_plate(
         ..fill
     };
     plate
-        .bg(fill.opacity(fill.a * opacity))
-        .shadow(palette.selected_shadow(opacity))
+        .bg(fill.opacity(opacity))
+        .shadow(palette.shown_shadow(opacity))
 }
 
 /// The shown tab's outline in Developer Mode, inside its plate's or tile's `radius` corners, over

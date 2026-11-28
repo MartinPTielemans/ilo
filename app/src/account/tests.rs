@@ -295,6 +295,51 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
     );
 }
 
+/// ↩ and esc while an input method composes in the server's address are the composition's: ↩
+/// keeps no address, esc leaves the field open, and both leave the marked text for the method.
+/// Once the method has committed it, the next ↩ keeps the address.
+#[gpui::test]
+fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let mut tab = shown(state(Status::SignedOut), cx);
+    tab.click("change-server");
+    tab.type_text("https://ilo.example.");
+    let field = tab
+        .account
+        .read_with(tab.cx, |account, _| account.open_field().unwrap());
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+        })
+    });
+    tab.cx.run_until_parked();
+    let marked = |tab: &mut Shown| {
+        field.read_with(tab.cx, |field, _| {
+            (field.text().to_string(), field.composing())
+        })
+    };
+    tab.keys("enter");
+    assert!(
+        tab.host.take().is_empty(),
+        "↩ kept the address while composing"
+    );
+    tab.keys("escape");
+    let open = tab
+        .account
+        .read_with(tab.cx, |account, _| account.server.is_some());
+    assert!(open, "esc left the field while composing");
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), true));
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, "ぴ", window, cx)
+        })
+    });
+    tab.cx.run_until_parked();
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), false));
+    tab.keys("enter");
+    assert_eq!(tab.host.take(), ["server https://ilo.example.ぴ"]);
+}
+
 /// A build that names no server, before the user has named one, asks for the address in place of
 /// a server it can't reach: the field is open, Sign In signs in to what's typed there, and the
 /// field stays until the core has the server, as nothing else could name one.

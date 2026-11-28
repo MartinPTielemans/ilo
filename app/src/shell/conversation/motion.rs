@@ -242,7 +242,7 @@ pub(super) fn fading(
 fn steps(trace: &Trace) -> impl Iterator<Item = &TraceStep> {
     (trace.items.iter())
         .filter_map(|item| match item {
-            TraceItem::Step(step) => Some(step),
+            TraceItem::Step(step) | TraceItem::Helper { step, .. } => Some(step),
             TraceItem::Said(_) => None,
         })
         .flat_map(and_inner)
@@ -392,11 +392,14 @@ impl Motion {
                 self.came.insert(Key::Aside(trace.key, index), now);
             }
         }
-        if was.steps() != trace.steps() && trace.took.is_none() {
+        // Its count rolls while it counts the same thing, and its line crossfades as what it
+        // counts changes: to its helpers as the first comes, and back to its steps as it ends.
+        let ((count, of), (counts, now_of)) = (was.counted(), trace.counted());
+        if count != counts && of == now_of && trace.took.is_none() {
             self.counts
-                .insert(trace.key, (was.steps().to_string().into(), now));
+                .insert(trace.key, (count.to_string().into(), now));
         }
-        if was.took != trace.took {
+        if was.took != trace.took || of != now_of {
             let (title, note) = was.summary();
             self.swaps.insert(
                 Fold::Trace(trace.key),

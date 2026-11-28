@@ -19,8 +19,8 @@ use gpui::{
 };
 
 use super::{
-    Command, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, Shell, Space, SpaceEntry, TITLE,
-    Theme,
+    Command, DialogKind, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, Shell, Space,
+    SpaceEntry, TITLE, Theme,
     agent_bar::{Bar, bar_words, stop_keys},
     card,
     conversation::{page_chip, page_chip_keyed},
@@ -36,7 +36,9 @@ use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
 use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task::STATUS;
-use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP};
+use crate::tokens::shell::task_area::{
+    BACK, BACK_GLYPH, BESIDE, BESIDE_GAP, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP,
+};
 use crate::tokens::text;
 use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X};
 
@@ -48,6 +50,17 @@ pub(super) struct TaskArea {
     /// The conversation, which the task draws.
     view: AnyView,
     page: Option<Watched>,
+}
+
+/// A task's view as it stood when the user asked the window to close or the browser to quit,
+/// which a page of theirs may still refuse (#4202). The core never says a close was refused: the
+/// page's question answered with staying is that word, and brings the view back.
+pub(super) struct Closing {
+    /// The page watched then, which went back to the conversation for the close.
+    watched: Option<Watched>,
+    /// The area, out of the window while a page of the user's asks whether to leave it: no
+    /// page's dialog is drawn over a task's conversation.
+    aside: Option<TaskArea>,
 }
 
 /// A task's page watched in the page area.
@@ -94,6 +107,21 @@ fn watched(card: Bounds<Pixels>) -> Bounds<Pixels> {
         card.origin,
         size(card.size.width, card.size.height - px(PAGE_ROOM)),
     )
+}
+
+/// The card split for standing on a page with the conversation beside it: the page's part on its
+/// left, and the conversation's panel at its right.
+fn split(card: Bounds<Pixels>) -> (Bounds<Pixels>, Bounds<Pixels>) {
+    let wide = px(BESIDE.min(f32::from(card.size.width) / 2.));
+    let page = Bounds::new(
+        card.origin,
+        size(card.size.width - wide - px(BESIDE_GAP), card.size.height),
+    );
+    let panel = Bounds::new(
+        point(card.right() - wide, card.top()),
+        size(wide, card.size.height),
+    );
+    (page, panel)
 }
 
 fn pushed(bounds: Bounds<Pixels>, by: Pixels) -> Bounds<Pixels> {
@@ -168,8 +196,11 @@ impl Shell {
     /// The task Spaces changed: one the page area shows that's gone takes the area with it.
     /// A task's Space the window shows, as one a launch brings back, gives way to the user's.
     pub(super) fn task_spaces_changed(&mut self, cx: &mut Context<Self>) {
+        if self.area_takes_space() {
+            self.reshape_foot(cx);
+        }
         let area = self.task_area.as_ref();
-        let gone = area.is_some_and(|area| self.task_space(area.space).is_none());
+        let gone = area.is_some_and(|area| self.space_went(area.space));
         if gone {
             self.leave_task_area(cx);
         }
@@ -180,6 +211,27 @@ impl Shell {
 
     pub(super) fn task_space(&self, space: u64) -> Option<&Space> {
         self.task_spaces.iter().find(|each| each.id == space)
+    }
+
+    /// Whether `space` was a task's and is gone. A task a run before left has none, 0, until its
+    /// run opens a page, and one with nowhere to work never has: its conversation shows without.
+    fn space_went(&self, space: u64) -> bool {
+        space != 0 && self.task_space(space).is_none()
+    }
+
+    /// The task whose conversation the area shows had no Space and has one now: the area is that
+    /// Space's from here, set aside for a close's question or not. Says whether it took one.
+    pub(super) fn area_takes_space(&mut self) -> bool {
+        let Some(space) = self.talk_takes_space() else {
+            return false;
+        };
+        let aside = (self.task_closing.as_mut()).and_then(|closing| closing.aside.as_mut());
+        for area in self.task_area.iter_mut().chain(aside) {
+            if area.space == 0 {
+                area.space = space;
+            }
+        }
+        true
     }
 
     /// The task's tabs, pinned then Today, for its thumbnails.
@@ -313,7 +365,7 @@ impl Shell {
     /// the Space's tab, at once, as a tab switch is. Another task's conversation shown is replaced
     /// where it is, as is another session's of the same agent, whose Space it shares.
     pub fn open_task(&mut self, space: u64, view: AnyView, cx: &mut Context<Self>) {
-        if self.task_space(space).is_none() {
+        if self.space_went(space) {
             log!("browser: no task space {space}");
             return;
         }
@@ -344,6 +396,8 @@ impl Shell {
         log!("browser: task area {space} opens");
         log!("browser: task area {space} open");
         self.take_keyboard(cx);
+        // Its group at the sidebar's foot opens to its pages, and the one shown before closes.
+        self.reshape_foot(cx);
         cx.notify();
     }
 
@@ -356,6 +410,13 @@ impl Shell {
         if self.selected != 0 {
             self.browser.focus_page(cx);
         }
+        cx.notify();
+    }
+
+    /// Puts a task's conversation beside the page it watches (`talk_beside`).
+    pub fn set_talk_beside(&mut self, beside: bool, cx: &mut Context<Self>) {
+        self.talk_beside = beside;
+        self.talk_redraw(cx);
         cx.notify();
     }
 
@@ -375,27 +436,30 @@ impl Shell {
         if !self.task_tabs(area.space).contains(&tab) {
             return false;
         }
-        let zoom = if cx.reduce_motion() {
+        let zoom = if crate::motion::still(cx) {
             Zoom::Rest
         } else {
             Zoom::Out(Instant::now())
         };
-        if let Some(area) = &mut self.task_area {
-            if let Some(Watched {
-                picture: Some(old),
-                asked: true,
-                ..
-            }) = area.page.take()
-            {
-                self.stale_pictures.push(old.image());
-            }
-            area.page = Some(Watched {
+        self.show_watched(
+            Watched {
                 tab,
                 thumb: from,
                 picture,
                 asked: false,
                 zoom,
-            });
+            },
+            cx,
+        );
+        true
+    }
+
+    /// The area watches `page`, in place of the one it watched, and the core shows it.
+    fn show_watched(&mut self, page: Watched, cx: &mut Context<Self>) {
+        let tab = page.tab;
+        if let Some(area) = &mut self.task_area {
+            let old = area.page.replace(page);
+            self.let_go_of(old);
         }
         // check.sh reads this line.
         log!("browser: task page {tab} watched");
@@ -408,13 +472,24 @@ impl Shell {
             _ => self.take_keyboard(cx),
         }
         cx.notify();
-        true
+    }
+
+    /// Lets go of the picture a page no longer watched was asked for.
+    fn let_go_of(&mut self, page: Option<Watched>) {
+        if let Some(Watched {
+            picture: Some(picture),
+            asked: true,
+            ..
+        }) = page
+        {
+            self.stale_pictures.push(picture.image());
+        }
     }
 
     /// Back to the conversation: the page shrinks into its thumbnail, from a picture of it as it
     /// is now.
     pub fn task_page_back(&mut self, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return;
         };
@@ -500,9 +575,27 @@ impl Shell {
             if self.page_fullscreen {
                 card
             } else {
-                watched(card)
+                watched(self.page_part(card))
             },
         ))
+    }
+
+    /// Whether the user stands on a task's page with its conversation beside it, rather than over
+    /// it: with `talk_beside`, from the page's zoom out until it goes back, and not full screen.
+    pub(super) fn task_standing(&self) -> bool {
+        self.talk_beside
+            && !self.page_fullscreen
+            && (self.task_area.as_ref())
+                .and_then(|area| area.page.as_ref())
+                .is_some_and(|page| !matches!(page.zoom, Zoom::In(_)))
+    }
+
+    /// The card's part a page watched has: all of it, or its left while the user stands on it.
+    fn page_part(&self, card: Bounds<Pixels>) -> Bounds<Pixels> {
+        match self.task_standing() {
+            true => split(card).0,
+            false => card,
+        }
     }
 
     /// Whether the window shows `tab`'s page as an agent's: a task's in place in the area.
@@ -539,10 +632,11 @@ impl Shell {
             return pushed(card, away);
         };
         let live = self.task_core == area.space;
+        let part = self.page_part(card);
         match page.zoom {
             Zoom::Rest | Zoom::Asked(_) if live && self.page_fullscreen => card,
-            Zoom::Rest | Zoom::Asked(_) if live => watched(card),
-            Zoom::Out(_) | Zoom::Rest | Zoom::Asked(_) => pushed(watched(card), away),
+            Zoom::Rest | Zoom::Asked(_) if live => watched(part),
+            Zoom::Out(_) | Zoom::Rest | Zoom::Asked(_) => pushed(watched(part), away),
             Zoom::In(_) => pushed(card, away),
         }
     }
@@ -575,6 +669,8 @@ impl Shell {
         let left = self.talk_in(area.space);
         self.talk_closed(cx);
         self.lay_out_page(cx);
+        // Its group at the sidebar's foot closes to its header.
+        self.reshape_foot(cx);
         if let Some(agent) = left {
             self.talk_left(agent, cx);
         }
@@ -599,6 +695,163 @@ impl Shell {
         self.show_users_page(cx);
         self.retake_talk_pictures(cx);
         cx.notify();
+    }
+
+    /// The window is about to close, or the browser to quit, which the window's pages may still
+    /// refuse (#4202). The conversation stands, and a page of the task's watched goes back to it
+    /// first, kept for a refusal to bring back: the core shows the task's Space while one is
+    /// watched, and the session keeps for the window the Space the core shows. The same close
+    /// asked again keeps what the first kept: with its question up the view is aside already.
+    pub(super) fn about_to_close(&mut self, cx: &mut Context<Self>) {
+        let kept = self.task_closing.take();
+        if kept.as_ref().is_some_and(|kept| kept.aside.is_some()) {
+            self.task_closing = kept;
+            return;
+        }
+        let kept = kept.and_then(|kept| kept.watched);
+        if self.task_area.is_none() {
+            return self.let_go_of(kept);
+        }
+        let watched = match self.back_to_close(cx) {
+            // One watched since the first is the view as it stands.
+            Some(page) => {
+                self.let_go_of(kept);
+                Some(page)
+            }
+            None => kept,
+        };
+        self.task_closing = Some(Closing {
+            watched,
+            aside: None,
+        });
+        // A page of theirs that asked already, behind the conversation, asks now.
+        self.step_aside_to_ask(cx);
+        cx.notify();
+    }
+
+    /// The task's page watched goes back to its conversation at once for a close, and is
+    /// returned to keep unless it was on its way back already. The UI has the keyboard.
+    fn back_to_close(&mut self, cx: &mut Context<Self>) -> Option<Watched> {
+        let page = self.task_area.as_ref()?.page.as_ref()?;
+        // One on its way back into its thumbnail is no longer watched.
+        if matches!(page.zoom, Zoom::In(_)) {
+            self.leave_task_page_now(cx);
+        }
+        let watched = (self.task_area.as_mut()).and_then(|area| area.page.take());
+        if watched.is_some() {
+            // check.sh waits for this line, as wherever a page watched goes back.
+            log!("browser: task page in its thumbnail");
+            self.show_users_page(cx);
+            self.retake_talk_pictures(cx);
+        }
+        self.take_keyboard(cx);
+        watched
+    }
+
+    /// A page of the user's asks whether to leave it while the window closes with a task's view
+    /// standing: the view steps aside, whole, and the window shows the page and its question as
+    /// with no task shown. Any other dialog of a user's page waits behind the area, as ever.
+    pub(super) fn step_aside_to_ask(&mut self, cx: &mut Context<Self>) {
+        let waits = (self.task_closing.as_ref()).is_some_and(|closing| closing.aside.is_none());
+        if !waits || self.task_area.is_none() {
+            return;
+        }
+        let tasks = |tab: &u64| {
+            (self.task_spaces.iter())
+                .any(|space| space.pinned.contains(tab) || space.today.contains(tab))
+        };
+        let asks = (self.page_dialogs.iter())
+            .any(|(tab, dialog)| dialog.kind == DialogKind::Leave && !tasks(tab));
+        if !asks {
+            return;
+        }
+        // A page of the task's the user watched since the close goes back first, as at the
+        // close: the question is asked on the user's page, which the core then shows.
+        if let Some(page) = self.back_to_close(cx) {
+            let kept =
+                (self.task_closing.as_mut()).and_then(|closing| closing.watched.replace(page));
+            self.let_go_of(kept);
+        }
+        let area = self.task_area.take();
+        if let Some(area) = &area {
+            log!(
+                "browser: task area {} aside for a page's question",
+                area.space
+            );
+        }
+        if let Some(closing) = &mut self.task_closing {
+            closing.aside = area;
+        }
+        self.lay_out_page(cx);
+        self.reshape_foot(cx);
+        cx.notify();
+    }
+
+    /// A page of the user's refused the close: the task's view is back as it stood, the page
+    /// watched with it, and the keyboard where the view has it.
+    pub(super) fn close_refused(&mut self, cx: &mut Context<Self>) {
+        let Some(Closing { watched, aside }) = self.task_closing.take() else {
+            return;
+        };
+        if let Some(area) = aside {
+            self.stand_again(area, cx);
+        }
+        let space = self.task_open();
+        match watched {
+            Some(page) if space.is_some_and(|space| self.task_tabs(space).contains(&page.tab)) => {
+                // In place at once, as it stood.
+                let page = Watched {
+                    zoom: Zoom::Rest,
+                    ..page
+                };
+                self.show_watched(page, cx);
+            }
+            gone => {
+                self.let_go_of(gone);
+                if space.is_some() {
+                    self.take_keyboard(cx);
+                    // The reply field has the keyboard again, as when the conversation opened.
+                    self.focus_talk = true;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// What the user does next is no answer to a close: the view kept for its refusal goes, and
+    /// one set aside is left as any is.
+    pub(super) fn forget_closing(&mut self, cx: &mut Context<Self>) {
+        let Some(Closing { watched, aside }) = self.task_closing.take() else {
+            return;
+        };
+        self.let_go_of(watched);
+        if let Some(area) = aside
+            && self.task_area.is_none()
+        {
+            self.task_area = Some(area);
+            self.drop_task_area(cx);
+        }
+    }
+
+    /// The area set aside takes the page area again, unless its task went meanwhile or another
+    /// has it.
+    fn stand_again(&mut self, area: TaskArea, cx: &mut Context<Self>) {
+        if self.task_area.is_some() {
+            return;
+        }
+        self.task_area = Some(area);
+        if self.task_open().is_some_and(|space| self.space_went(space)) {
+            return self.drop_task_area(cx);
+        }
+        if let Some(space) = self.task_open() {
+            log!("browser: task area {space} back");
+        }
+        self.lay_out_page(cx);
+        self.reshape_foot(cx);
+        // The Agents send its conversation as it is now, as they sent none while it was aside.
+        if let Some(agent) = self.talk_agent() {
+            self.browser.show_task(agent, cx);
+        }
     }
 
     /// Lays the page out for the area as it is, then has the core show the Space's page again, if
@@ -658,7 +911,9 @@ impl Shell {
     /// the strip's, as in an agent's Space, and Escape with the UI's keyboard and ⌘W step back.
     /// The page's own commands act on the task's page in place, the window's leave the area as it
     /// is, and the rest act on the user's Space, so they leave the area first: the core shows
-    /// the user's Space again before a tab opens in it, or before the session keeps it at a quit.
+    /// the user's Space again before a tab opens in it. Quit, once its quit is decided, and
+    /// Close Window keep the conversation, which only the window's going takes, and a page that
+    /// refuses brings the view back whole (`about_to_close`).
     pub(super) fn run_in_task_area(
         &mut self,
         command: Command,
@@ -744,9 +999,17 @@ impl Shell {
             | Command::CheckForUpdates
             | Command::Appearance(_)
             | Command::CopyBuildInfo
+            // Each asks first, and what it asks about isn't the view: Cancel, and the Archive
+            // cleared, leave the user where they were (#4202).
+            | Command::Quit
+            | Command::ClearArchive
+            // The core asks the window's pages before it closes, and theirs is the same Cancel.
+            | Command::CloseWindow
             // The agent's card shows over the area as over the user's Space.
-            | Command::FocusAgentQuestion => return false,
-            // Quit and Close Window too, so the session keeps the user's Space for the window.
+            | Command::FocusAgentQuestion
+            // The ring goes to the task shown, at the foot: its pages' rows are there only while
+            // its view is.
+            | Command::FocusSidebar => return false,
             _ => {
                 self.leave_task_area(cx);
                 return false;
@@ -762,16 +1025,12 @@ impl Shell {
         if self.watched_task_page().is_some() {
             return self.task_page_back(cx);
         }
-        // From Pages, back to Talk first.
-        if self.talk_back_to_talk(cx) {
-            return;
-        }
         self.close_task(cx);
     }
 
     /// Steps the area's motion for a frame: the page's zoom.
     pub(super) fn step_task_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let now = Instant::now();
         let Some(area) = &mut self.task_area else {
             return;
@@ -823,11 +1082,17 @@ impl Shell {
         let now = Instant::now();
         let zoom = area.page.as_ref().map_or(0., |page| page.zoom.at(now));
         let back = self.task_page_going_back();
+        let standing = self.task_standing();
         let mut layer = div().absolute().size_full();
         // The Space's page goes out of the window on its card.
         // The conversation is in the card's place, and fades under a page coming out of it. Under
         // a page going back it takes clicks from the zoom's first frame, before it shows (#3496).
-        if zoom < 1. || back {
+        // Standing on the page, it's beside it in its panel instead, from the zoom's first frame.
+        if standing || zoom < 1. || back {
+            let (at, shown) = match standing {
+                true => (split(card_frame).1, 1.),
+                false => (card_frame, 1. - zoom),
+            };
             let view = div()
                 .absolute()
                 .left_0()
@@ -840,12 +1105,12 @@ impl Shell {
                 div()
                     .id("task-conversation")
                     .absolute()
-                    .left(card_frame.left())
-                    .top(card_frame.top())
-                    .w(card_frame.size.width)
-                    .h(card_frame.size.height)
+                    .left(at.left())
+                    .top(at.top())
+                    .w(at.size.width)
+                    .h(at.size.height)
                     .overflow_hidden()
-                    .opacity(1. - zoom)
+                    .opacity(shown)
                     .block_mouse_except_scroll()
                     .child(view),
             );
@@ -855,15 +1120,14 @@ impl Shell {
             self.task_strip_drawn.set(None);
             return Some(layer.into_any_element());
         };
-        let place = watched(card_frame);
+        let part = self.page_part(card_frame);
+        let place = watched(part);
         let in_place = self.task_page_live() == Some(page.tab);
         if in_place && self.page_fullscreen {
             return Some(layer.into_any_element());
         }
         // While the agent drives the page, the Signal ring of its pointer goes round it.
-        let driving = in_place
-            && self.task_working()
-            && matches!(self.agent_bar(), Some(Bar::Working { tab, .. }) if tab == page.tab);
+        let driving = in_place && self.task_drives(page.tab);
         if driving {
             let ring = place.dilate(px(RING));
             layer = layer.child(
@@ -888,7 +1152,7 @@ impl Shell {
         }
         Some(
             layer
-                .child(self.task_strip(card_frame, page.tab, zoom, cx))
+                .child(self.task_strip(part, page.tab, zoom, cx))
                 .into_any_element(),
         )
     }
@@ -940,9 +1204,43 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The dot of the task whose page the strip is under.
+    /// The dot of the task whose page the strip is under, as that page has it: the strip is the
+    /// page's own, never the task's. A task that waits on the user at another page, one it handed
+    /// them, is at work on this one (#4102).
     pub(super) fn task_strip_dot(&self) -> Option<Dot> {
-        self.task_card_shown().map(|card| card.dot)
+        let card = self.task_card_shown()?;
+        let shown = self.task_page_drawn().map(|(_, tab)| tab);
+        let elsewhere = (self.agent_status.iter())
+            .filter(|status| status.agent == card.agent)
+            .flat_map(|status| status.held.iter())
+            .any(|(held, why)| Some(*held) != shown && !why.is_empty());
+        Some(match card.dot {
+            Dot::Waiting if elsewhere => Dot::Working,
+            dot => dot,
+        })
+    }
+
+    /// Each of a task's pages' own step while it works on several, as its card has them.
+    pub(super) fn task_page_steps(&self, agent: &str) -> &[(u64, SharedString)] {
+        let card = self.task_cards.iter().find(|card| card.agent == agent);
+        card.map_or(&[][..], |card| &card.page_steps[..])
+    }
+
+    /// Whether the task the area shows is at work on `tab`'s page, which the page's ring says:
+    /// the page its agent is at work in, or once it works on several, each that has a step of
+    /// its own.
+    fn task_drives(&self, tab: u64) -> bool {
+        let Some(Bar::Working { tab: at, .. }) = self.agent_bar() else {
+            return false;
+        };
+        let Some(card) = self.task_card_shown() else {
+            return false;
+        };
+        let own = card.page_steps.iter().any(|(each, _)| *each == tab);
+        match card.page_steps.is_empty() {
+            true => self.task_working() && at == tab,
+            false => self.task_strip_dot() == Some(Dot::Working) && own,
+        }
     }
 
     /// The agent of the task whose page the strip is under.
@@ -968,8 +1266,18 @@ impl Shell {
             return (self.title(tab).to_string(), String::new());
         };
         let name = card.name.clone();
-        match card.dot {
-            Dot::Working => (format!("{name} is working"), card.status.to_string()),
+        match self.task_strip_dot().unwrap_or(card.dot) {
+            // The page's own step once the task works on several, never another page's, nor
+            // what the task waits for on another: only its card and conversation say those.
+            Dot::Working => {
+                let own = (card.page_steps.iter()).find(|(each, _)| *each == tab);
+                let detail = match (own, card.page_steps.is_empty() && card.dot == Dot::Working) {
+                    (Some((_, step)), _) => step.to_string(),
+                    (None, true) => card.status.to_string(),
+                    (None, false) => String::new(),
+                };
+                (format!("{name} is working"), detail)
+            }
             // What it needs the user for, without the card's "Needs you", which the title says.
             Dot::Waiting => {
                 let lead = status_lead(&card.status);
@@ -980,7 +1288,7 @@ impl Shell {
                 format!("{name} finished"),
                 crate::agents::site(&self.page(tab).url).to_string(),
             ),
-            Dot::Ended => ("Stopped".to_string(), String::new()),
+            Dot::Ended => (card.word.alone(&name).to_string(), String::new()),
         }
     }
 
@@ -1026,6 +1334,22 @@ impl Shell {
         )
     }
 
+    /// The strip's chips, as `strip_chips` has them for the page watched: beside the
+    /// conversation, Take Over is always the strip's, and Stop is the composer's. The ring's stops
+    /// are these, so it never rings one that isn't drawn.
+    pub(super) fn strip_shows(
+        &self,
+        held: bool,
+        dot: Option<Dot>,
+        open: bool,
+        keyed: bool,
+    ) -> Vec<(StripChip, Look)> {
+        let standing = self.task_standing();
+        (strip_chips(held, dot, open, keyed || standing).into_iter())
+            .filter(|(chip, _)| !(standing && *chip == StripChip::Stop))
+            .collect()
+    }
+
     /// Whether the task the page area shows is at work, which its page's ring says.
     pub(super) fn task_working(&self) -> bool {
         self.task_card_shown()
@@ -1049,11 +1373,12 @@ impl Shell {
         // ⌘↩, or off the Mac Ctrl+Enter, as a menu spells it.
         let take_over = |cx: &mut Context<Self>| user_keys(cx).label(Command::BackToPinnedUrl);
         let bar = self.agent_bar();
-        let dot = card.map(|card| card.dot);
+        let dot = self.task_strip_dot();
         let open = self.task_strip_open(tab);
         let held = matches!(bar, Some(Bar::Held { .. }));
         let keyed = self.keyed_strip.is_some();
-        let chips: Vec<_> = (strip_chips(held, dot, open.is_some(), keyed).into_iter())
+        let shows = self.strip_shows(held, dot, open.is_some(), keyed);
+        let chips: Vec<_> = (shows.into_iter())
             .map(|(chip, look)| match chip {
                 // A click while it shows does what its key does, as Take Over is on screen.
                 StripChip::TakeOver => self.strip_stop(
@@ -1095,7 +1420,9 @@ impl Shell {
             .collect();
         // Only a strip whose agent needs the user is heavier, as its card is.
         let needs_you = dot == Some(Dot::Waiting);
-        let glyph = card.map(|card| self.task_glyph(&card.agent, card.dot));
+        let glyph = card
+            .zip(dot)
+            .map(|(card, dot)| self.task_glyph(&card.agent, dot));
         // The back's chevron lines up with the page's edge, its plate hanging outside.
         let left = card_frame.left() - px((BACK - BACK_GLYPH) / 2.);
         let back = div()
