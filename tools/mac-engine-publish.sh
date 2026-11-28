@@ -1,6 +1,7 @@
 #!/bin/bash
-# Publishes the Release engine engine/build.sh built as the Mac's prebuilt engine: packs its
-# Chromium.app into Chromium-mac-arm64.tar.xz, and once local_dsyms below allows, its dSYMs into
+# Publishes the engine engine/build.sh built, in out/Release or the out/ BUILD_OUT names as
+# build.sh takes it, as the Mac's prebuilt engine: packs its Chromium.app into
+# Chromium-mac-arm64.tar.xz, and once local_dsyms below allows, its dSYMs into
 # Chromium-mac-arm64-dSYMs.tar.xz (tools/mac-dsyms.sh), and uploads them, each with its SHA-256,
 # as the release engine-mac-<commit> of the repository engine/prebuilt.ini names, named for the
 # commit of ilo's (app/branding/repository) it was built from, as engine-linux.yml publishes
@@ -9,7 +10,7 @@
 # whether this script or Engine on macOS (.github/workflows/engine-mac.yml) built it, since a check
 # may already have run on it: a second build of the commit is never uploaded. It reads nothing of
 # the owner's but gh's login, which uploads the release.
-# `symbols` adds the dSYMs alone to a release that has its engine and none: the build in out/Release
+# `symbols` adds the dSYMs alone to a release that has its engine and none: the build in its out/
 # isn't rebuilt, and its framework's UUID must be the published framework's, which is all it reads
 # of the published engine (#2951).
 # Usage: mac-engine-publish.sh [symbols]
@@ -22,7 +23,7 @@ symbols=
 local_dsyms=
 root=$(cd "$(dirname "$0")/.." && pwd)
 engine=$root/engine
-out=$engine/.deps/src/out/Release
+out=$engine/.deps/src/out/${BUILD_OUT:-Release}
 
 fail() {
   echo "mac-engine-publish: $*" >&2
