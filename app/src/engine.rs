@@ -2395,7 +2395,7 @@ impl Browser for Engine {
         #[cfg(target_os = "macos")]
         {
             // The bar's overlay comes in with the window's content.
-            let reveal = crate::tokens::shell::onboarding::exit::REVEAL;
+            let reveal = browser::tokens::shell::onboarding::exit::REVEAL;
             unsafe { platform::host_grow_first_run(reveal.into()) }
         }
         #[cfg(not(target_os = "macos"))]
