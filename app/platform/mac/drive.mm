@@ -234,6 +234,16 @@
 //   pair <tab> pin|confirm|passkey        a Bluetooth device <tab>'s page pairs with asks for its
 //                                         PIN, whether to pair, or whether its passkey matches, as
 //                                         bc_tab_pair_for_testing
+//   framefault start|display              makes the key window's next display link start give no
+//                                         frame, or bind it to a display that gives none, as a
+//                                         start that didn't take (#3830), and stops its link now,
+//                                         as an idle window's is, logging "browser: frame fault
+//                                         <start|display> in <window class>"
+//   framelink                             logs each of the app's windows on screen that GPUI draws,
+//                                         as "browser: frame link <window class> <window number>
+//                                         running <0|1> watching <0|1>": whether its display link
+//                                         runs, and whether a start still waits for its first
+//                                         frame, so a check sees an idle window keeps neither
 //
 // Clicks, drags and moves go to the app's window on top at that point of the browser window
 // driven, such as the sidebar reveal over its edge, scrolls and layout to the browser window
@@ -1324,6 +1334,19 @@ void AppendViews(NSMutableString* line, NSView* content, NSView* parent) {
   }
 }
 
+// The view in <view> that GPUI draws, which takes the frame commands (#3830).
+NSView* FrameView(NSView* view) {
+  if ([view respondsToSelector:NSSelectorFromString(@"iloFrameLink")]) {
+    return view;
+  }
+  for (NSView* each in view.subviews) {
+    if (NSView* found = FrameView(each)) {
+      return found;
+    }
+  }
+  return nil;
+}
+
 // A window as the front command names it.
 NSString* Describe(id element) {
   if (!element) {
@@ -1606,6 +1629,37 @@ bool Run(const std::string& line, void (^done)(void)) {
         CFRunLoopWakeUp(CFRunLoopGetMain());
       }
     }).detach();
+    return true;
+  }
+  if (action == "framefault") {
+    std::string what;
+    NSWindow* key = NSApp.keyWindow;
+    NSView* view = key ? FrameView(key.contentView.superview ?: key.contentView) : nil;
+    if (!(words >> what) || (what != "start" && what != "display") || !view) {
+      return false;
+    }
+    SEL fault = NSSelectorFromString(@"iloFrameFault:");
+    ((void (*)(id, SEL, NSInteger))[view methodForSelector:fault])(view, fault,
+                                                                    what == "start" ? 1 : 2);
+    fprintf(stderr, "browser: frame fault %s in %s\n", what.c_str(),
+            NSStringFromClass(key.class).UTF8String);
+    done();
+    return true;
+  }
+  if (action == "framelink") {
+    SEL link = NSSelectorFromString(@"iloFrameLink");
+    for (NSWindow* window in NSApp.windows) {
+      NSView* view = window.visible ? FrameView(window.contentView.superview ?: window.contentView)
+                                    : nil;
+      if (!view) {
+        continue;
+      }
+      NSInteger state = ((NSInteger (*)(id, SEL))[view methodForSelector:link])(view, link);
+      fprintf(stderr, "browser: frame link %s %ld running %d watching %d\n",
+              NSStringFromClass(window.class).UTF8String, (long)window.windowNumber,
+              (int)(state & 1), (int)((state >> 1) & 1));
+    }
+    done();
     return true;
   }
   if (action == "window") {

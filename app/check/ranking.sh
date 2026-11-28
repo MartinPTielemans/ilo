@@ -228,9 +228,81 @@ esac
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
+# A display link start that gives no frame, or one bound to a display that gives none, doesn't
+# leave the bar undrawn while its keys land, as GPUI asks for frames only as a drawn window turns
+# dirty (#3830): the start's look for its first frame, or the next key, asks for them again. The
+# driver's fault stops the bar's link first, as an idle bar's is, so the next key starts it. Both
+# are tried before a miss fails, so a run shows each. The fault holds back AppKit's draws too until
+# a heal, as a check's 1x display redraws the bar for each listing of its rows, which drew it past
+# the fault; the text matches nothing, so its rows stay as they were.
+frames_missed=
+frames_last=
+frames_unhealed=
+if [ "$(uname)" = Darwin ]; then
+  for fault in start display; do
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar for the $fault fault"
+    send type zqx
+    typed_step=$step
+    # Drawn once its rows are listed and the bar has its height for them.
+    for _ in $(seq 50); do
+      since "$typed_step" | sed -n '/^browser: command bar lists "zqx"/,$p' |
+        grep -q '^browser: command bar drew "zqx"$' && break
+      sleep 0.1
+    done
+    since "$typed_step" | sed -n '/^browser: command bar lists "zqx"/,$p' |
+      grep -q '^browser: command bar drew "zqx"$' ||
+      fail "the command bar didn't draw \"zqx\" in 5 s after listing its rows, before the $fault fault, its lines since being: $(since "$typed_step" | grep '^browser: command bar ' | tail -6 | tr '\n' ';')"
+    send framefault "$fault"
+    fault_step=$step
+    send type jv
+    # Drawn after its rows are listed, as no key comes after them: GPUI draws a dirty window as it
+    # takes a key too, and presents nothing then, so a drew line from the keys says nothing.
+    for _ in $(seq 50); do
+      since "$fault_step" | sed -n '/^browser: command bar lists "zqxjv"/,$p' |
+        grep -q '^browser: command bar drew "zqxjv"$' && break
+      sleep 0.1
+    done
+    if ! since "$fault_step" | sed -n '/^browser: command bar lists "zqxjv"/,$p' |
+      grep -q '^browser: command bar drew "zqxjv"$'; then
+      drew=$(since "$fault_step" | grep '^browser: command bar drew ' | tail -1)
+      frames_missed="$frames_missed the $fault fault: the bar didn't draw \"zqxjv\" in 5 s after listing its rows, its last since the fault being \"${drew:-none}\", with these frame lines since: $(since "$fault_step" | grep 'frame\|display link' | tail -6 | tr '\n' ';');"
+    fi
+    healed=$(since "$fault_step" | grep "^browser: frames asked for again after the drive's fault: " | head -1)
+    frames_last="$frames_last $fault: ${healed#browser: frames asked for again after the drive*s fault: };"
+    [ -n "$healed" ] || frames_unhealed="$frames_unhealed $fault"
+    send key escape
+    expect '^browser: command bar hidden$' "escape didn't close the command bar after the $fault fault"
+  done
+  [ -z "$frames_missed" ] ||
+    fail "the command bar was left undrawn while its keys landed, after a display link start that gave no frames (#3830):$frames_missed"
+  # The fault's heal says so in a line of its own, which no other heal's line holds back.
+  # A draw after the rows could still come another way, such as the bar becoming key, so the heal's
+  # line says the heal did it.
+  [ -z "$frames_unhealed" ] ||
+    fail "the command bar drew after the$frames_unhealed fault, but no line says its frames were asked for again after it, so it drew some other way and the fault tested nothing: $frames_last"
+  # An idle bar and an idle window still stop their links, and no look for a first frame is left
+  # waiting: nothing watches a window that wants no frame.
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for the idle look"
+  links=
+  for _ in $(seq 50); do
+    send framelink
+    links=$(since | grep '^browser: frame link ')
+    [ "$(echo "$links" | grep -c ' running 0 watching 0$')" -ge 2 ] &&
+      ! echo "$links" | grep -qv ' running 0 watching 0$' && break
+    sleep 0.1
+  done
+  [ "$(echo "$links" | grep -c ' running 0 watching 0$')" -ge 2 ] &&
+    ! echo "$links" | grep -qv ' running 0 watching 0$' ||
+    fail "the idle command bar and its window didn't both stop their display links in 5 s, the last look being: $(echo "$links" | tr '\n' ';')"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar after the idle look"
+fi
+
 exec 3>&-
 quit
 # Its server stops with it, as the runs after it in the call start their own (#3345).
 kill "$tls" 2> /dev/null || true
 tls= tls_port=
-echo "ok: the command bar lists the page shown last for \"ranking\" ($shown_rows), one row for two GitHub pages from history with one title, and for \"rise\" the last of four open tabs shown first, as Switch to Tab, the search second and the two tabs shown before it after, the first not risen, and a closed tab's row ends "Closed today · Reopen" and a visited page's "Visited today". Windows: $out/ranking-shown-last.png, $out/ranking-one-title.png, $out/ranking-tabs-rise.png, $out/ranking-closed-visited.png"
+echo "ok: the command bar lists the page shown last for \"ranking\" ($shown_rows), one row for two GitHub pages from history with one title, and for \"rise\" the last of four open tabs shown first, as Switch to Tab, the search second and the two tabs shown before it after, the first not risen, and a closed tab's row ends "Closed today · Reopen" and a visited page's "Visited today", and on the Mac the bar drew after display link starts that gave no frame ($frames_last) and an idle bar and window stopped their links. Windows: $out/ranking-shown-last.png, $out/ranking-one-title.png, $out/ranking-tabs-rise.png, $out/ranking-closed-visited.png"

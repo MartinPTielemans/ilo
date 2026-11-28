@@ -1,8 +1,234 @@
 diff --git a/crates/gpui_macos/src/display_link.rs b/crates/gpui_macos/src/display_link.rs
-index 658b9f24ac..7bd5c521e1 100644
+index 658b9f24ac..1a20878b92 100644
 --- a/crates/gpui_macos/src/display_link.rs
 +++ b/crates/gpui_macos/src/display_link.rs
-@@ -328,6 +328,10 @@ impl WindowFrameSource {
+@@ -29,12 +29,12 @@
+ //!   display cannot conflict.
+ //!
+ //! One tradeoff of immortal entries: a link created for a given
+-//! `CGDirectDisplayID` is reused forever, including after the display is
+-//! unplugged and one reappears with the same id, or after mode/refresh-rate
+-//! changes. `CVDisplayLink` looks up display timing dynamically, so a cached
+-//! link keeps pacing correctly; if that ever proves untrue the fix is to
+-//! also refresh entries from a display-reconfiguration callback, not to
+-//! release links (which would reintroduce the teardown race).
++//! `CGDirectDisplayID` would be reused forever, including after the display is
++//! unplugged and one reappears with the same id. So a link made before the
++//! last display reconfiguration is made again before it's next started, and
++//! `renew` makes one again for a window whose frames stopped coming (#3830).
++//! A link made again replaces the old one, which is stopped and leaked, never
++//! released, so the release race above can't come back.
+ //!
+ //! Lock ordering: the output callback runs on the link's io thread and takes
+ //! the registry lock, possibly while holding CVDisplayLink-internal locks. To
+@@ -62,12 +62,28 @@ use scheduler::Instant;
+ use std::{
+     collections::{BTreeMap, btree_map},
+     ffi::c_void,
+-    sync::{Arc, Mutex, MutexGuard, PoisonError},
++    mem, ptr,
++    sync::{
++        Arc, Mutex, MutexGuard, Once, OnceLock, PoisonError,
++        atomic::{AtomicU64, Ordering},
++    },
+     time::Duration,
+ };
+ 
+ static REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
+ 
++// Display reconfigurations CoreGraphics has told of. An entry's link made before the last one may
++// be for a display that went away and came back with its id, so it's made again before a start.
++static RECONFIGURATIONS: AtomicU64 = AtomicU64::new(0);
++static WATCH_RECONFIGURATIONS: Once = Once::new();
++
++extern "C" fn display_reconfigured(_display: CGDirectDisplayID, flags: u32, _: *mut c_void) {
++    // The call before a change has this flag; the ones after it say what changed.
++    if flags & sys::kCGDisplayBeginConfigurationFlag == 0 {
++        RECONFIGURATIONS.fetch_add(1, Ordering::Relaxed);
++    }
++}
++
+ struct Registry {
+     displays: BTreeMap<CGDirectDisplayID, DisplayEntry>,
+     next_subscriber_id: u64,
+@@ -84,6 +100,8 @@ impl Registry {
+ 
+ struct DisplayEntry {
+     link: sys::DisplayLink,
++    // RECONFIGURATIONS when the link was made.
++    made_at: u64,
+     running: bool,
+     subscribers: Vec<DisplayLinkSubscriber>,
+ }
+@@ -92,6 +110,33 @@ struct DisplayLinkSubscriber {
+     id: SubscriberId,
+     frame_requests: DispatchRetained<DispatchSource>,
+     signal: Arc<PlatformFrameSignal>,
++    ticked: Arc<Ticked>,
++}
++
++/// When the display's link last called back for a subscriber, from its own io thread, so a busy
++/// main thread isn't taken for a link that gives no frames (#3830).
++#[derive(Default)]
++struct Ticked(AtomicU64);
++
++impl Ticked {
++    fn since() -> Instant {
++        static SINCE: OnceLock<Instant> = OnceLock::new();
++        *SINCE.get_or_init(Instant::now)
++    }
++
++    fn tick(&self) {
++        // Never 0, which says it hasn't ticked.
++        let nanos = Self::since().elapsed().as_nanos().max(1);
++        self.0
++            .store(u64::try_from(nanos).unwrap_or(u64::MAX), Ordering::Relaxed);
++    }
++
++    fn at(&self) -> Option<Instant> {
++        match self.0.load(Ordering::Relaxed) {
++            0 => None,
++            nanos => Some(Self::since() + Duration::from_nanos(nanos)),
++        }
++    }
+ }
+ 
+ // SAFETY: Both fields wrapping raw pointers are refcounted handles to
+@@ -151,6 +196,7 @@ unsafe extern "C" fn display_link_output_callback(
+                     .signal
+                     .record(signal_at, FrameRequestSource::NativeCallback);
+             }
++            subscriber.ticked.tick();
+             subscriber.frame_requests.merge_data(1);
+         }
+     }
+@@ -187,10 +233,18 @@ fn subscribe(
+     display_id: CGDirectDisplayID,
+     frame_requests: DispatchRetained<DispatchSource>,
+     signal: Arc<PlatformFrameSignal>,
++    ticked: Arc<Ticked>,
+ ) -> Result<SubscriberId> {
+     debug_assert_main_thread();
++    WATCH_RECONFIGURATIONS.call_once(|| unsafe {
++        sys::CGDisplayRegisterReconfigurationCallback(display_reconfigured, ptr::null_mut());
++    });
+ 
+-    let needs_link = !lock_registry().displays.contains_key(&display_id);
++    let reconfigurations = RECONFIGURATIONS.load(Ordering::Relaxed);
++    let needs_link = lock_registry()
++        .displays
++        .get(&display_id)
++        .is_none_or(|entry| !entry.running && entry.made_at != reconfigurations);
+     let new_link = if needs_link {
+         // Created outside the registry lock; see the lock ordering note above.
+         Some(unsafe {
+@@ -210,12 +264,21 @@ fn subscribe(
+         let subscriber_id = SubscriberId(registry.next_subscriber_id);
+         registry.next_subscriber_id += 1;
+         let entry = match (registry.displays.entry(display_id), new_link) {
++            // A link made before the last reconfiguration is replaced while it's stopped. The old
++            // one is leaked, as a started link can't be released.
++            (btree_map::Entry::Occupied(entry), Some(link)) if !entry.get().running => {
++                let entry = entry.into_mut();
++                mem::forget(mem::replace(&mut entry.link, link));
++                entry.made_at = reconfigurations;
++                entry
++            }
+             // If an entry appeared since the check above, dropping `new_link`
+             // is safe: a never-started link has no io thread, so releasing it
+             // doesn't race.
+             (btree_map::Entry::Occupied(entry), _) => entry.into_mut(),
+             (btree_map::Entry::Vacant(vacant), Some(link)) => vacant.insert(DisplayEntry {
+                 link,
++                made_at: reconfigurations,
+                 running: false,
+                 subscribers: Vec::new(),
+             }),
+@@ -229,6 +292,7 @@ fn subscribe(
+             id: subscriber_id,
+             frame_requests,
+             signal,
++            ticked,
+         });
+         let link_to_start = if entry.running {
+             None
+@@ -288,6 +352,47 @@ fn unsubscribe(display_id: CGDirectDisplayID, subscriber_id: SubscriberId) {
+     }
+ }
+ 
++/// Makes the display's link again and starts the new one if the old one ran, for a window that
++/// asked it for frames and got none (#3830). The old link is stopped and leaked, as a started link
++/// can't be released.
++pub fn renew(display_id: CGDirectDisplayID) -> Result<()> {
++    debug_assert_main_thread();
++    if !lock_registry().displays.contains_key(&display_id) {
++        return Ok(());
++    }
++    // Made outside the registry lock; see the lock ordering note above.
++    let link = unsafe {
++        sys::DisplayLink::new(
++            display_id,
++            display_link_output_callback,
++            display_id as usize as *mut c_void,
++        )?
++    };
++    let (mut old, running, mut new) = {
++        let mut registry = lock_registry();
++        let Some(entry) = registry.displays.get_mut(&display_id) else {
++            // A never-started link has no io thread, so dropping it doesn't race.
++            return Ok(());
++        };
++        let old = mem::replace(&mut entry.link, link);
++        entry.made_at = RECONFIGURATIONS.load(Ordering::Relaxed);
++        (old, entry.running, entry.link.clone())
++    };
++    if running {
++        unsafe { old.stop().log_err() };
++    }
++    mem::forget(old);
++    if running {
++        if let Err(error) = unsafe { new.start() } {
++            if let Some(entry) = lock_registry().displays.get_mut(&display_id) {
++                entry.running = false;
++            }
++            return Err(error);
++        }
++    }
++    Ok(())
++}
++
+ /// A per-window source of frame requests, paced by the display the window is
+ /// on. The wrapped dispatch source coalesces vsync ticks from the display's
+ /// io thread and invokes `callback(data)` on the main queue.
+@@ -295,6 +400,7 @@ pub struct WindowFrameSource {
+     frame_requests: DispatchRetained<DispatchSource>,
+     registration: Option<(CGDirectDisplayID, SubscriberId)>,
+     signal: Arc<PlatformFrameSignal>,
++    ticked: Arc<Ticked>,
+ }
+ 
+ impl WindowFrameSource {
+@@ -317,17 +423,52 @@ impl WindowFrameSource {
+             frame_requests,
+             registration: None,
+             signal: Arc::new(PlatformFrameSignal::new()),
++            ticked: Arc::default(),
+         }
+     }
+ 
+     pub fn start(&mut self, display_id: CGDirectDisplayID) -> Result<()> {
+         self.stop();
+-        let subscriber_id =
+-            subscribe(display_id, self.frame_requests.clone(), self.signal.clone())?;
++        // A new one, as a link stopped for the old one may still call back once.
++        self.ticked = Arc::default();
++        let subscriber_id = subscribe(
++            display_id,
++            self.frame_requests.clone(),
++            self.signal.clone(),
++            self.ticked.clone(),
++        )?;
+         self.registration = Some((display_id, subscriber_id));
          Ok(())
      }
  
@@ -10,9 +236,50 @@ index 658b9f24ac..7bd5c521e1 100644
 +        self.registration.is_some()
 +    }
 +
++    /// When the display's link last called back for this source since it was started.
++    pub fn ticked_at(&self) -> Option<Instant> {
++        self.ticked.at()
++    }
++
++    /// The display the source was started on.
++    pub fn display(&self) -> Option<CGDirectDisplayID> {
++        self.registration.map(|(display_id, _)| display_id)
++    }
++
++    /// Asks for one frame now, as the display's next refresh would: the callback runs on the main
++    /// queue whatever the link does (#3830).
++    pub fn request_frame(&self) {
++        self.frame_requests.merge_data(1);
++    }
++
++    /// The drive's fault (#3830): the source says it runs on `display_id` without subscribing, as a
++    /// start that didn't take would, so no frame comes.
++    pub fn start_without_frames(&mut self, display_id: CGDirectDisplayID) {
++        self.stop();
++        self.ticked = Arc::default();
++        self.registration = Some((display_id, SubscriberId(u64::MAX)));
++    }
++
      pub fn take_signal(&self) -> Option<(Instant, FrameRequestSource)> {
          self.signal.take()
      }
+@@ -458,6 +599,16 @@ mod sys {
+         display_link_context: *mut c_void,
+     ) -> i32;
+ 
++    pub const kCGDisplayBeginConfigurationFlag: u32 = 1 << 0;
++
++    #[link(name = "CoreGraphics", kind = "framework")]
++    unsafe extern "C" {
++        pub fn CGDisplayRegisterReconfigurationCallback(
++            callback: unsafe extern "C" fn(CGDirectDisplayID, u32, *mut c_void),
++            user_info: *mut c_void,
++        ) -> i32;
++    }
++
+     #[link(name = "CoreFoundation", kind = "framework")]
+     #[link(name = "CoreVideo", kind = "framework")]
+     #[allow(improper_ctypes, unknown_lints, clippy::duplicated_attributes)]
 diff --git a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
 index 6ca05849a9..c503df93ab 100644
 --- a/crates/gpui_macos/src/events.rs
@@ -440,7 +707,7 @@ index 4b48188131..66886fff2a 100644
          drop(lock);
          callback();
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f2208d35ec..87a0757228 100644
+index f2208d35ec..eb165a2001 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -11,7 +11,7 @@ use dispatch2::DispatchQueue;
@@ -477,12 +744,8 @@ index f2208d35ec..87a0757228 100644
      ffi::{CStr, CString, c_void},
      mem,
      ops::Range,
-@@ -66,14 +69,17 @@ use std::{
-     ptr::{self, NonNull},
-     rc::Rc,
-     sync::{
--        Arc, Once, Weak,
-+        Arc, Once,
+@@ -69,11 +72,36 @@ use std::{
+         Arc, Once, Weak,
          atomic::{AtomicBool, Ordering},
      },
 -    time::Duration,
@@ -493,11 +756,33 @@ index f2208d35ec..87a0757228 100644
  
 +// How long the display link keeps firing after GPUI last asked for a frame.
 +const FRAME_RUN_ON: Duration = Duration::from_millis(200);
++// How long a frame GPUI asked for may wait before its display link is taken as not giving it:
++// past the slowest first frame a start gave on the hosted Mac (57 ms) and several refreshes at
++// 60 Hz, so a link that's only starting isn't taken for one that's lost (#3830).
++const FRAME_STALL: Duration = Duration::from_millis(150);
++// How many times in a row a link that gave no frame is made again; after that only input asks,
++// with a frame of its own, so a display that gives none never keeps an idle window waking.
++const FRAME_RESTARTS: u8 = 3;
++// The display the drive's fault binds a link to: no display has it, as none has a link left on a
++// display that went away.
++const NO_DISPLAY: CGDirectDisplayID = u32::MAX - 1;
++
++/// A fault the drive puts on a window's next display link start, to show the window's frames come
++/// back by themselves (#3830). Nothing else sets one.
++#[derive(Clone, Copy, Default, PartialEq)]
++enum FrameFault {
++    #[default]
++    None,
++    /// The start says it runs, and no frame comes.
++    NoFrames,
++    /// The link is bound to a display that gives no frame.
++    NoDisplay,
++}
 +
  static RESTORES_WORKSPACE_AT_LAUNCH_DEFAULT: Once = Once::new();
  
  static mut WINDOW_CLASS: *const AnyClass = ptr::null();
-@@ -82,6 +88,19 @@ static mut VIEW_CLASS: *const AnyClass = ptr::null();
+@@ -82,6 +110,19 @@ static mut VIEW_CLASS: *const AnyClass = ptr::null();
  static mut BLURRED_VIEW_CLASS: *const AnyClass = ptr::null();
  static mut WINDOW_STATE_ARCHIVER_DELEGATE_CLASS: *const AnyClass = ptr::null();
  static mut WINDOW_STATE_UNARCHIVER_CLASS: *const AnyClass = ptr::null();
@@ -517,7 +802,7 @@ index f2208d35ec..87a0757228 100644
  
  // WindowLevel const value ref: https://docs.rs/core-graphics2/0.4.1/src/core_graphics2/window_level.rs.html
  #[allow(non_upper_case_globals)]
-@@ -100,8 +119,42 @@ pub enum UserTabbingPreference {
+@@ -100,8 +141,42 @@ pub enum UserTabbingPreference {
  #[ctor(unsafe)]
  unsafe fn build_classes() {
      unsafe {
@@ -562,7 +847,22 @@ index f2208d35ec..87a0757228 100644
          VIEW_CLASS = {
              let mut decl = ClassBuilder::new(c"GPUIView", class!(NSView)).unwrap();
              decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
-@@ -259,6 +312,13 @@ unsafe fn build_classes() {
+@@ -115,6 +190,14 @@ unsafe fn build_classes() {
+                 sel!(keyDown:),
+                 handle_key_down as extern "C" fn(_, Sel, *mut AnyObject),
+             );
++            decl.add_method(
++                sel!(iloFrameFault:),
++                frame_fault as extern "C" fn(_, Sel, NSInteger),
++            );
++            decl.add_method(
++                sel!(iloFrameLink),
++                frame_link as extern "C" fn(_, Sel) -> NSInteger,
++            );
+             decl.add_method(
+                 sel!(keyUp:),
+                 handle_key_up as extern "C" fn(_, Sel, *mut AnyObject),
+@@ -259,6 +342,13 @@ unsafe fn build_classes() {
                  accepts_first_mouse as extern "C" fn(_, Sel, *mut AnyObject) -> Bool,
              );
  
@@ -576,7 +876,7 @@ index f2208d35ec..87a0757228 100644
              decl.add_method(
                  sel!(_opaqueRectForWindowMoveWhenInTitlebar),
                  opaque_rect_for_window_move_when_in_titlebar as extern "C" fn(_, Sel) -> NSRect,
-@@ -407,16 +467,22 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
+@@ -407,16 +497,22 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
      }
  }
  
@@ -604,16 +904,31 @@ index f2208d35ec..87a0757228 100644
          decl.add_method(
              sel!(canBecomeKeyWindow),
              yes as extern "C" fn(_, Sel) -> Bool,
-@@ -648,6 +714,8 @@ struct MacWindowState {
+@@ -648,6 +744,23 @@ struct MacWindowState {
      cursor_style: CursorStyle,
      cursor_visible: Arc<AtomicBool>,
      frame_source: Option<WindowFrameSource>,
 +    // When GPUI last asked for a frame. The display link stops after a second without one.
 +    frame_demand_at: Instant,
++    // When GPUI last had a frame; a demand after it is a frame still owed (#3830).
++    frame_drawn_at: Option<Instant>,
++    // When the display link was last started.
++    frame_started_at: Option<Instant>,
++    // The next frame is one restore_frames asked for, not the link.
++    frame_asked: bool,
++    // Links made again in a row because they gave no frame that was owed.
++    frame_restarts: u8,
++    // A start's one-shot look for its first frame waits; there's one only while a frame is owed.
++    frame_watch: bool,
++    frame_fault: FrameFault,
++    // The link was started with the drive's fault, so its heal says so in a line of its own.
++    frame_fault_started: bool,
++    // The window's own state, for the look a start sets.
++    this: Weak<Mutex<MacWindowState>>,
      renderer: renderer::Renderer,
      request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
      event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
-@@ -665,7 +733,6 @@ struct MacWindowState {
+@@ -665,7 +778,6 @@ struct MacWindowState {
      input_handler: Option<PlatformInputHandler>,
      last_key_equivalent: Option<KeyDownEvent>,
      last_left_mouse_down_event: Option<Retained<AnyObject>>,
@@ -621,7 +936,7 @@ index f2208d35ec..87a0757228 100644
      traffic_light_position: Option<Point<Pixels>>,
      traffic_light_frames: Option<TrafficLightFrames>,
      pre_fullscreen_traffic_light_frames: Option<TrafficLightFrames>,
-@@ -673,9 +740,21 @@ struct MacWindowState {
+@@ -673,9 +785,21 @@ struct MacWindowState {
      previous_modifiers_changed_event: Option<PlatformInput>,
      keystroke_for_do_command: Option<Keystroke>,
      do_command_handled: Option<bool>,
@@ -643,7 +958,7 @@ index f2208d35ec..87a0757228 100644
      // When true, the whole content view is reported as app-owned titlebar content via
      // `_opaqueRectForWindowMoveWhenInTitlebar`, so AppKit does not drag the window from
      // the titlebar or delay titlebar clicks (a delay first observed on macOS 27). Such
-@@ -694,9 +773,85 @@ struct MacWindowState {
+@@ -694,9 +818,93 @@ struct MacWindowState {
      accesskit_adapter: Option<accesskit_macos::SubclassingAdapter>,
      // The parent window if this window is a sheet (Dialog kind)
      sheet_parent: Option<*mut AnyObject>,
@@ -679,6 +994,14 @@ index f2208d35ec..87a0757228 100644
 +            cursor_visible,
 +            frame_source: None,
 +            frame_demand_at: Instant::now(),
++            frame_drawn_at: None,
++            frame_started_at: None,
++            frame_asked: false,
++            frame_restarts: 0,
++            frame_watch: false,
++            frame_fault: FrameFault::None,
++            frame_fault_started: false,
++            this: Weak::new(),
 +            renderer,
 +            request_frame_callback: None,
 +            event_callback: None,
@@ -729,7 +1052,193 @@ index f2208d35ec..87a0757228 100644
      fn move_traffic_light(&mut self) {
          if let Some(traffic_light_position) = self.traffic_light_position {
              if self.is_fullscreen() && !self.is_exiting_fullscreen {
-@@ -909,10 +1064,14 @@ impl MacWindowState {
+@@ -816,23 +1024,178 @@ impl MacWindowState {
+ 
+     fn start_display_link(&mut self) {
+         self.stop_display_link();
+-        if !self
+-            .native_window()
+-            .occlusionState()
+-            .contains(NSWindowOcclusionState::Visible)
+-        {
++        let occlusion = self.native_window().occlusionState();
++        if !occlusion.contains(NSWindowOcclusionState::Visible) {
++            // Ordered in, it's drawn once AppKit says part of it shows; a key in it before then
++            // gets a frame of its own (frames_stalled).
++            if self.native_window().isVisible() {
++                say_start_refused(format_args!(
++                    "{} is on screen with occlusion {:#x}, key {}",
++                    self.window_name(),
++                    occlusion.0,
++                    self.native_window().isKeyWindow(),
++                ));
++            }
+             return;
+         }
+         let screen: *mut AnyObject = unsafe { msg_send![self.native_window, screen] };
+         let Some(display_id) = display_id_for_screen(screen) else {
+             // AppKit can temporarily report no screen while displays are being reconfigured.
++            say_start_refused(format_args!("{} has no screen", self.window_name()));
+             return;
+         };
++        let fault = mem::take(&mut self.frame_fault);
++        if !matches!(fault, FrameFault::None) {
++            self.frame_fault_started = true;
++        }
++        let source = self.own_frame_source();
++        let started = match fault {
++            FrameFault::None => source.start(display_id),
++            FrameFault::NoFrames => Ok(source.start_without_frames(display_id)),
++            FrameFault::NoDisplay => Ok(source.start_without_frames(NO_DISPLAY)),
++        };
++        if let Err(error) = started {
++            say_start_refused(format_args!(
++                "{} couldn't start on display {display_id}: {error:#}",
++                self.window_name(),
++            ));
++            return;
++        }
++        self.frame_started_at = Some(Instant::now());
++        self.watch_first_frame();
++    }
++
++    fn own_frame_source(&mut self) -> &mut WindowFrameSource {
+         let data = self.native_view.as_ptr() as *mut c_void;
+         self.frame_source
+             .get_or_insert_with(|| WindowFrameSource::new(data, step))
+-            .start(display_id)
+-            .log_err();
++    }
++
++    // The window's class and number, for a check's lines.
++    fn window_name(&self) -> String {
++        let class = unsafe { (*self.native_window).class() };
++        format!(
++            "{} {}",
++            class.name().to_string_lossy(),
++            self.native_window().windowNumber()
++        )
++    }
++
++    /// GPUI asked for a frame after its last one.
++    fn frame_owed(&self) -> bool {
++        self.frame_drawn_at
++            .is_none_or(|drawn_at| drawn_at < self.frame_demand_at)
++    }
++
++    /// A frame GPUI asked for has waited past FRAME_STALL in a window that shows, or that has the
++    /// keyboard while AppKit says it doesn't show, and its link isn't running or gives no frames.
++    /// GPUI wakes a window only as it goes from drawn to dirty, so a link that gave no frame left
++    /// it dirty and undrawn while its keys still landed (#3830). Cheap first: it's asked on every
++    /// input.
++    fn frames_stalled(&self) -> bool {
++        if !self.frame_owed() || self.frame_demand_at.elapsed() < FRAME_STALL {
++            return false;
++        }
++        let running = self
++            .frame_source
++            .as_ref()
++            .is_some_and(WindowFrameSource::is_running);
++        if running && !self.link_silent() {
++            // The link gives frames, and the main thread hasn't got to them yet.
++            return false;
++        }
++        let window = self.native_window();
++        window
++            .occlusionState()
++            .contains(NSWindowOcclusionState::Visible)
++            || (window.isVisible() && window.isKeyWindow())
++    }
++
++    /// The display link was started FRAME_STALL ago or more and hasn't called back for the window
++    /// for FRAME_STALL, as told from the link's own thread, so a busy main thread isn't taken for a
++    /// link that gives no frames. A running link calls back on each refresh.
++    fn link_silent(&self) -> bool {
++        let Some(source) = self
++            .frame_source
++            .as_ref()
++            .filter(|source| source.is_running())
++        else {
++            return false;
++        };
++        self.frame_started_at
++            .is_some_and(|at| at.elapsed() >= FRAME_STALL)
++            && source
++                .ticked_at()
++                .is_none_or(|at| at.elapsed() >= FRAME_STALL)
++    }
++
++    /// Makes the window's display link again, on the display the window is on now, and asks for
++    /// one frame from the window's own frame source, which comes whatever the link does.
++    fn restore_frames(&mut self, why: &str) {
++        let bound = self
++            .frame_source
++            .as_ref()
++            .and_then(WindowFrameSource::display);
++        say_frames_restored(format_args!(
++            "{} {why}, its link on display {}",
++            self.window_name(),
++            bound.map_or("none".to_string(), |id| id.to_string()),
++        ));
++        if mem::take(&mut self.frame_fault_started) {
++            // Only the drive makes a fault, so only a check says this.
++            eprintln!(
++                "browser: frames asked for again after the drive's fault: {} {why}",
++                self.window_name()
++            );
++        }
++        self.frame_restarts = self.frame_restarts.saturating_add(1);
++        if self.frame_restarts <= FRAME_RESTARTS {
++            if let Some(display_id) = bound.filter(|id| *id != NO_DISPLAY) {
++                crate::display_link::renew(display_id).log_err();
++            }
++            self.start_display_link();
++        }
++        self.frame_asked = true;
++        self.own_frame_source().request_frame();
++    }
++
++    /// A start doesn't count on its first frame: a one-shot look, FRAME_STALL after the last start
++    /// while a frame is owed, makes the link again if none came, and ends with the look (#3830).
++    fn watch_first_frame(&mut self) {
++        if self.frame_watch || !self.frame_owed() {
++            return;
++        }
++        let Some(state) = self.this.upgrade() else {
++            return;
++        };
++        self.frame_watch = true;
++        let state = Arc::downgrade(&state);
++        let wait = self
++            .frame_started_at
++            .map_or(FRAME_STALL, |at| FRAME_STALL.saturating_sub(at.elapsed()));
++        let timer = self.background_executor.timer(wait);
++        self.foreground_executor
++            .spawn(async move {
++                timer.await;
++                let Some(state) = state.upgrade() else {
++                    return;
++                };
++                let mut lock = state.lock();
++                lock.frame_watch = false;
++                if !lock.frame_owed() {
++                    return;
++                }
++                if lock.link_silent() {
++                    lock.restore_frames("got no frame from its display link's start");
++                } else if lock
++                    .frame_started_at
++                    .is_some_and(|at| at.elapsed() < FRAME_STALL)
++                {
++                    // A start since this look began, which found it waiting, gets its own.
++                    lock.watch_first_frame();
++                }
++            })
++            .detach();
+     }
+ 
+     fn stop_display_link(&mut self) {
+@@ -909,10 +1272,14 @@ impl MacWindowState {
      }
  
      fn content_size(&self) -> Size<Pixels> {
@@ -748,7 +1257,7 @@ index f2208d35ec..87a0757228 100644
          size(px(width as f32), px(height as f32))
      }
  
-@@ -960,6 +1119,19 @@ impl MacWindow {
+@@ -960,6 +1327,19 @@ impl MacWindow {
          renderer_context: renderer::Context,
          marker: MainThreadMarker,
      ) -> Self {
@@ -768,7 +1277,7 @@ index f2208d35ec..87a0757228 100644
          autoreleasepool(|_| unsafe {
              let allows_automatic_window_tabbing = tabbing_identifier.is_some();
              if allows_automatic_window_tabbing {
-@@ -1061,67 +1233,25 @@ impl MacWindow {
+@@ -1061,67 +1441,26 @@ impl MacWindow {
              let native_view: *mut AnyObject = msg_send![native_view, initWithFrame: content_bounds];
              assert!(!native_view.is_null());
  
@@ -846,10 +1355,11 @@ index f2208d35ec..87a0757228 100644
 -                sheet_parent: None,
 -            }));
 +            )));
++            state.lock().this = Arc::downgrade(&state);
              let mut window = Self(state, marker);
  
              (*native_window)
-@@ -1289,6 +1419,96 @@ impl MacWindow {
+@@ -1289,6 +1628,97 @@ impl MacWindow {
          })
      }
  
@@ -891,6 +1401,7 @@ index f2208d35ec..87a0757228 100644
 +                None,
 +                false,
 +            )));
++            state.lock().this = Arc::downgrade(&state);
 +
 +            let observer: *mut AnyObject = msg_send![HOST_WINDOW_OBSERVER_CLASS, new];
 +            for object in [native_view, observer] {
@@ -946,7 +1457,7 @@ index f2208d35ec..87a0757228 100644
      pub fn active_window() -> Option<AnyWindowHandle> {
          unsafe {
              let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-@@ -1366,6 +1586,19 @@ impl Drop for MacWindow {
+@@ -1366,6 +1796,19 @@ impl Drop for MacWindow {
          // renderer's command queue are actually released with the window.
          drop(this.accesskit_adapter.take());
          this.renderer.destroy();
@@ -966,7 +1477,7 @@ index f2208d35ec..87a0757228 100644
          let window = this.native_window;
          let sheet_parent = this.sheet_parent.take();
          this.frame_source.take();
-@@ -1683,6 +1916,15 @@ impl PlatformWindow for MacWindow {
+@@ -1683,6 +2126,15 @@ impl PlatformWindow for MacWindow {
          self.0.as_ref().lock().input_handler.take()
      }
  
@@ -982,7 +1493,7 @@ index f2208d35ec..87a0757228 100644
      fn prompt(
          &self,
          level: PromptLevel,
-@@ -1841,6 +2083,10 @@ impl PlatformWindow for MacWindow {
+@@ -1841,6 +2293,10 @@ impl PlatformWindow for MacWindow {
  
          let opaque = background_appearance == WindowBackgroundAppearance::Opaque;
          this.renderer.update_transparency(!opaque);
@@ -993,7 +1504,7 @@ index f2208d35ec..87a0757228 100644
  
          unsafe {
              let _: () = msg_send![this.native_window, setOpaque: opaque.to_objc()];
-@@ -1993,6 +2239,25 @@ impl PlatformWindow for MacWindow {
+@@ -1993,6 +2449,27 @@ impl PlatformWindow for MacWindow {
          }
      }
  
@@ -1011,6 +1522,8 @@ index f2208d35ec..87a0757228 100644
 +                    .is_some_and(WindowFrameSource::is_running)
 +                {
 +                    lock.start_display_link();
++                } else if lock.link_silent() {
++                    lock.restore_frames("asked for a frame of a display link that gives none");
 +                }
 +            }
 +        }))
@@ -1019,7 +1532,7 @@ index f2208d35ec..87a0757228 100644
      fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
          self.0.as_ref().lock().request_frame_callback = Some(callback);
      }
-@@ -2315,9 +2580,6 @@ impl PlatformWindow for MacWindow {
+@@ -2315,9 +2792,6 @@ impl PlatformWindow for MacWindow {
              ];
  
              let started = !session.is_null();
@@ -1029,7 +1542,7 @@ index f2208d35ec..87a0757228 100644
              log::debug!(
                  "start_external_drag completed: started={}, item_count={}",
                  started,
-@@ -2345,12 +2607,22 @@ impl PlatformWindow for MacWindow {
+@@ -2345,12 +2819,22 @@ impl PlatformWindow for MacWindow {
          };
          let action_handler = A11yActionHandler(callbacks.action);
  
@@ -1057,7 +1570,7 @@ index f2208d35ec..87a0757228 100644
          };
  
          lock.accesskit_adapter = Some(adapter);
-@@ -2477,6 +2749,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
+@@ -2477,6 +2961,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -1084,7 +1597,7 @@ index f2208d35ec..87a0757228 100644
  fn add_mouse_tracking_area(native_view: &NSView) {
      let options = NSTrackingAreaOptions::MouseEnteredAndExited
          | NSTrackingAreaOptions::MouseMoved
-@@ -2555,13 +2847,58 @@ extern "C" fn handle_key_equivalent(
+@@ -2555,13 +3059,58 @@ extern "C" fn handle_key_equivalent(
      _: Sel,
      native_event: *mut AnyObject,
  ) -> Bool {
@@ -1143,7 +1656,17 @@ index f2208d35ec..87a0757228 100644
  extern "C" fn handle_key_up(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      handle_key_event(this, native_event, false);
  }
-@@ -2645,15 +2982,40 @@ extern "C" fn handle_key_event(
+@@ -2637,6 +3186,9 @@ extern "C" fn handle_key_event(
+ ) -> Bool {
+     let window_state = unsafe { get_window_state(this) };
+     let mut lock = window_state.as_ref().lock();
++    if lock.frames_stalled() {
++        lock.restore_frames("had a frame owed as a key came");
++    }
+ 
+     let window_height = lock.content_size().height;
+     let event = unsafe { platform_input_from_native(native_event, Some(window_height)) };
+@@ -2645,15 +3197,40 @@ extern "C" fn handle_key_event(
          return Bool::NO;
      };
  
@@ -1191,7 +1714,7 @@ index f2208d35ec..87a0757228 100644
      };
  
      match event {
-@@ -2728,6 +3090,12 @@ extern "C" fn handle_key_event(
+@@ -2728,6 +3305,12 @@ extern "C" fn handle_key_event(
                      }
                  };
                  window_state.as_ref().lock().keystroke_for_do_command.take();
@@ -1204,15 +1727,19 @@ index f2208d35ec..87a0757228 100644
                  if let Some(handled) = window_state.as_ref().lock().do_command_handled.take() {
                      return handled.to_objc();
                  } else if handled == Bool::YES {
-@@ -2785,7 +3153,6 @@ extern "C" fn handle_key_event(
+@@ -2785,8 +3368,10 @@ extern "C" fn handle_key_event(
  
  extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      let window_state = unsafe { get_window_state(this) };
 -    let weak_window_state = Arc::downgrade(&window_state);
      let mut lock = window_state.as_ref().lock();
++    if lock.frames_stalled() {
++        lock.restore_frames("had a frame owed as the pointer came");
++    }
      let window_height = lock.content_size().height;
      let native_event_type: NSEventType = unsafe { msg_send![native_event, type] };
-@@ -2886,33 +3253,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+     match native_event_type {
+@@ -2886,33 +3471,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
                  }
                  lock = window_state.as_ref().lock();
              }
@@ -1246,7 +1773,7 @@ index f2208d35ec..87a0757228 100644
              PlatformInput::ModifiersChanged(ModifiersChangedEvent {
                  modifiers,
                  capslock,
-@@ -2934,11 +3274,142 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+@@ -2934,11 +3492,142 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
              _ => {}
          }
  
@@ -1333,7 +1860,7 @@ index f2208d35ec..87a0757228 100644
 +        let mut lock = window_state.lock();
 +        if lock.waits_for_update || lock.event_callback.is_none() {
 +            return;
-         }
++        }
 +        match lock.held.pop_front() {
 +            None => return,
 +            Some(MacHeld::Input(event)) => {
@@ -1382,7 +1909,7 @@ index f2208d35ec..87a0757228 100644
 +                schedule_hand_on(window_state);
 +            }
 +            return;
-+        }
+         }
 +        let Some(MacHeld::Input(held)) = lock.held.pop_front() else {
 +            unreachable!()
 +        };
@@ -1391,7 +1918,30 @@ index f2208d35ec..87a0757228 100644
      }
  }
  
-@@ -3339,9 +3810,60 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+@@ -3200,6 +3889,7 @@ extern "C" fn window_did_change_key_status(this: &AnyObject, selector: Sel, _: *
+ 
+         if lock.activated_least_once {
+             if let Some(mut callback) = lock.request_frame_callback.take() {
++                lock.frame_drawn_at = Some(Instant::now());
+                 lock.renderer.set_presents_with_transaction(true);
+                 lock.stop_display_link();
+                 drop(lock);
+@@ -3325,7 +4015,14 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+     let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
+     let window_state = unsafe { get_window_state(this) };
+     let mut lock = window_state.lock();
++    // The drive's fault holds back AppKit's draws too, until a heal asks for frames again, as a
++    // window AppKit has at its size already gets none: a check's 1x display redraws the bar for
++    // each listing of its rows, which drew it past the fault (#3830).
++    if lock.frame_fault_started {
++        return;
++    }
+     if let Some(mut callback) = lock.request_frame_callback.take() {
++        lock.frame_drawn_at = Some(Instant::now());
+         lock.renderer.set_presents_with_transaction(true);
+         lock.stop_display_link();
+         drop(lock);
+@@ -3339,15 +4036,85 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
          lock.request_frame_callback = Some(callback);
          lock.renderer.set_presents_with_transaction(false);
          lock.start_display_link();
@@ -1402,6 +1952,20 @@ index f2208d35ec..87a0757228 100644
      }
  }
  
++/// Says why a window's display link didn't start, for a check's log (#3830).
++fn say_start_refused(why: std::fmt::Arguments) {
++    static REFUSED: gpui_apple::metal_renderer::LostFrames =
++        gpui_apple::metal_renderer::LostFrames::new();
++    REFUSED.say(format_args!("display link not started: {why}"));
++}
++
++/// Says a window's frames were asked for again, and why, for a check's log (#3830).
++fn say_frames_restored(why: std::fmt::Arguments) {
++    static RESTORED: gpui_apple::metal_renderer::LostFrames =
++        gpui_apple::metal_renderer::LostFrames::new();
++    RESTORED.say(format_args!("frames asked for again: {why}"));
++}
++
 +/// Says, a second after a window drew before it was shown, if it's on screen but AppKit still says
 +/// no part of it shows. A window draws nothing until AppKit says it does, and one shown on a check
 +/// VM never heard it (#3270).
@@ -1452,7 +2016,18 @@ index f2208d35ec..87a0757228 100644
  extern "C" fn step(view: *mut c_void) {
      let view = view as *mut AnyObject;
      let window_state = unsafe { get_window_state(&*view) };
-@@ -3362,7 +3884,14 @@ extern "C" fn step(view: *mut c_void) {
+     let mut lock = window_state.lock();
+ 
+     if let Some(mut callback) = lock.request_frame_callback.take() {
++        let now = Instant::now();
++        lock.frame_drawn_at = Some(now);
++        if !mem::take(&mut lock.frame_asked) {
++            lock.frame_restarts = 0;
++        }
+         let (signal_at, signal_source) = lock
+             .frame_source
+             .as_ref()
+@@ -3362,10 +4129,43 @@ extern "C" fn step(view: *mut c_void) {
              signal_source,
              ..Default::default()
          });
@@ -1468,7 +2043,36 @@ index f2208d35ec..87a0757228 100644
      }
  }
  
-@@ -3451,11 +3980,9 @@ extern "C" fn insert_text(
++/// The drive's fault on the window's next display link start (#3830): 1, it gives no frame; 2, it's
++/// bound to a display that gives none. The link stops now, as an idle window's does, so the next
++/// frame asked for starts it.
++extern "C" fn frame_fault(this: &AnyObject, _: Sel, kind: NSInteger) {
++    let window_state = unsafe { get_window_state(this) };
++    let mut lock = window_state.lock();
++    lock.frame_fault = match kind {
++        1 => FrameFault::NoFrames,
++        2 => FrameFault::NoDisplay,
++        _ => FrameFault::None,
++    };
++    lock.stop_display_link();
++}
++
++/// For the drive: 1 while the window's display link runs, and 2 while a start's look for its first
++/// frame waits, so a check sees an idle window keeps neither.
++extern "C" fn frame_link(this: &AnyObject, _: Sel) -> NSInteger {
++    let window_state = unsafe { get_window_state(this) };
++    let lock = window_state.lock();
++    let running = lock
++        .frame_source
++        .as_ref()
++        .is_some_and(WindowFrameSource::is_running);
++    NSInteger::from(running) | NSInteger::from(lock.frame_watch) << 1
++}
++
+ extern "C" fn valid_attributes_for_marked_text(_: &AnyObject, _: Sel) -> *mut AnyObject {
+     unsafe { msg_send![class!(NSArray), array] }
+ }
+@@ -3451,11 +4251,9 @@ extern "C" fn insert_text(
              text
          };
  
@@ -1483,7 +2087,7 @@ index f2208d35ec..87a0757228 100644
      }
  }
  
-@@ -3473,16 +4000,14 @@ extern "C" fn set_marked_text(
+@@ -3473,16 +4271,14 @@ extern "C" fn set_marked_text(
          } else {
              text
          };
@@ -1505,7 +2109,7 @@ index f2208d35ec..87a0757228 100644
  }
  
  extern "C" fn attributed_substring_for_proposed_range(
-@@ -3521,19 +4046,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
+@@ -3521,19 +4317,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
      let state = unsafe { get_window_state(this) };
      let mut lock = state.as_ref().lock();
      let keystroke = lock.keystroke_for_do_command.take();
@@ -1535,7 +2139,7 @@ index f2208d35ec..87a0757228 100644
  }
  
  extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
-@@ -3555,6 +4083,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
+@@ -3555,6 +4354,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -1546,7 +2150,7 @@ index f2208d35ec..87a0757228 100644
  extern "C" fn accepts_first_mouse(this: &AnyObject, _: Sel, _: *mut AnyObject) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let mut lock = window_state.as_ref().lock();
-@@ -3717,54 +4249,11 @@ extern "C" fn dragging_session_ended(
+@@ -3717,54 +4520,11 @@ extern "C" fn dragging_session_ended(
      let window_state = unsafe { get_window_state(this) };
      {
          let mut lock = window_state.lock();
@@ -1601,7 +2205,7 @@ index f2208d35ec..87a0757228 100644
  /// Sends the specified FileDropEvent using `PlatformInput::FileDrop` to the window
  /// state and updates the window state according to the event passed.
  fn send_file_drop_event(
-@@ -3781,10 +4270,9 @@ fn send_file_drop_event(
+@@ -3781,10 +4541,9 @@ fn send_file_drop_event(
      if let Some(mut callback) = lock.event_callback.take() {
          drop(lock);
          callback(PlatformInput::FileDrop(file_drop_event));
