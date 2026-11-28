@@ -603,3 +603,378 @@ fn compat_ends_at_the_close_where_a_server_sends_no_done() {
         [Delta::Text("Hi".into()), Delta::Ended(Stop::Done)]
     );
 }
+
+/// What a reader makes of these events and the stream's close.
+fn read(wire: &dyn Wire, events: &[Value]) -> Vec<Delta> {
+    let mut reader = wire.reader();
+    let mut deltas: Vec<Delta> = events
+        .iter()
+        .flat_map(|event| reader.event(None, &event.to_string()))
+        .collect();
+    deltas.extend(reader.end());
+    deltas
+}
+
+/// A conversation with every kind of item: a thought of `maker`'s and one of another's, what was
+/// said, a call, its result and a message sent with the result.
+fn every_item(maker: &str, signature: &str) -> Request {
+    let mut request = ask("Open a.com");
+    request.thinking = true;
+    request.effort = Some("high".into());
+    request.tools = vec![Tool {
+        name: "open".into(),
+        description: "Opens a page.".into(),
+        schema: json!({ "type": "object" }),
+    }];
+    request.items.extend([
+        Item::Thought(Signed {
+            maker: "elsewhere".into(),
+            text: "not theirs".into(),
+            signature: "x".into(),
+        }),
+        Item::Thought(Signed {
+            maker: maker.into(),
+            text: "Open it.".into(),
+            signature: signature.into(),
+        }),
+        Item::Said("Opening.".into()),
+        Item::Call {
+            id: "c1".into(),
+            name: "open".into(),
+            args: json!({ "url": "a.com" }),
+        },
+        Item::Result {
+            id: "c1".into(),
+            parts: vec![Part::Text("opened".into())],
+            error: false,
+        },
+        Item::User(vec![Part::Text("Then b.com".into())]),
+    ]);
+    request
+}
+
+#[test]
+fn anthropic_lists_what_each_model_says_it_can_do() {
+    let listing = json!({ "data": [
+        { "id": "claude-opus-5-5", "display_name": "Claude Opus 5.5", "max_input_tokens": 1000000,
+          "capabilities": {
+            "image_input": { "supported": true },
+            "structured_outputs": { "supported": true },
+            "thinking": { "supported": true, "types": { "adaptive": { "supported": true } } },
+            "effort": { "supported": true, "low": { "supported": true }, "medium": { "supported": true },
+                        "high": { "supported": true }, "xhigh": { "supported": true }, "max": { "supported": true } },
+          } },
+        { "id": "claude-haiku-4-5", "display_name": "Claude Haiku 4.5", "max_input_tokens": 200000,
+          "capabilities": {
+            "image_input": { "supported": true },
+            "thinking": { "supported": true, "types": { "adaptive": { "supported": false } } },
+            "effort": { "supported": false },
+          } },
+        { "id": "claude-opus-4-6", "display_name": "Claude Opus 4.6" },
+    ] });
+    let listed = anthropic::Anthropic.models(&listing);
+    assert_eq!(listed[0].name, "Claude Opus 5.5");
+    assert_eq!(
+        listed[0].caps,
+        Caps {
+            images_in: true,
+            structured: true,
+            thinking: Thinking::Summaries,
+            efforts: ["low", "medium", "high", "xhigh", "max"]
+                .map(String::from)
+                .to_vec(),
+            ..Caps::plain(1_000_000)
+        }
+    );
+    assert_eq!(listed[1].caps.thinking, Thinking::None);
+    assert!(listed[1].caps.efforts.is_empty());
+    assert_eq!(listed[2].caps.efforts, ["low", "medium", "high", "max"]);
+    assert_eq!(listed[2].caps.context, 200_000);
+}
+
+#[test]
+fn anthropic_sends_its_own_reasoning_back_and_one_message_per_side_marked_for_its_cache() {
+    let (path, body) =
+        anthropic::Anthropic.call("claude-opus-5-5", &every_item("anthropic", "sig"));
+    assert_eq!(path, "/v1/messages");
+    assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
+    assert_eq!(
+        body["thinking"],
+        json!({ "type": "adaptive", "display": "summarized" })
+    );
+    assert_eq!(body["output_config"], json!({ "effort": "high" }));
+    assert_eq!(
+        body["messages"],
+        json!([
+            { "role": "user", "content": [{ "type": "text", "text": "Open a.com" }] },
+            { "role": "assistant", "content": [
+                { "type": "thinking", "thinking": "Open it.", "signature": "sig" },
+                { "type": "text", "text": "Opening." },
+                { "type": "tool_use", "id": "c1", "name": "open", "input": { "url": "a.com" } },
+            ] },
+            { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "c1", "is_error": false,
+                  "content": [{ "type": "text", "text": "opened" }] },
+                { "type": "text", "text": "Then b.com", "cache_control": { "type": "ephemeral" } },
+            ] },
+        ])
+    );
+}
+
+#[test]
+fn anthropic_streams_signed_reasoning_text_and_calls() {
+    let deltas = read(
+        &anthropic::Anthropic,
+        &[
+            json!({ "type": "message_start", "message": { "usage": { "input_tokens": 10, "cache_read_input_tokens": 90 } } }),
+            json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "thinking" } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "thinking_delta", "thinking": "Open it." } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "signature_delta", "signature": "sig" } }),
+            json!({ "type": "content_block_stop", "index": 0 }),
+            json!({ "type": "content_block_start", "index": 1, "content_block": { "type": "text" } }),
+            json!({ "type": "content_block_delta", "index": 1, "delta": { "type": "text_delta", "text": "Opening." } }),
+            json!({ "type": "content_block_stop", "index": 1 }),
+            json!({ "type": "content_block_start", "index": 2, "content_block": { "type": "tool_use", "id": "toolu_1", "name": "open" } }),
+            json!({ "type": "content_block_delta", "index": 2, "delta": { "type": "input_json_delta", "partial_json": "{\"url\":" } }),
+            json!({ "type": "content_block_delta", "index": 2, "delta": { "type": "input_json_delta", "partial_json": "\"a.com\"}" } }),
+            json!({ "type": "content_block_stop", "index": 2 }),
+            json!({ "type": "message_delta", "delta": { "stop_reason": "tool_use" }, "usage": { "output_tokens": 30 } }),
+            json!({ "type": "message_stop" }),
+        ],
+    );
+    assert_eq!(
+        deltas,
+        [
+            Delta::Thinking("Open it.".into()),
+            Delta::Signed(Signed {
+                maker: "anthropic".into(),
+                text: "Open it.".into(),
+                signature: "sig".into()
+            }),
+            Delta::Text("Opening.".into()),
+            Delta::Call {
+                id: "toolu_1".into(),
+                name: "open".into(),
+                args: json!({ "url": "a.com" })
+            },
+            Delta::Usage {
+                input: 100,
+                output: 30
+            },
+            Delta::Ended(Stop::Calls),
+        ]
+    );
+    let busy = json!({ "type": "error", "error": { "type": "overloaded_error", "message": "Overloaded" } });
+    assert_eq!(
+        read(&anthropic::Anthropic, &[busy]),
+        [Delta::Failed(Failure::Busy)]
+    );
+}
+
+#[test]
+fn openai_lists_its_chat_models_alone() {
+    let listing = json!({ "data": [
+        { "id": "gpt-5" }, { "id": "gpt-4.1-mini" }, { "id": "o3" },
+        { "id": "gpt-4o-realtime-preview" }, { "id": "text-embedding-3-large" }, { "id": "dall-e-3" },
+    ] });
+    let listed = openai::OpenAi.models(&listing);
+    let ids: Vec<_> = listed.iter().map(|listed| listed.id.as_str()).collect();
+    assert_eq!(ids, ["gpt-5", "gpt-4.1-mini", "o3"]);
+    assert_eq!(listed[0].caps.efforts, ["minimal", "low", "medium", "high"]);
+    assert_eq!(listed[0].caps.context, 400_000);
+    assert_eq!(listed[1].caps.thinking, Thinking::None);
+    assert_eq!(listed[1].caps.context, 1_047_576);
+}
+
+#[test]
+fn openai_keeps_nothing_on_its_side_and_takes_its_reasoning_back_encrypted() {
+    let signature = json!({ "id": "rs_1", "encrypted_content": "enc" }).to_string();
+    let (path, body) = openai::OpenAi.call("gpt-5", &every_item("openai", &signature));
+    assert_eq!(path, "/v1/responses");
+    assert_eq!(body["store"], false);
+    assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+    assert_eq!(
+        body["reasoning"],
+        json!({ "summary": "auto", "effort": "high" })
+    );
+    assert_eq!(body["tools"][0]["name"], "open");
+    assert_eq!(
+        body["input"],
+        json!([
+            { "role": "user", "content": [{ "type": "input_text", "text": "Open a.com" }] },
+            { "type": "reasoning", "id": "rs_1", "encrypted_content": "enc",
+              "summary": [{ "type": "summary_text", "text": "Open it." }] },
+            { "role": "assistant", "content": "Opening." },
+            { "type": "function_call", "call_id": "c1", "name": "open", "arguments": "{\"url\":\"a.com\"}" },
+            { "type": "function_call_output", "call_id": "c1", "output": "opened" },
+            { "role": "user", "content": [{ "type": "input_text", "text": "Then b.com" }] },
+        ])
+    );
+}
+
+#[test]
+fn openai_streams_summaries_text_and_calls() {
+    let deltas = read(
+        &openai::OpenAi,
+        &[
+            json!({ "type": "response.reasoning_summary_text.delta", "delta": "Open it." }),
+            json!({ "type": "response.output_item.done", "item": {
+                "type": "reasoning", "id": "rs_1", "encrypted_content": "enc",
+                "summary": [{ "type": "summary_text", "text": "Open it." }] } }),
+            json!({ "type": "response.output_text.delta", "delta": "Opening." }),
+            json!({ "type": "response.output_item.done", "item": {
+                "type": "function_call", "call_id": "call_1", "name": "open", "arguments": "{\"url\":\"a.com\"}" } }),
+            json!({ "type": "response.completed", "response": { "usage": { "input_tokens": 50, "output_tokens": 8 } } }),
+        ],
+    );
+    let Delta::Signed(signed) = &deltas[1] else {
+        panic!("no signed reasoning in {deltas:?}");
+    };
+    let kept: Value = serde_json::from_str(&signed.signature).unwrap();
+    assert_eq!(kept, json!({ "id": "rs_1", "encrypted_content": "enc" }));
+    assert_eq!(
+        [&deltas[..1], &deltas[2..]].concat(),
+        [
+            Delta::Thinking("Open it.".into()),
+            Delta::Text("Opening.".into()),
+            Delta::Call {
+                id: "call_1".into(),
+                name: "open".into(),
+                args: json!({ "url": "a.com" })
+            },
+            Delta::Usage {
+                input: 50,
+                output: 8
+            },
+            Delta::Ended(Stop::Calls),
+        ]
+    );
+    let limit = json!({ "type": "response.failed", "response": { "error": { "code": "rate_limit_exceeded", "message": "Slow down" } } });
+    assert_eq!(
+        read(&openai::OpenAi, &[limit]),
+        [Delta::Failed(Failure::Limit(None))]
+    );
+}
+
+#[test]
+fn gemini_lists_the_models_that_generate_and_what_they_think_with() {
+    let listing = json!({ "models": [
+        { "name": "models/gemini-3-pro", "displayName": "Gemini 3 Pro", "inputTokenLimit": 1048576,
+          "supportedGenerationMethods": ["generateContent", "countTokens"], "thinking": true },
+        { "name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash", "inputTokenLimit": 1048576,
+          "supportedGenerationMethods": ["generateContent"], "thinking": true },
+        { "name": "models/gemini-embedding-001", "supportedGenerationMethods": ["embedContent"] },
+    ] });
+    let listed = gemini::Gemini.models(&listing);
+    assert_eq!(listed.len(), 2);
+    assert_eq!(
+        (listed[0].id.as_str(), listed[0].name.as_str()),
+        ("gemini-3-pro", "Gemini 3 Pro")
+    );
+    assert_eq!(listed[0].caps.efforts, ["low", "high"]);
+    assert_eq!(listed[0].caps.context, 1_048_576);
+    assert_eq!(listed[1].caps.thinking, Thinking::Summaries);
+    assert!(listed[1].caps.efforts.is_empty());
+}
+
+#[test]
+fn gemini_puts_its_signature_back_on_the_call_and_names_each_result() {
+    let (path, body) = gemini::Gemini.call("gemini-3-pro", &every_item("gemini", "sig"));
+    assert_eq!(
+        path,
+        "/v1beta/models/gemini-3-pro:streamGenerateContent?alt=sse"
+    );
+    assert_eq!(
+        body["generationConfig"],
+        json!({ "maxOutputTokens": 1000, "thinkingConfig": { "includeThoughts": true, "thinkingLevel": "high" } })
+    );
+    assert_eq!(body["tools"][0]["functionDeclarations"][0]["name"], "open");
+    assert_eq!(
+        body["contents"],
+        json!([
+            { "role": "user", "parts": [{ "text": "Open a.com" }] },
+            { "role": "model", "parts": [
+                { "text": "Opening." },
+                { "functionCall": { "name": "open", "args": { "url": "a.com" } }, "thoughtSignature": "sig" },
+            ] },
+            { "role": "user", "parts": [
+                { "functionResponse": { "name": "open", "response": { "content": "opened" } } },
+                { "text": "Then b.com" },
+            ] },
+        ])
+    );
+}
+
+#[test]
+fn gemini_gives_each_call_an_id_and_ends_at_the_close() {
+    let deltas = read(
+        &gemini::Gemini,
+        &[
+            json!({ "candidates": [{ "content": { "role": "model", "parts": [
+                { "text": "Open it.", "thought": true },
+            ] } }] }),
+            json!({ "candidates": [{ "content": { "role": "model", "parts": [
+                { "text": "Opening." },
+                { "functionCall": { "name": "open", "args": { "url": "a.com" } }, "thoughtSignature": "sig" },
+                { "functionCall": { "name": "open", "args": { "url": "b.com" } } },
+            ] }, "finishReason": "STOP" }],
+              "usageMetadata": { "promptTokenCount": 40, "candidatesTokenCount": 9, "thoughtsTokenCount": 3 } }),
+        ],
+    );
+    assert_eq!(
+        deltas[..3],
+        [
+            Delta::Thinking("Open it.".into()),
+            Delta::Text("Opening.".into()),
+            Delta::Signed(Signed {
+                maker: "gemini".into(),
+                text: "Open it.".into(),
+                signature: "sig".into()
+            }),
+        ]
+    );
+    let ids: Vec<&str> = deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            Delta::Call { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert!(
+        ids.iter().all(|id| id.starts_with("call-")) && ids[0] != ids[1],
+        "{ids:?}"
+    );
+    assert_eq!(
+        deltas[deltas.len() - 2..],
+        [
+            Delta::Usage {
+                input: 40,
+                output: 12
+            },
+            Delta::Ended(Stop::Calls)
+        ]
+    );
+}
+
+#[test]
+fn every_maker_is_called_at_its_own_address_over_tls() {
+    let homes: Vec<_> = MAKERS
+        .iter()
+        .map(|wire| (wire.maker(), wire.home()))
+        .collect();
+    assert_eq!(
+        homes,
+        [
+            ("anthropic", Some("https://api.anthropic.com")),
+            ("openai", Some("https://api.openai.com")),
+            ("gemini", Some("https://generativelanguage.googleapis.com")),
+        ]
+    );
+    assert_eq!(
+        Compat.home(),
+        None,
+        "a server on this computer is where the user says"
+    );
+}

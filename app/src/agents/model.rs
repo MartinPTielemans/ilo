@@ -8,8 +8,11 @@
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::Value;
 
+pub mod anthropic;
 pub mod compat;
+pub mod gemini;
 pub mod http;
+pub mod openai;
 mod sse;
 #[cfg(test)]
 mod tests;
@@ -252,6 +255,10 @@ pub trait Model {
     /// Stops turn `turn`, if it's still going: nothing more of it comes.
     fn cancel(&self, turn: u32);
 }
+
+/// The makers ilo has an adapter for, in Settings' order. A server on this computer is `compat`,
+/// at the address the user gives.
+pub static MAKERS: &[&dyn Wire] = &[&anthropic::Anthropic, &openai::OpenAi, &gemini::Gemini];
 
 /// The levels of a table by model id prefix, the longest that matches, for a maker whose listing
 /// doesn't say.
