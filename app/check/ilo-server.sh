@@ -104,6 +104,10 @@ sign_in() {
     echo "note: ilo $sign_in_release predates the sign-in page's focus line, so its fields are typed into once they load"
     ;;
   esac
+  # The core logs the page's first paint from 35472b39f, after every release so far, so only the
+  # run's own build is waited on for it; a release's keys go in on the focus, as they did.
+  paint_logged=
+  [ -n "${sign_in_release:-}" ] || paint_logged=1
   sign_in_type /authorize "$email"
   [ -z "${2:-}" ] || [ -z "$sign_in_window" ] || import -window "$sign_in_window" "$2" || true
   sign_in_keys key return
@@ -125,22 +129,30 @@ sign_in() {
   sign_in_keys key tab
   sign_in_keys key return
 }
-# Types $2 into the sign-in page at $1 once the page has put its focus in its field, as the core
-# logs (core/sync.cc): keys typed before land nowhere, and Return then sends an empty form, which
-# the server refuses (#2554). The wait reads what was logged since the command before, as the
-# focus can come before the page's load is logged. On the driver's keys, the focus is then looked
-# for between that command and the typing, so typing on the load alone, the old order, fails here
-# whenever the focus came later.
+# Types $2 into the sign-in page at $1 once the page has put its focus in its field and painted, as
+# the core logs (core/sync.cc): keys typed before the focus land nowhere, and Return then sends an
+# empty form, which the server refuses (#2554), and until the first paint Blink holds a same-site
+# page's paint and drops its keys even in a focused field, so the address never reached the server
+# (#4019, #4222). The waits read what was logged since the command before, as either can come
+# before the page's load is logged. On the driver's keys, both are then looked for between that
+# command and the typing, so typing on the load or the focus alone, the old orders, fails here
+# whenever the line came later.
 sign_in_type() {
-  local before=$step typed
-  [ -z "$focus_logged" ] ||
+  local before=$step typed line
+  if [ -n "$focus_logged" ]; then
     expect "browser: sync sign-in focused a field on $1\$" "the sign-in page at $1 didn't put its focus in its field"
+  fi
+  if [ -n "$paint_logged" ]; then
+    expect "browser: sync sign-in painted $1\$" "the sign-in page at $1 didn't paint"
+  fi
   sign_in_keys type "$2"
   [ -n "$focus_logged" ] && [ "$step" != "$before" ] || return 0
   typed=$step
-  sed -n "/^browser: drive $before: /,/^browser: drive $typed: /p" "$log" |
-    grep -q "browser: sync sign-in focused a field on $1\$" ||
-    fail "the keys for the sign-in page at $1 went in before the page put its focus in its field"
+  for line in "focused a field on" ${paint_logged:+painted}; do
+    sed -n "/^browser: drive $before: /,/^browser: drive $typed: /p" "$log" |
+      grep -q "browser: sync sign-in $line $1\$" ||
+      fail "the keys for the sign-in page at $1 went in before the core logged \"sync sign-in $line $1\""
+  done
 }
 # Once the sign-in window has closed, Settings has the keyboard again: on Linux as the window
 # manager would give it, from xdotool or sway, as Settings' window is titled by its tab; the Mac's
