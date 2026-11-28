@@ -8,6 +8,58 @@ run ends; what holds it, and when, is the core's. Only the auto-reload's own nav
 held: a user's reload or an agent's navigation to the same address goes on at once, and
 replaces it as Chromium replaces a pending one.
 
+--- a/chrome/browser/net/net_error_tab_helper.cc
++++ b/chrome/browser/net/net_error_tab_helper.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/net/net_error_tab_helper.h"
+ 
+ #include "base/functional/bind.h"
++#include "browser_core/hooks.h"  // nogncheck
+ #include "base/logging.h"
+ #include "chrome/browser/net/dns_probe_service.h"
+ #include "chrome/browser/net/dns_probe_service_factory.h"
+@@ -50,6 +51,11 @@
+ using error_page::DnsProbeStatusToString;
+ using ui::PageTransition;
+ 
++// browser_core: the core holds a page's auto-reload while its game runs
++// (//browser_core/hooks.h).
++void (*g_browser_core_offline_game)(content::WebContents* contents,
++                                    bool running) = nullptr;
++
+ namespace chrome_browser_net {
+ 
+ namespace {
+@@ -380,6 +386,19 @@
+   easter_egg_high_score_.SetValue(static_cast<int>(high_score));
+ }
+ 
++void NetErrorTabHelper::SetGameRunning(bool running) {
++  // Only the tab's own error page holds its reload. One on its way out ends
++  // its run as it goes, which is no bad message.
++  content::RenderFrameHost& target_frame =
++      network_easter_egg_receivers_.CurrentTargetFrame();
++  if (!target_frame.IsErrorDocument() || !target_frame.IsInPrimaryMainFrame()) {
++    return;
++  }
++  if (g_browser_core_offline_game) {
++    g_browser_core_offline_game(web_contents(), running);
++  }
++}
++
+ void NetErrorTabHelper::ResetHighScore() {
+   content::RenderFrameHost& target_frame =
+       network_easter_egg_receivers_.CurrentTargetFrame();
+--- a/chrome/browser/net/net_error_tab_helper.h
++++ b/chrome/browser/net/net_error_tab_helper.h
+@@ -144,6 +144,7 @@
+   void GetHighScore(GetHighScoreCallback callback) override;
+   void UpdateHighScore(uint32_t high_score) override;
+   void ResetHighScore() override;
++  void SetGameRunning(bool running) override;
+ 
+   // Shows the diagnostics dialog after its been sanitized, virtual for
+   // testing.
 --- a/chrome/common/network_easter_egg.mojom
 +++ b/chrome/common/network_easter_egg.mojom
 @@ -14,4 +14,8 @@
@@ -19,6 +71,52 @@ replaces it as Chromium replaces a pending one.
 +  // the page's auto-reload until it ends (//browser_core/hooks.h).
 +  SetGameRunning(bool running);
  };
+--- a/chrome/renderer/net/net_error_helper.cc
++++ b/chrome/renderer/net/net_error_helper.cc
+@@ -301,6 +301,10 @@
+   GetRemoteNetworkEasterEgg()->ResetHighScore();
+ }
+ 
++void NetErrorHelper::SetGameRunning(bool running) {
++  GetRemoteNetworkEasterEgg()->SetGameRunning(running);
++}
++
+ void NetErrorHelper::ReloadFrame() {
+   render_frame()->GetWebFrame()->StartReload(blink::WebFrameLoadType::kReload);
+ }
+--- a/chrome/renderer/net/net_error_helper.h
++++ b/chrome/renderer/net/net_error_helper.h
+@@ -56,6 +56,7 @@
+   void CancelSavePage() override;
+   void UpdateEasterEggHighScore(int high_score) override;
+   void ResetEasterEggHighScore() override;
++  void SetGameRunning(bool running) override;
+ 
+   // RenderFrameObserver implementation.
+   void DidCommitProvisionalLoad(ui::PageTransition transition) override;
+--- a/chrome/renderer/net/net_error_page_controller.cc
++++ b/chrome/renderer/net/net_error_page_controller.cc
+@@ -72,6 +72,12 @@
+   return true;
+ }
+ 
++bool NetErrorPageController::SetGameRunning(bool running) {
++  if (delegate_)
++    delegate_->SetGameRunning(running);
++  return true;
++}
++
+ bool NetErrorPageController::DiagnoseErrorsButtonClick() {
+   return ButtonClick(NetErrorHelperCore::DIAGNOSE_ERROR);
+ }
+@@ -122,6 +128,7 @@
+           "updateEasterEggHighScore")
+       .SetMethod<&NetErrorPageController::ResetEasterEggHighScore>(
+           "resetEasterEggHighScore")
++      .SetMethod<&NetErrorPageController::SetGameRunning>("setGameRunning")
+       .SetMethod<&NetErrorPageController::SavePageForLater>("savePageForLater")
+       .SetMethod<&NetErrorPageController::CancelSavePage>("cancelSavePage");
+ }
 --- a/chrome/renderer/net/net_error_page_controller.h
 +++ b/chrome/renderer/net/net_error_page_controller.h
 @@ -51,6 +51,10 @@
@@ -42,104 +140,176 @@ replaces it as Chromium replaces a pending one.
    // Execute a "Diagnose Errors" button click.
    bool DiagnoseErrorsButtonClick();
  
---- a/chrome/renderer/net/net_error_page_controller.cc
-+++ b/chrome/renderer/net/net_error_page_controller.cc
-@@ -72,6 +72,12 @@
-   return true;
- }
+--- a/components/error_page/content/browser/net_error_auto_reloader.cc
++++ b/components/error_page/content/browser/net_error_auto_reloader.cc
+@@ -7,7 +7,9 @@
+ #include <algorithm>
+ #include <array>
+ #include <map>
++#include <utility>
  
-+bool NetErrorPageController::SetGameRunning(bool running) {
-+  if (delegate_)
-+    delegate_->SetGameRunning(running);
-+  return true;
-+}
-+
- bool NetErrorPageController::DiagnoseErrorsButtonClick() {
-   return ButtonClick(NetErrorHelperCore::DIAGNOSE_ERROR);
- }
-@@ -121,6 +127,7 @@
-                  &NetErrorPageController::UpdateEasterEggHighScore)
-       .SetMethod("resetEasterEggHighScore",
-                  &NetErrorPageController::ResetEasterEggHighScore)
-+      .SetMethod("setGameRunning", &NetErrorPageController::SetGameRunning)
-       .SetMethod("savePageForLater", &NetErrorPageController::SavePageForLater)
-       .SetMethod("cancelSavePage", &NetErrorPageController::CancelSavePage);
- }
---- a/chrome/renderer/net/net_error_helper.h
-+++ b/chrome/renderer/net/net_error_helper.h
-@@ -56,6 +56,7 @@
-   void CancelSavePage() override;
-   void UpdateEasterEggHighScore(int high_score) override;
-   void ResetEasterEggHighScore() override;
-+  void SetGameRunning(bool running) override;
- 
-   // RenderFrameObserver implementation.
-   void DidCommitProvisionalLoad(ui::PageTransition transition) override;
---- a/chrome/renderer/net/net_error_helper.cc
-+++ b/chrome/renderer/net/net_error_helper.cc
-@@ -299,6 +299,10 @@
- 
- void NetErrorHelper::ResetEasterEggHighScore() {
-   GetRemoteNetworkEasterEgg()->ResetHighScore();
-+}
-+
-+void NetErrorHelper::SetGameRunning(bool running) {
-+  GetRemoteNetworkEasterEgg()->SetGameRunning(running);
- }
- 
- void NetErrorHelper::ReloadFrame() {
---- a/chrome/browser/net/net_error_tab_helper.h
-+++ b/chrome/browser/net/net_error_tab_helper.h
-@@ -139,6 +139,7 @@
-   void GetHighScore(GetHighScoreCallback callback) override;
-   void UpdateHighScore(uint32_t high_score) override;
-   void ResetHighScore() override;
-+  void SetGameRunning(bool running) override;
- 
-   // Shows the diagnostics dialog after its been sanitized, virtual for
-   // testing.
---- a/chrome/browser/net/net_error_tab_helper.cc
-+++ b/chrome/browser/net/net_error_tab_helper.cc
-@@ -5,6 +5,7 @@
- #include "chrome/browser/net/net_error_tab_helper.h"
- 
- #include "base/functional/bind.h"
-+#include "browser_core/hooks.h"  // nogncheck
++#include "base/auto_reset.h"
+ #include "base/functional/callback.h"
  #include "base/logging.h"
- #include "chrome/browser/net/dns_probe_service.h"
- #include "chrome/browser/net/dns_probe_service_factory.h"
-@@ -50,6 +51,11 @@
- using error_page::DnsProbeStatusToString;
- using ui::PageTransition;
+ #include "content/public/browser/navigation_handle.h"
+@@ -91,11 +93,17 @@
+  public:
+   using ShouldSuppressCallback =
+       base::OnceCallback<bool(content::NavigationHandle*)>;
++  // browser_core: NetErrorAutoReloader::HoldReload().
++  using HoldCallback =
++      base::RepeatingCallback<bool(content::NavigationHandle*,
++                                   base::OnceClosure)>;
  
-+// browser_core: the core holds a page's auto-reload while its game runs
-+// (//browser_core/hooks.h).
-+void (*g_browser_core_offline_game)(content::WebContents* contents,
-+                                    bool running) = nullptr;
+   IgnoreDuplicateErrorThrottle(content::NavigationThrottleRegistry& registry,
+-                               ShouldSuppressCallback should_suppress)
++                               ShouldSuppressCallback should_suppress,
++                               HoldCallback hold)
+       : content::NavigationThrottle(registry),
+-        should_suppress_(std::move(should_suppress)) {
++        should_suppress_(std::move(should_suppress)),
++        hold_(std::move(hold)) {
+     DCHECK(should_suppress_);
+   }
+   IgnoreDuplicateErrorThrottle(const IgnoreDuplicateErrorThrottle&) = delete;
+@@ -109,7 +117,12 @@
+     if (std::move(should_suppress_).Run(navigation_handle())) {
+       return content::NavigationThrottle::ThrottleAction::CANCEL;
+     }
+-    return content::NavigationThrottle::ThrottleAction::PROCEED;
++    return Hold();
++  }
 +
- namespace chrome_browser_net {
++  content::NavigationThrottle::ThrottleCheckResult WillProcessResponse()
++      override {
++    return Hold();
+   }
  
- namespace {
-@@ -363,6 +369,19 @@
-   easter_egg_high_score_.SetValue(static_cast<int>(high_score));
+   const char* GetNameForLogging() override {
+@@ -117,7 +130,20 @@
+   }
+ 
+  private:
++  // browser_core: a reload that started before a hold commits what it brings
++  // back only once the hold ends, as one due during it starts only then.
++  content::NavigationThrottle::ThrottleCheckResult Hold() {
++    if (hold_.Run(navigation_handle(),
++                  base::BindOnce(&IgnoreDuplicateErrorThrottle::Resume,
++                                 weak_ptr_factory_.GetWeakPtr()))) {
++      return content::NavigationThrottle::ThrottleAction::DEFER;
++    }
++    return content::NavigationThrottle::ThrottleAction::PROCEED;
++  }
++
+   ShouldSuppressCallback should_suppress_;
++  HoldCallback hold_;
++  base::WeakPtrFactory<IgnoreDuplicateErrorThrottle> weak_ptr_factory_{this};
+ };
+ 
+ }  // namespace
+@@ -175,6 +201,10 @@
+   // Suppress automatic reload as long as any navigations are pending.
+   PauseAutoReloadTimerIfRunning();
+   pending_navigations_.emplace(handle, IsSuppressedErrorPage(false));
++  // browser_core: ReloadMainFrame() is starting this one.
++  if (starting_auto_reload_) {
++    auto_reload_navigation_ = handle->GetNavigationId();
++  }
  }
  
-+void NetErrorTabHelper::SetGameRunning(bool running) {
-+  // Only the tab's own error page holds its reload. One on its way out ends
-+  // its run as it goes, which is no bad message.
-+  content::RenderFrameHost& target_frame =
-+      network_easter_egg_receivers_.CurrentTargetFrame();
-+  if (!target_frame.IsErrorDocument() || !target_frame.IsInPrimaryMainFrame()) {
+ void NetErrorAutoReloader::DidFinishNavigation(
+@@ -198,6 +228,12 @@
+         pending_navigation->second == IsSuppressedErrorPage(true);
+     pending_navigations_.erase(pending_navigation);
+   }
++  // browser_core: the auto-reload's navigation is over, committed or replaced
++  // by another, as Chromium replaces a pending one; nothing of it is held.
++  if (auto_reload_navigation_ == handle->GetNavigationId()) {
++    auto_reload_navigation_.reset();
++    resume_held_reload_.Reset();
++  }
+ 
+   if (!handle->HasCommitted()) {
+     // This navigation was cancelled and not committed. If there are still other
+@@ -218,6 +254,9 @@
+     return;
+   }
+ 
++  held_ = false;
++  reload_held_ = false;
++
+   if (!ShouldAutoReload(handle)) {
+     // We've committed something that doesn't support auto-reload. Reset
+     // all auto-reload state so nothing interesting happens until another
+@@ -289,6 +328,21 @@
+   }
+ }
+ 
++void NetErrorAutoReloader::SetHeld(bool held) {
++  held_ = held;
++  if (held) {
++    reload_held_ |= next_reload_timer_.has_value();
++    PauseAutoReloadTimerIfRunning();
++  } else if (resume_held_reload_) {
++    reload_held_ = false;
++    std::move(resume_held_reload_).Run();
++  } else if (std::exchange(reload_held_, false) &&
++             current_reloadable_error_page_info_ &&
++             pending_navigations_.empty()) {
++    ReloadMainFrame();
++  }
++}
++
+ void NetErrorAutoReloader::SetInitialConnectionType(
+     net::NetworkChangeNotifier::ConnectionType type) {
+   // NOTE: Tests may call `DisableConnectionChangeObservationForTesting` to null
+@@ -324,6 +378,10 @@
+   if (!is_online_ || !IsWebContentsVisible()) {
+     return;
+   }
++  if (held_) {
++    reload_held_ = true;
 +    return;
 +  }
-+  if (g_browser_core_offline_game) {
-+    g_browser_core_offline_game(web_contents(), running);
-+  }
+ 
+   // Note that Unretained is safe here because base::OneShotTimer will never
+   // run its callback once destructed.
+@@ -342,6 +400,9 @@
+ 
+   ++num_reloads_for_current_error_;
+   is_auto_reload_in_progress_ = true;
++  // browser_core: an error page has no beforeunload handler, so the reload's
++  // DidStartNavigation() runs within Reload().
++  base::AutoReset<bool> starting(&starting_auto_reload_, true);
+   web_contents()->GetPrimaryMainFrame()->Reload();
+ }
+ 
+@@ -356,8 +417,23 @@
+   }
+ 
+   registry.AddThrottle(std::make_unique<IgnoreDuplicateErrorThrottle>(
+-      registry, base::BindOnce(&NetErrorAutoReloader::ShouldSuppressErrorPage,
+-                               base::Unretained(this))));
++      registry,
++      base::BindOnce(&NetErrorAutoReloader::ShouldSuppressErrorPage,
++                     base::Unretained(this)),
++      base::BindRepeating(&NetErrorAutoReloader::HoldReload,
++                          base::Unretained(this))));
 +}
 +
- void NetErrorTabHelper::ResetHighScore() {
-   content::RenderFrameHost& target_frame =
-       network_easter_egg_receivers_.CurrentTargetFrame();
++bool NetErrorAutoReloader::HoldReload(content::NavigationHandle* handle,
++                                      base::OnceClosure resume) {
++  // browser_core: the throttle is on any navigation to the error page's URL
++  // while an auto-reload is under way, a user's own reload or an agent's too;
++  // only the auto-reload's is held.
++  if (!held_ || auto_reload_navigation_ != handle->GetNavigationId()) {
++    return false;
++  }
++  resume_held_reload_ = std::move(resume);
++  return true;
+ }
+ 
+ bool NetErrorAutoReloader::ShouldSuppressErrorPage(
 --- a/components/error_page/content/browser/net_error_auto_reloader.h
 +++ b/components/error_page/content/browser/net_error_auto_reloader.h
 @@ -11,6 +11,7 @@
@@ -189,173 +359,3 @@ replaces it as Chromium replaces a pending one.
    base::WeakPtrFactory<NetErrorAutoReloader> weak_ptr_factory_{this};
  
    WEB_CONTENTS_USER_DATA_KEY_DECL();
---- a/components/error_page/content/browser/net_error_auto_reloader.cc
-+++ b/components/error_page/content/browser/net_error_auto_reloader.cc
-@@ -7,7 +7,9 @@
- #include <algorithm>
- #include <array>
- #include <map>
-+#include <utility>
- 
-+#include "base/auto_reset.h"
- #include "base/functional/callback.h"
- #include "base/logging.h"
- #include "content/public/browser/navigation_handle.h"
-@@ -84,11 +86,17 @@
-  public:
-   using ShouldSuppressCallback =
-       base::OnceCallback<bool(content::NavigationHandle*)>;
-+  // browser_core: NetErrorAutoReloader::HoldReload().
-+  using HoldCallback =
-+      base::RepeatingCallback<bool(content::NavigationHandle*,
-+                                   base::OnceClosure)>;
- 
-   IgnoreDuplicateErrorThrottle(content::NavigationThrottleRegistry& registry,
--                               ShouldSuppressCallback should_suppress)
-+                               ShouldSuppressCallback should_suppress,
-+                               HoldCallback hold)
-       : content::NavigationThrottle(registry),
--        should_suppress_(std::move(should_suppress)) {
-+        should_suppress_(std::move(should_suppress)),
-+        hold_(std::move(hold)) {
-     DCHECK(should_suppress_);
-   }
-   IgnoreDuplicateErrorThrottle(const IgnoreDuplicateErrorThrottle&) = delete;
-@@ -102,7 +110,12 @@
-     if (std::move(should_suppress_).Run(navigation_handle())) {
-       return content::NavigationThrottle::ThrottleAction::CANCEL;
-     }
--    return content::NavigationThrottle::ThrottleAction::PROCEED;
-+    return Hold();
-+  }
-+
-+  content::NavigationThrottle::ThrottleCheckResult WillProcessResponse()
-+      override {
-+    return Hold();
-   }
- 
-   const char* GetNameForLogging() override {
-@@ -110,7 +123,20 @@
-   }
- 
-  private:
-+  // browser_core: a reload that started before a hold commits what it brings
-+  // back only once the hold ends, as one due during it starts only then.
-+  content::NavigationThrottle::ThrottleCheckResult Hold() {
-+    if (hold_.Run(navigation_handle(),
-+                  base::BindOnce(&IgnoreDuplicateErrorThrottle::Resume,
-+                                 weak_ptr_factory_.GetWeakPtr()))) {
-+      return content::NavigationThrottle::ThrottleAction::DEFER;
-+    }
-+    return content::NavigationThrottle::ThrottleAction::PROCEED;
-+  }
-+
-   ShouldSuppressCallback should_suppress_;
-+  HoldCallback hold_;
-+  base::WeakPtrFactory<IgnoreDuplicateErrorThrottle> weak_ptr_factory_{this};
- };
- 
- }  // namespace
-@@ -168,6 +194,10 @@
-   // Suppress automatic reload as long as any navigations are pending.
-   PauseAutoReloadTimerIfRunning();
-   pending_navigations_.emplace(handle, IsSuppressedErrorPage(false));
-+  // browser_core: ReloadMainFrame() is starting this one.
-+  if (starting_auto_reload_) {
-+    auto_reload_navigation_ = handle->GetNavigationId();
-+  }
- }
- 
- void NetErrorAutoReloader::DidFinishNavigation(
-@@ -191,6 +221,12 @@
-         pending_navigation->second == IsSuppressedErrorPage(true);
-     pending_navigations_.erase(pending_navigation);
-   }
-+  // browser_core: the auto-reload's navigation is over, committed or replaced
-+  // by another, as Chromium replaces a pending one; nothing of it is held.
-+  if (auto_reload_navigation_ == handle->GetNavigationId()) {
-+    auto_reload_navigation_.reset();
-+    resume_held_reload_.Reset();
-+  }
- 
-   if (!handle->HasCommitted()) {
-     // This navigation was cancelled and not committed. If there are still other
-@@ -211,6 +247,9 @@
-     return;
-   }
- 
-+  held_ = false;
-+  reload_held_ = false;
-+
-   if (!ShouldAutoReload(handle)) {
-     // We've committed something that doesn't support auto-reload. Reset
-     // all auto-reload state so nothing interesting happens until another
-@@ -282,6 +321,21 @@
-   }
- }
- 
-+void NetErrorAutoReloader::SetHeld(bool held) {
-+  held_ = held;
-+  if (held) {
-+    reload_held_ |= next_reload_timer_.has_value();
-+    PauseAutoReloadTimerIfRunning();
-+  } else if (resume_held_reload_) {
-+    reload_held_ = false;
-+    std::move(resume_held_reload_).Run();
-+  } else if (std::exchange(reload_held_, false) &&
-+             current_reloadable_error_page_info_ &&
-+             pending_navigations_.empty()) {
-+    ReloadMainFrame();
-+  }
-+}
-+
- void NetErrorAutoReloader::SetInitialConnectionType(
-     net::NetworkChangeNotifier::ConnectionType type) {
-   // NOTE: Tests may call `DisableConnectionChangeObservationForTesting` to null
-@@ -317,6 +371,10 @@
-   if (!is_online_ || !IsWebContentsVisible()) {
-     return;
-   }
-+  if (held_) {
-+    reload_held_ = true;
-+    return;
-+  }
- 
-   // Note that Unretained is safe here because base::OneShotTimer will never
-   // run its callback once destructed.
-@@ -335,6 +393,9 @@
- 
-   ++num_reloads_for_current_error_;
-   is_auto_reload_in_progress_ = true;
-+  // browser_core: an error page has no beforeunload handler, so the reload's
-+  // DidStartNavigation() runs within Reload().
-+  base::AutoReset<bool> starting(&starting_auto_reload_, true);
-   web_contents()->GetPrimaryMainFrame()->Reload();
- }
- 
-@@ -349,8 +410,23 @@
-   }
- 
-   registry.AddThrottle(std::make_unique<IgnoreDuplicateErrorThrottle>(
--      registry, base::BindOnce(&NetErrorAutoReloader::ShouldSuppressErrorPage,
--                               base::Unretained(this))));
-+      registry,
-+      base::BindOnce(&NetErrorAutoReloader::ShouldSuppressErrorPage,
-+                     base::Unretained(this)),
-+      base::BindRepeating(&NetErrorAutoReloader::HoldReload,
-+                          base::Unretained(this))));
-+}
-+
-+bool NetErrorAutoReloader::HoldReload(content::NavigationHandle* handle,
-+                                      base::OnceClosure resume) {
-+  // browser_core: the throttle is on any navigation to the error page's URL
-+  // while an auto-reload is under way, a user's own reload or an agent's too;
-+  // only the auto-reload's is held.
-+  if (!held_ || auto_reload_navigation_ != handle->GetNavigationId()) {
-+    return false;
-+  }
-+  resume_held_reload_ = std::move(resume);
-+  return true;
- }
- 
- bool NetErrorAutoReloader::ShouldSuppressErrorPage(

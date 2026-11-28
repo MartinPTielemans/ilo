@@ -6,9 +6,9 @@
 #include <set>
 
 #include "base/memory/weak_ptr.h"
-#include "components/performance_manager/public/execution_context_priority/execution_context_priority.h"
-#include "components/performance_manager/public/execution_context_priority/priority_voting_system.h"
 #include "components/performance_manager/public/graph/page_node.h"
+#include "components/performance_manager/public/priority/priority.h"
+#include "components/performance_manager/public/priority/priority_voting_system.h"
 
 namespace browser_core {
 
@@ -29,7 +29,7 @@ namespace browser_core {
 // they hand it back, and its loads count as their other tabs' do, as does one moved out of the
 // agent's Space. Tab says which loads count.
 // Apart from content so browser_core_unittests tests it on a graph alone.
-class AgentJobVoter : public performance_manager::execution_context_priority::PriorityVoter,
+class AgentJobVoter : public performance_manager::priority::PriorityVoter,
                       public performance_manager::PageNodeObserver {
  public:
   static const char kReason[];
@@ -53,9 +53,8 @@ class AgentJobVoter : public performance_manager::execution_context_priority::Pr
   void UserLoadEnded(const performance_manager::PageNode* page);
 
   // PriorityVoter:
-  void InitializeOnGraph(
-      performance_manager::Graph* graph,
-      performance_manager::execution_context_priority::VotingChannel voting_channel) override;
+  void InitializeOnGraph(performance_manager::Graph* graph,
+                         performance_manager::priority::VotingChannel voting_channel) override;
   void TearDownOnGraph(performance_manager::Graph* graph) override;
 
   // PageNodeObserver: a closing tab's page takes its vote with it, and its load ends.
@@ -66,7 +65,7 @@ class AgentJobVoter : public performance_manager::execution_context_priority::Pr
   void GiveVote(const performance_manager::PageNode* page);
   void TakeVote(const performance_manager::PageNode* page);
 
-  performance_manager::execution_context_priority::VotingChannel voting_channel_;
+  performance_manager::priority::VotingChannel voting_channel_;
   std::set<const performance_manager::PageNode*> working_;
   std::set<const performance_manager::PageNode*> user_loads_;
 };

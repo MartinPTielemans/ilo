@@ -34,7 +34,7 @@ Work that doesn't change the core needs no build: `./fetch.sh` downloads the pre
 1. Download Chromium's source tarball at the pinned version, checked against its published hashes.
 2. Apply ungoogled-chromium's pruning, its patches and ungoogled-chromium-macos's (with ilo's rebased copies while it lags), and domain substitution.
 3. Download the toolchain ungoogled-chromium-macos names (LLVM, Rust, Node), in place of Google's.
-4. Download Chrome's optimization profile for Apple silicon, which the source tarball lacks, and build `gn` and `bindgen`, each only if it's missing.
+4. Download Chrome's optimization profile for Apple silicon, which the source tarball lacks, and build `gn`, `bindgen` and Crubit's `cc_bindings_from_rs`, each only if it's missing.
 5. Link the repository's `core/` into the tree as `//browser_core`, so the next build has every edit to it. Apply `series` in order, with no fuzz. A patch already in the tree is skipped, and one that neither applies nor is in the tree stops the run as drift.
 6. Write `out/Release/args.gn` and run `gn gen`.
 
@@ -42,7 +42,7 @@ Steps 1–3 change the tree and run once; a run that stopped in one of them mean
 
 `setup.sh` names what it needs and isn't installed: Homebrew's `ninja`, `go`, `esbuild`, `typescript`, `coreutils` and `uv`, and Apple's Metal toolchain. It builds with Python 3.13, as ungoogled-chromium-macos does, through `uv`.
 
-It also needs the macOS SDK of Chromium's official builds with universal Xcode (`mac_sdk_official_universal_version` in `build/config/mac/mac_sdk.gni`: 26.5 for Chromium 156 and 157), from Xcode or the Command Line Tools, even when a newer Xcode is installed. Chromium 157's Apple silicon builds take the macOS 27 SDK, whose stubs the pinned LLVM's linker can't read.
+It also needs the macOS SDK of Chromium's official builds with universal Xcode (`mac_sdk_official_universal_version` in `build/config/mac/mac_sdk.gni`: 26.5 for Chromium 156 to 158), from Xcode or the Command Line Tools, even when a newer Xcode is installed. Chromium 157's and 158's Apple silicon builds take the macOS 27 SDK, whose stubs the pinned LLVM's linker can't read.
 
 ## The Mac's prebuilt engine
 
@@ -78,7 +78,7 @@ The Windows engine is cross-compiled on Linux, as Chromium's `docs/win_cross.md`
 
 `windows/cross/prepare.sh <work>` takes ungoogled-chromium-windows's patches and Windows-only sources at the tag `pins.ini` names, on Chromium's source tarball, with ungoogled-chromium-portablelinux's Linux toolchain (the same ungoogled-chromium commit, which the script checks). Of ungoogled-chromium-windows's patches it leaves out the ones that fit its build to a Windows host or its own LLVM, and adds portablelinux's for the Linux host's Python and Node tools. A new tag comes in through `<work>/next` as on Linux. Three exceptions to ungoogled-chromium's pruning stay in the tree: the outputs of Microsoft's `midl` and `mc` that Chromium checks in under `win_build_output/` and `chrome/app/etw_events/`, and windows-rs's import libraries. Those tools don't run on Linux, so a cross build copies the checked-in outputs, as Google's own does. `windows/cross/build.sh` builds `chrome`, and `windows/cross/package.sh` packs what Chromium's `FILES.cfg` lists, with `chrome.dll.lib`, which the app links, into `Chromium-windows-x64.zip`.
 
-Microsoft's compiler, headers and libraries come from a zip of a Visual Studio and Windows SDK install, which Microsoft's licence lets no one redistribute. Never upload it, as a release, an artifact or anywhere else. It sits in `$ILO_ENGINE_ROOT/windows-toolchain`, the only `.zip` there, and unpacks into `vs_files` beside it, which must be a case-insensitive `ciopfs` mount, since the SDK's headers include each other in any case. The runner can't mount one itself, so a service of the owner's keeps it mounted. Its Visual Studio and SDK are the ones `build/vs_toolchain.py` names (Visual Studio 2026 and SDK 10.0.28000.0 for Chromium 156 and 157), and `prepare.sh` stops when a new Chromium version names others. To make the zip, on a Windows machine with that Visual Studio (its C++ workload with ATL and MFC) and that SDK, with its debugging tools:
+Microsoft's compiler, headers and libraries come from a zip of a Visual Studio and Windows SDK install, which Microsoft's licence lets no one redistribute. Never upload it, as a release, an artifact or anywhere else. It sits in `$ILO_ENGINE_ROOT/windows-toolchain`, the only `.zip` there, and unpacks into `vs_files` beside it, which must be a case-insensitive `ciopfs` mount, since the SDK's headers include each other in any case. The runner can't mount one itself, so a service of the owner's keeps it mounted. Its Visual Studio and SDK are the ones `build/vs_toolchain.py` names (Visual Studio 2026 and SDK 10.0.28000.0 for Chromium 156 to 158), and `prepare.sh` stops when a new Chromium version names others. To make the zip, on a Windows machine with that Visual Studio (its C++ workload with ATL and MFC) and that SDK, with its debugging tools:
 
 ```
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git

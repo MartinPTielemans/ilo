@@ -22,7 +22,7 @@ its DCHECK, so the core's goes in Chrome's place rather than after it.
 +    content::WebContents* web_contents) = nullptr;
 +
  ChromeBrowserMainExtraPartsViews::ChromeBrowserMainExtraPartsViews() {
-   DCHECK(!g_main_parts_views);
+   CHECK(!g_main_parts_views, base::NotFatalUntil::M162);
    g_main_parts_views = this;
 @@ -126,7 +132,9 @@
      ui_devtools::ServerHolder::GetInstance()->CreateUiDevTools(output_dir);
@@ -32,5 +32,5 @@ its DCHECK, so the core's goes in Chrome's place rather than after it.
    media_router::MediaRouterDialogController::SetGetOrCreate(
 +      g_browser_core_cast_dialog ? base::BindRepeating(g_browser_core_cast_dialog) :
        base::BindRepeating([](content::WebContents* web_contents) {
-         DCHECK(web_contents);
+         CHECK(web_contents, base::NotFatalUntil::M162);
          media_router::MediaRouterDialogController* controller = nullptr;

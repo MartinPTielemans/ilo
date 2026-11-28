@@ -2,15 +2,15 @@ Checks for free disk space once a minute instead of every 5 s. Each check wakes 
 process's main thread and a pool thread, a quarter of an idle browser's wakeups, and a disk
 doesn't fill in seconds while the browser idles.
 
---- a/components/memory_pressure/system_memory_pressure_evaluator_mac.cc
-+++ b/components/memory_pressure/system_memory_pressure_evaluator_mac.cc
-@@ -37,7 +37,8 @@
+--- a/components/memory_pressure/disk_space_memory_pressure_evaluator_mac.cc
++++ b/components/memory_pressure/disk_space_memory_pressure_evaluator_mac.cc
+@@ -22,7 +22,8 @@
  constexpr base::ByteSize kCriticalDiskSpaceThreshold = base::MiB(250);
  
  // How often to check for free disk space.
 -constexpr base::TimeDelta kDiskSpaceCheckPeriod = base::Seconds(5);
 +// browser_core: once a minute, as every check wakes an idle browser twice.
 +constexpr base::TimeDelta kDiskSpaceCheckPeriod = base::Minutes(1);
+ 
  }  // namespace
  
- base::MemoryPressureLevel

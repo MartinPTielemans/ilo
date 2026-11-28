@@ -114,7 +114,7 @@ fi
 ln -f "$deps/downloads/$pgo" "$src/chrome/build/pgo_profiles/$pgo"
 
 # The SDK Chromium's official builds use with universal Xcode, as on Intel hosts: 26.5 for
-# Chromium 156 and 157, whose Apple silicon builds take the macOS 27 SDK. The pinned LLVM's linker
+# Chromium 156 to 158, whose Apple silicon builds take the macOS 27 SDK. The pinned LLVM's linker
 # can't read that SDK's stubs, which list arm64e.x1 targets it doesn't know.
 sdk_version=$(sed -n 's/^ *mac_sdk_official_universal_version = "\(.*\)"$/\1/p' "$src/build/config/mac/mac_sdk.gni")
 sdk=
@@ -130,15 +130,25 @@ export SDKROOT=$sdk
 mkdir -p "$out" "$(dirname "$gn")"
 cd "$src"
 [ -x "$gn" ] || ./tools/gn/bootstrap/bootstrap.py -o "$gn" --skip-generate-buildfiles
-# bindgen is built against the toolchain, so the live tree's serves while the toolchain is the same.
+# bindgen and Crubit's cc_bindings_from_rs are built against the toolchain, so the live tree's
+# serve while the toolchain is the same.
+crubit=third_party/rust-toolchain/crubit/bin/cc_bindings_from_rs
 if [ -n "$update" ] && [ -x "$live/third_party/rust-toolchain/bin/bindgen" ] &&
   [ -e "$live/third_party/rust-toolchain/lib/libclang.dylib" ] &&
   cmp -s "$live_ucm/downloads-arm64.ini" "$ucm/downloads-arm64.ini" &&
   cmp -s "$live_ucm/downloads-arm64-rustlib.ini" "$ucm/downloads-arm64-rustlib.ini"; then
   cp -p "$live/third_party/rust-toolchain/bin/bindgen" third_party/rust-toolchain/bin/
   cp -p "$live/third_party/rust-toolchain/lib/libclang.dylib" third_party/rust-toolchain/lib/
+  if [ -x "$live/$crubit" ]; then
+    mkdir -p "$(dirname "$crubit")"
+    cp -p "$live/$crubit" "$crubit"
+  fi
 fi
 [ -x third_party/rust-toolchain/bin/bindgen ] || ./tools/rust/build_bindgen.py --skip-test
+# From Chromium 158 every build makes C++ bindings of Rust's std with Crubit, which the Rust
+# nightly doesn't ship: ungoogled-chromium-macos builds it from the sources its toolchain stage
+# unpacks, where its flags' rust_crubit_root points.
+[ -x "$crubit" ] || "$ucm/build_crubit.sh"
 cd "$engine"
 
 # DevTools builds with Homebrew's esbuild through a module of the same version

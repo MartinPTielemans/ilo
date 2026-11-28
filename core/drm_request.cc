@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/memory/self_deleting.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -294,14 +295,17 @@ class DrmRequest final : public content::DocumentService<mojom::DrmRequest> {
  public:
   static void Bind(content::RenderFrameHost* frame,
                    mojo::PendingReceiver<mojom::DrmRequest> receiver) {
-    new DrmRequest(*frame, std::move(receiver));
+    base::MakeSelfDeleting<DrmRequest>(*frame, std::move(receiver));
   }
 
-  ~DrmRequest() override = default;
+  // Public for base::MakeSelfDeleting, which alone has the key.
+  DrmRequest(content::RenderFrameHost& frame,
+             mojo::PendingReceiver<mojom::DrmRequest> receiver,
+             base::SelfDeletingPassKey key)
+      : content::DocumentService<mojom::DrmRequest>(frame, std::move(receiver), key) {}
 
  private:
-  DrmRequest(content::RenderFrameHost& frame, mojo::PendingReceiver<mojom::DrmRequest> receiver)
-      : content::DocumentService<mojom::DrmRequest>(frame, std::move(receiver)) {}
+  ~DrmRequest() override = default;
 
   // mojom::DrmRequest:
   void KeySystemAnswered(const std::string& key_system, bool granted) override {

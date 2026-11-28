@@ -19,10 +19,10 @@ namespace {
 
 using performance_manager::GraphTestHarness;
 using performance_manager::MockSinglePageInSingleProcessGraph;
-using performance_manager::execution_context_priority::PriorityVoter;
-using performance_manager::execution_context_priority::PriorityVotingSystem;
-using performance_manager::execution_context_priority::Vote;
-using performance_manager::execution_context_priority::VotingChannel;
+using performance_manager::priority::PriorityVoter;
+using performance_manager::priority::PriorityVotingSystem;
+using performance_manager::priority::Vote;
+using performance_manager::priority::VotingChannel;
 using Priority = base::Process::Priority;
 
 // Stands for Chromium's own voters, as the one that votes the frames the user sees user-blocking.

@@ -11,7 +11,7 @@ Chrome's, so the core's windows return none and this reports the link to the app
 +#include "browser_core/hooks.h"  // nogncheck
  
  #include "base/check_deref.h"
- #include "base/metrics/histogram_macros.h"
+ #include "base/feature_list.h"
 @@ -127,6 +128,11 @@
  
  DEFINE_USER_DATA(BrowserWebContentsDelegate);
@@ -24,7 +24,7 @@ Chrome's, so the core's windows return none and this reports the link to the app
  namespace {
  
  const extensions::Extension* GetExtensionForOrigin(
-@@ -798,6 +804,11 @@
+@@ -843,6 +849,11 @@
  
  void BrowserWebContentsDelegate::UpdateTargetURL(content::WebContents* source,
                                                   const GURL& url) {

@@ -325,7 +325,8 @@ void SiteControls::ShowCertificate(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
   net::X509Certificate* certificate = contents ? CertificateOf(contents) : nullptr;
   if (certificate) {
-    ShowCertificateViewer(contents, contents->GetTopLevelNativeWindow(), certificate);
+    ShowCertificateViewer(contents, contents->GetTopLevelNativeWindow(), certificate,
+                          CertificateViewerEntrypoint::kPageInfo);
   }
 }
 

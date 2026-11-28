@@ -8,7 +8,7 @@ core after each dispatch of Chromium's events, for the UI's that its reads queue
 Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
 --- a/build/linux/chrome.map
 +++ b/build/linux/chrome.map
-@@ -20,6 +20,10 @@ global:
+@@ -20,6 +20,10 @@
    # Program entry point.
    _start;
  
@@ -21,7 +21,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    aligned_alloc;
 --- a/third_party/wayland/BUILD.gn
 +++ b/third_party/wayland/BUILD.gn
-@@ -64,8 +64,10 @@ if (!use_system_libwayland) {
+@@ -101,8 +101,10 @@
  
      configs -= [ "//build/config/compiler:chromium_code" ]
      configs += [
@@ -32,8 +32,8 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
 +      "//build/config/sanitizers:cfi_icall_disable",
      ]
  
-     public_configs = [ ":wayland_config" ]
-@@ -86,6 +88,10 @@ if (!use_system_libwayland) {
+     public_deps = [ ":wayland_version_header" ]
+@@ -125,6 +127,10 @@
        ":wayland_build_workaround_private_config",
        "//build/config/compiler:no_chromium_code",
        "//build/config/linux/libffi",
@@ -43,8 +43,8 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
 +      "//build/config/sanitizers:cfi_icall_disable",
      ]
  
-     public_configs = [ ":wayland_config" ]
-@@ -161,10 +167,14 @@ if (!use_system_libwayland) {
+     public_deps = [ ":wayland_version_header" ]
+@@ -208,10 +214,14 @@
  
      configs -= [ "//build/config/compiler:chromium_code" ]
      configs += [
@@ -59,7 +59,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
 +      "//build/config/sanitizers:cfi_icall_disable",
      ]
  
-     public_configs = [ ":wayland_config" ]
+     public_deps = [ ":wayland_version_header" ]
 --- a/ui/events/platform/wayland/wayland_event_watcher.cc
 +++ b/ui/events/platform/wayland/wayland_event_watcher.cc
 @@ -20,6 +20,12 @@
@@ -75,7 +75,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
  namespace ui {
  
  namespace {
-@@ -197,6 +203,9 @@ void WaylandEventWatcher::RoundTripQueue() {
+@@ -197,6 +203,9 @@
      WlDisplayCancelRead();
    }
    wl_display_roundtrip_queue(display_, event_queue_);
@@ -85,7 +85,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
  }
  
  void WaylandEventWatcher::StopProcessingEvents() {
-@@ -300,6 +309,9 @@ void WaylandEventWatcher::WlDisplayDispatchPendingQueueInternal(
+@@ -300,6 +309,9 @@
    if (wl_display_dispatch_queue_pending(display_, event_queue_) < 0) {
      WlDisplayCheckForErrors();
    }
@@ -97,7 +97,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
  void WaylandEventWatcher::WlDisplayCheckForErrors() {
 --- a/ui/ozone/platform/wayland/BUILD.gn
 +++ b/ui/ozone/platform/wayland/BUILD.gn
-@@ -674,6 +674,8 @@ component("wayland_proxy") {
+@@ -675,6 +675,8 @@
    visibility += [
      ":ui_test_support",
      ":wayland",
@@ -108,7 +108,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    sources = [
 --- a/ui/ozone/platform/wayland/common/wayland_util.cc
 +++ b/ui/ozone/platform/wayland/common/wayland_util.cc
-@@ -270,9 +270,22 @@ gfx::SizeF ApplyWaylandTransform(const gfx::SizeF& size,
+@@ -270,9 +270,22 @@
    return result;
  }
  
@@ -133,7 +133,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    if (!wayland_surface)
 --- a/ui/ozone/platform/wayland/common/wayland_util.h
 +++ b/ui/ozone/platform/wayland/common/wayland_util.h
-@@ -94,7 +94,13 @@ gfx::RectF ApplyWaylandTransform(const gfx::RectF& rect,
+@@ -94,7 +94,13 @@
  gfx::SizeF ApplyWaylandTransform(const gfx::SizeF& size,
                                   wl_output_transform transform);
  
@@ -150,7 +150,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
  // Returns bounds of the given window, adjusted to its subsurface. We need to
 --- a/ui/ozone/platform/wayland/host/proxy/wayland_proxy.cc
 +++ b/ui/ozone/platform/wayland/host/proxy/wayland_proxy.cc
-@@ -15,13 +15,13 @@ static WaylandProxy* g_instance = nullptr;
+@@ -15,13 +15,13 @@
  
  // static
  WaylandProxy* WaylandProxy::GetInstance() {
@@ -208,7 +208,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    // ui::WaylandWindowObserver overrides:
 --- a/ui/ozone/platform/wayland/host/wayland_connection.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_connection.cc
-@@ -286,8 +286,8 @@ bool WaylandConnection::Initialize(bool use_threaded_polling) {
+@@ -286,8 +286,8 @@
    if (!seat_)
      LOG(WARNING) << "No wl_seat object. The functionality may suffer.";
  
@@ -219,7 +219,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    return true;
  }
  
-@@ -345,8 +345,10 @@ bool WaylandConnection::IsKeyboardAvailable() const {
+@@ -345,8 +345,10 @@
  
  wl::Object<wl_surface> WaylandConnection::CreateSurface() {
    DCHECK(compositor_);
@@ -234,7 +234,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
  void WaylandConnection::RegisterGlobalObjectFactory(
 --- a/ui/ozone/platform/wayland/host/wayland_data_device.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_data_device.cc
-@@ -102,6 +102,15 @@ void WaylandDataDevice::OnEnter(void* data,
+@@ -102,6 +102,15 @@
    auto* self = static_cast<WaylandDataDevice*>(data);
    WaylandWindow* window = wl::RootWindowFromWlSurface(surface);
  
@@ -252,7 +252,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    // processed for a drag offer. If this happens, |window| will be null here, so
 --- a/ui/ozone/platform/wayland/host/wayland_data_device.h
 +++ b/ui/ozone/platform/wayland/host/wayland_data_device.h
-@@ -132,6 +132,8 @@ class WaylandDataDevice : public WaylandDataDeviceBase {
+@@ -132,6 +132,8 @@
    // new data offers temporarily until it is possible to determine which kind
    // session it belongs to.
    std::unique_ptr<WaylandDataOffer> new_offer_;
@@ -263,7 +263,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
  }  // namespace ui
 --- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
-@@ -721,6 +721,13 @@
+@@ -770,6 +770,13 @@
    return xdg_toplevel() ? xdg_toplevel()->IsConfigured() : false;
  }
  
@@ -289,7 +289,7 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    base::WeakPtr<WaylandWindow> AsWeakPtr() override;
 --- a/ui/ozone/platform/wayland/host/wayland_window.h
 +++ b/ui/ozone/platform/wayland/host/wayland_window.h
-@@ -313,6 +313,14 @@
+@@ -321,6 +321,14 @@
      return latched_state_;
    }
  

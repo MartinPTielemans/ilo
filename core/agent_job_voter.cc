@@ -12,9 +12,9 @@ namespace {
 
 using performance_manager::Graph;
 using performance_manager::PageNode;
-using performance_manager::execution_context_priority::PriorityVotingSystem;
-using performance_manager::execution_context_priority::Vote;
-using performance_manager::execution_context_priority::VotingChannel;
+using performance_manager::priority::PriorityVotingSystem;
+using performance_manager::priority::Vote;
+using performance_manager::priority::VotingChannel;
 
 AgentJobVoter* g_voter = nullptr;
 

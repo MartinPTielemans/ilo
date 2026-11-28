@@ -538,7 +538,7 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
     create.opener_id = params.opener->GetGlobalId();
   }
   create.opened_by_another_window = params.opened_by_another_window;
-  create.initially_hidden = params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  create.initially_hidden = params.disposition == WindowOpenDisposition::kNewBackgroundTab;
 #if defined(USE_AURA)
   // In the window's compositor, which draws its page out of sight while an agent acts on it, as
   // Chrome's tabs are. A page in none draws no frame, and its input waits for one.
@@ -965,10 +965,10 @@ Window* Window::ForUnplaced(const NavigateParams& params) {
   // Only what makes a tab: a navigation in "the current tab" of no Browser would take whichever
   // tab a window's Browser has active, which isn't the one it shows.
   switch (params.disposition) {
-    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
-    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
-    case WindowOpenDisposition::NEW_WINDOW:
-    case WindowOpenDisposition::NEW_POPUP:
+    case WindowOpenDisposition::kNewForegroundTab:
+    case WindowOpenDisposition::kNewBackgroundTab:
+    case WindowOpenDisposition::kNewWindow:
+    case WindowOpenDisposition::kNewPopup:
       break;
     default:
       return nullptr;
@@ -1013,12 +1013,12 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // The page menu's Open Link in New Window and in Incognito Window: the app opens its windows, as
   // for ⌘N and ⇧⌘N. A private window's link stays private either way, as Chrome's does.
   if (params.started_from_context_menu &&
-      (params.disposition == WindowOpenDisposition::NEW_WINDOW ||
-       params.disposition == WindowOpenDisposition::OFF_THE_RECORD)) {
+      (params.disposition == WindowOpenDisposition::kNewWindow ||
+       params.disposition == WindowOpenDisposition::kOffTheRecord)) {
     Profile* profile = params.browser->GetProfile();
     const bool private_window = profile->IsOffTheRecord() ||
-                                params.disposition == WindowOpenDisposition::OFF_THE_RECORD;
-    params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+                                params.disposition == WindowOpenDisposition::kOffTheRecord;
+    params.disposition = WindowOpenDisposition::kIgnoreAction;
     // Posted: the app opens a window and a tab in it, which mustn't happen inside a navigation.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
@@ -1039,10 +1039,10 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // ⇧⌥-click on a link opens it in a split view on Linux, as ⌥-click does, since Openbox and Xfce
   // take every Alt-click for themselves but leave one with Shift (#2755). Blink
   // asks for a new window, as for ⇧-click, so the press it came from tells them apart.
-  if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
+  if (source && params.disposition == WindowOpenDisposition::kNewWindow &&
       !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
       !params.post_data && source->last_press_held_alt()) {
-    params.disposition = WindowOpenDisposition::NEW_SPLIT_VIEW;
+    params.disposition = WindowOpenDisposition::kNewSplitView;
   }
 #endif
   // A page in an agent's Space the user isn't looking at opens its tabs and windows there, behind,
@@ -1058,17 +1058,17 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // OpenURL, and Chrome makes that tab itself, as for the link menu and the command bar.
   if (source && params.contents_to_insert) {
     HoldPopup(params.contents_to_insert.get(), params.source_contents, params.url,
-              params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-                  params.disposition == WindowOpenDisposition::NEW_POPUP,
+              params.disposition == WindowOpenDisposition::kNewForegroundTab ||
+                  params.disposition == WindowOpenDisposition::kNewPopup,
               source_space && source_space->agent());
   }
   window->agent_opener_ = 0;
-  if (for_agent && (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-                    params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
-                    params.disposition == WindowOpenDisposition::NEW_POPUP ||
-                    params.disposition == WindowOpenDisposition::NEW_WINDOW ||
-                    params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW)) {
-    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  if (for_agent && (params.disposition == WindowOpenDisposition::kNewForegroundTab ||
+                    params.disposition == WindowOpenDisposition::kNewBackgroundTab ||
+                    params.disposition == WindowOpenDisposition::kNewPopup ||
+                    params.disposition == WindowOpenDisposition::kNewWindow ||
+                    params.disposition == WindowOpenDisposition::kNewSplitView)) {
+    params.disposition = WindowOpenDisposition::kNewBackgroundTab;
     // Nor is its window shown, as Chrome shows it for each tab a page opens (AddNewContents): on
     // Windows, showing a window already on screen gives the window itself the user's keyboard.
     params.window_action = NavigateParams::WindowAction::kNoAction;
@@ -1090,14 +1090,14 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // stay private, and the link menu's Open Link in Split View splits.
   Profile* clicked_in = params.browser->GetProfile();
   const bool little_click = source &&
-                            params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&
+                            params.disposition == WindowOpenDisposition::kNewSplitView &&
                             source->last_press_held_command() &&
                             !params.started_from_context_menu && !clicked_in->IsOffTheRecord();
   // With Little ilo off (bc_little_windows) it opens as ⌘-click does, in a tab behind.
   if (little_click && !UserSettings().little_windows) {
-    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewBackgroundTab;
   } else if (little_click && Host().window_open_little) {
-    params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+    params.disposition = WindowOpenDisposition::kIgnoreAction;
     // Posted, as for Open Link in New Window above.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(
@@ -1114,23 +1114,23 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // ⇧-click on a web link, which Chrome opens in a new window: the app may open it in a link
   // preview instead (the owner, 2026-11-02, #1370). Not a page's window.open(), which holds the
   // page it made, or a form sent.
-  if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
+  if (source && params.disposition == WindowOpenDisposition::kNewWindow &&
       !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
       !params.post_data && params.url.SchemeIsHTTPOrHTTPS() && Host().tab_link_to_preview) {
     const gfx::PointF click = source->last_click();
     // The app only answers here: it opens the preview after this call, outside the navigation.
     if (Host().tab_link_to_preview(Host().context, Tab::IdOf(params.source_contents),
                                    params.url.spec().c_str(), click.x(), click.y())) {
-      params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+      params.disposition = WindowOpenDisposition::kIgnoreAction;
       return;
     }
   }
   // ⌥-click on a link opens it beside its page in a split view, as Arc's does
   // (chromium-core-alt-click-split.patch).
-  const bool split = source && params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW;
+  const bool split = source && params.disposition == WindowOpenDisposition::kNewSplitView;
   window->split_with_ = split ? Tab::IdOf(params.source_contents) : 0;
   // A page's pop-up, as a sign-in's: the app hears what it asked for with its tab (tab_popup).
-  if (source && params.disposition == WindowOpenDisposition::NEW_POPUP) {
+  if (source && params.disposition == WindowOpenDisposition::kNewPopup) {
     const blink::mojom::WindowFeatures& features = params.window_features;
     const gfx::Rect& asked = features.bounds;
     window->popup_ = bc_rect{
@@ -1140,14 +1140,14 @@ void Window::AdjustNavigate(NavigateParams& params) {
     window->popup_placed_ = features.has_x && features.has_y;
   }
   // Popups become tabs (decision 3). So do new windows: the app opens its own.
-  if (split || params.disposition == WindowOpenDisposition::NEW_POPUP ||
-      params.disposition == WindowOpenDisposition::NEW_WINDOW) {
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  if (split || params.disposition == WindowOpenDisposition::kNewPopup ||
+      params.disposition == WindowOpenDisposition::kNewWindow) {
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
   }
   // A link a page opens behind, as by ⌘-click, loads only once its tab is first shown (Dia). A
   // form sent to a tab behind goes at once, when the user sent it, and a window the page made
   // itself already has its page and the page's hold on it.
-  if (source && !for_agent && params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB &&
+  if (source && !for_agent && params.disposition == WindowOpenDisposition::kNewBackgroundTab &&
       params.url.SchemeIsHTTPOrHTTPS() && !params.post_data && !params.contents_to_insert) {
     content::WebContents* contents = window->OpenBehind(params);
     // Posted, as for the tabs Chrome opens.
@@ -1156,13 +1156,13 @@ void Window::AdjustNavigate(NavigateParams& params) {
                                   Tab::IdOf(contents), Tab::IdOf(params.source_contents),
                                   /*foreground=*/false, /*split_with=*/0,
                                   /*popup=*/std::nullopt, /*popup_placed=*/false));
-    params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+    params.disposition = WindowOpenDisposition::kIgnoreAction;
   }
   // Chrome's downloads page, which it opens after the user stopped a quit to let downloads finish,
   // is the Library's Downloads here.
   if (params.url.SchemeIs(content::kChromeUIScheme) &&
       params.url.host() == chrome::kChromeUIDownloadsHost) {
-    params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+    params.disposition = WindowOpenDisposition::kIgnoreAction;
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(
                        [](base::WeakPtr<Window> window) {
@@ -1176,8 +1176,8 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // starts, as every rule for an agent's page asks of it then (#2660). A pop-up's page, which
   // content made, the opener's Tab held as content made it (Tab::DidOpenRequestedURL).
   if (source_space && source_space->agent() && !params.contents_to_insert &&
-      (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-       params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) &&
+      (params.disposition == WindowOpenDisposition::kNewForegroundTab ||
+       params.disposition == WindowOpenDisposition::kNewBackgroundTab) &&
       !params.url.is_empty() && !params.url.SchemeIs(url::kAboutScheme) &&
       !params.url.SchemeIs(content::kChromeUIScheme)) {
     MakeHeldBy(*Space::Holding(source_id), params);
@@ -1892,7 +1892,7 @@ content::WebContents* Window::OpenTab(Profile* profile,
     return nullptr;
   }
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewBackgroundTab;
   params.url_typed_with_http_scheme = typed_http;
   if (when_shown && url.SchemeIsHTTPOrHTTPS()) {
     return OpenBehind(params);
@@ -1909,7 +1909,7 @@ content::WebContents* Window::OpenHeld(Space& space, Profile* profile, const GUR
     return nullptr;
   }
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewBackgroundTab;
   MakeHeldBy(space, params);
   // The app hears only of the tabs it didn't open.
   base::AutoReset<bool> opening(&opening_tab_, true);
@@ -1950,7 +1950,7 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   create.context = widget_->GetNativeWindow();
 #endif
   NavigateParams params(browser, content::WebContents::Create(create));
-  params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewBackgroundTab;
   // No Space takes it until the app keeps it, so the app isn't told of it as a tab opened.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);

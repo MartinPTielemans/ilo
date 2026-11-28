@@ -1,6 +1,7 @@
 # ungoogled-chromium-portablelinux's chromium-154-use-system-tsc.patch at 6f0aa178c239 (its
-# 156.0.8078.79-1 tag), rebased by ilo onto Chromium 157.0.8103.50 until it tags 157. Changed from
-# upstream's: context only, as 157 declares enable_webui_tabstrip_ntb after use_typescript_go.
+# 156.0.8078.79-1 tag), rebased by ilo onto Chromium 157.0.8103.50, and taken as it is by
+# 158.0.8127.36, until it tags 158. Changed from upstream's: context only, as 157 declares
+# enable_webui_tabstrip_ntb after use_typescript_go.
 --- a/third_party/devtools-frontend/src/scripts/build/typescript/typescript_vars.gni
 +++ b/third_party/devtools-frontend/src/scripts/build/typescript/typescript_vars.gni
 @@ -6,7 +6,7 @@ import("//build/toolchain/rbe.gni")
