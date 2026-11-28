@@ -4937,7 +4937,7 @@ fn ilo_head(kind: &IloKind, agent: &str) -> IloHead {
         Some(name) => {
             let (mut said, quoted) = words::with_name(kind, &own, name);
             // What its sentence says after the name.
-            said.extend(words::tail(kind, agent));
+            said.extend(words::tail(kind));
             (said, Some(quoted))
         }
         None => (own, None),

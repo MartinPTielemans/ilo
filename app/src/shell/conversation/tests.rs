@@ -13,7 +13,7 @@ use gpui::{
 use super::Fold;
 
 use crate::agents::Status;
-use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, Reach};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, NotGiven};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Live, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -1983,104 +1983,39 @@ fn the_focus_keys_press_hand_back_only_once_it_has_stood(cx: &mut TestAppContext
     assert_eq!(pressed(&host), ["task task-1 PagesBack"]);
 }
 
-/// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
-/// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
-/// as the user's own and nothing else of the line drawn as a name.
+/// The lines of what a task started without, and of what ilo ended that a run left running
+/// (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted as the
+/// user's own and nothing else of the line drawn as a name.
 #[gpui::test]
-fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
+fn a_line_of_what_a_task_went_without_says_what_ilo_did_and_why(_: &mut TestAppContext) {
     use super::words::{head, tail, with_name};
     let said = |kind: &IloKind| {
         let (own, name) = head(kind, "Claude");
         let own = format!("{PRODUCT} {own}");
         let Some(name) = name else {
-            assert_eq!(tail(kind, "Claude"), None);
+            assert_eq!(tail(kind), None);
             return (own, String::new());
         };
         let (mut said, at) = with_name(kind, &own, &name);
         let quoted = said[at].to_string();
-        said.extend(tail(kind, "Claude"));
+        said.extend(tail(kind));
         (said, quoted)
     };
-    let without = |left| IloKind::StartedWithout { left };
-    let stopped = |left| IloKind::NotRestarted { left };
-    let left = |reach| IloKind::LeftRunning { reach };
     let cases = [
         (
-            without(LeftOut::Folder("Trip".into())),
-            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't limit Claude to \
-             that folder",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            without(LeftOut::File("seats.pdf".into())),
-            "{p} started this thread without \u{201c}seats.pdf\u{201d}: {p} couldn't limit Claude \
-             to that file",
-            "\u{201c}seats.pdf\u{201d}",
-        ),
-        (
-            without(LeftOut::Files(3)),
-            "{p} started this thread without your 3 files: {p} couldn't limit Claude to them",
-            "",
-        ),
-        (
-            IloKind::KeptAt {
-                at: Tier::Work,
-                refused: Tier::Full,
+            IloKind::StartedWithout {
                 folder: "Trip".into(),
+                why: NotGiven::Gone,
             },
-            "{p} kept this thread at Work on pages: {p} couldn't limit Claude to \
-             \u{201c}Trip\u{201d} at Full access",
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't find it",
             "\u{201c}Trip\u{201d}",
         ),
         (
-            IloKind::SetBack {
-                at: Tier::Work,
-                refused: Tier::Full,
+            IloKind::StartedWithout {
                 folder: "Trip".into(),
+                why: NotGiven::Never,
             },
-            "{p} set this thread back to Work on pages: {p} couldn't limit Claude to \
-             \u{201c}Trip\u{201d} at Full access",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            stopped(LeftOut::Folder("Trip".into())),
-            "{p} stopped this thread: {p} couldn't restart Claude without \u{201c}Trip\u{201d}",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            stopped(LeftOut::File("seats.pdf".into())),
-            "{p} stopped this thread: {p} couldn't restart Claude without \
-             \u{201c}seats.pdf\u{201d}",
-            "\u{201c}seats.pdf\u{201d}",
-        ),
-        (
-            stopped(LeftOut::Files(3)),
-            "{p} stopped this thread: {p} couldn't restart Claude without your 3 files",
-            "",
-        ),
-        (
-            IloKind::NotRaised {
-                refused: Tier::Full,
-            },
-            "{p} stopped this thread: {p} couldn't restart Claude at Full access",
-            "",
-        ),
-        (
-            left(Reach::Folder("Trip".into())),
-            "{p} couldn't end everything Claude started: what's left can still reach \
-             \u{201c}Trip\u{201d}. Restarting this computer ends it.",
-            "\u{201c}Trip\u{201d}",
-        ),
-        (
-            left(Reach::Files),
-            "{p} couldn't end everything Claude started: what's left can still reach this \
-             thread's files. Restarting this computer ends it.",
-            "",
-        ),
-        (
-            left(Reach::Both("Trip".into())),
-            "{p} couldn't end everything Claude started: what's left can still reach \
-             \u{201c}Trip\u{201d} and this thread's files. Restarting this computer ends it.",
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} keeps it from threads",
             "\u{201c}Trip\u{201d}",
         ),
         (
@@ -2180,35 +2115,12 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::YouStopped { pages: 0 },
         IloKind::YouStopped { pages: 2 },
         IloKind::StartedWithout {
-            left: LeftOut::Folder("Trip".into()),
+            folder: "Trip".into(),
+            why: NotGiven::Gone,
         },
         IloKind::StartedWithout {
-            left: LeftOut::Files(3),
-        },
-        IloKind::KeptAt {
-            at: Tier::Work,
-            refused: Tier::Full,
             folder: "Trip".into(),
-        },
-        IloKind::SetBack {
-            at: Tier::Work,
-            refused: Tier::Full,
-            folder: "Trip".into(),
-        },
-        IloKind::NotRestarted {
-            left: LeftOut::Folder("Trip".into()),
-        },
-        IloKind::NotRestarted {
-            left: LeftOut::Files(3),
-        },
-        IloKind::NotRaised {
-            refused: Tier::Full,
-        },
-        IloKind::LeftRunning {
-            reach: Reach::Folder("Trip".into()),
-        },
-        IloKind::LeftRunning {
-            reach: Reach::Files,
+            why: NotGiven::Never,
         },
         IloKind::EndedLeft,
         IloKind::Revoked {
@@ -2258,11 +2170,6 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::TierChanged { .. }
             | IloKind::YouStopped { .. }
             | IloKind::StartedWithout { .. }
-            | IloKind::KeptAt { .. }
-            | IloKind::SetBack { .. }
-            | IloKind::NotRestarted { .. }
-            | IloKind::NotRaised { .. }
-            | IloKind::LeftRunning { .. }
             | IloKind::EndedLeft
             | IloKind::Revoked { .. }
             | IloKind::FolderGone { .. }

@@ -561,9 +561,10 @@ pub(crate) const CLAUDE_WALLED: [&str; 5] = [
     "DISABLE_TELEMETRY",
 ];
 /// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
-const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+pub(crate) const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 /// What a walled start names its listener with, for either assistant.
-const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
+pub(crate) const PROXY: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
 /// What a walled start clears of the browser's own environment.
 const PROXY_CLEARED: [&str; 5] = [
     "NO_PROXY",
@@ -579,7 +580,14 @@ const PROXY_CLEARED: [&str; 5] = [
 /// say so: `sets` answers from these alone, which a test holds.
 pub fn kept(cli: Cli) -> Vec<&'static str> {
     match cli {
-        Cli::Claude => [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &PROXY[..]].concat(),
+        // Where the user moved Claude Code's own files, which it's never set but read as the
+        // browser was started with it: the box's rules name the same folder (wall.rs `cli_home`).
+        Cli::Claude => [
+            &[PATH, CLAUDE_TMP, CLAUDE_CONFIG_DIR][..],
+            &CLAUDE_WALLED[..],
+            &PROXY[..],
+        ]
+        .concat(),
         Cli::Codex => [&[PATH, super::bridge::TOKEN][..], &PROXY[..]].concat(),
     }
 }

@@ -782,8 +782,236 @@ PY
   rm -rf "$home" "$agents_file"
   tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, a task from ⌘T starts on each and its CLI gets its instructions whole and the first message, and no console window shows"
 fi
+# On the Mac a task's Claude Code runs in its box (#4101): a stand-in claude, a program of its own as
+# Claude Code's installer puts one in ~/.local/bin, started by a task from ⌘T, tries from inside
+# what the box is for. Its proxy lets it reach Anthropic's API and nothing else, and it reaches
+# nothing past the proxy, no name lookup, and no file of the user's home but its own folders. The
+# system says the process is sandboxed, and the browser says it rose inside the box.
+boxed=
+if [ -n "$mac" ]; then
+  log="$out/agents-box.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  home="$PWD/$out/box-home"
+  rm -rf "$home"
+  mkdir -p "$home/.claude" "$home/.local/bin" "$home/Documents" "$home/Desktop"
+  # In ~/.zprofile, which the login shell a task's look asks reads: finding claude has its own
+  # steps above, and this one is the box's.
+  echo 'export PATH="$HOME/.local/bin:$PATH"' > "$home/.zprofile"
+  # A file of the user's, with words no answer may hold.
+  secret="ilo-box-secret-$$-$RANDOM"
+  echo "$secret" > "$home/Documents/ilo-box-probe.txt"
+  echo "$secret" > "$home/Desktop/ilo-box-probe.txt"
+  cat > "$out/box-claude.c" << 'EOF'
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+static char result[4096] = "{";
+
+/* What a try got, its words kept to letters, digits and a few marks, so nothing else is written. */
+static void put(const char *key, const char *value) {
+  char clean[128];
+  size_t n = 0;
+  for (const char *c = value; *c && *c != '\r' && *c != '\n' && n < sizeof clean - 1; c++)
+    if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
+        strchr(" ./:-", *c))
+      clean[n++] = *c;
+  clean[n] = 0;
+  size_t at = strlen(result);
+  snprintf(result + at, sizeof result - at, "%s\"%s\":\"%s\"", at > 1 ? "," : "", key, clean);
+}
+
+/* A TCP connection to ip:port within 5 s, or minus why not. */
+static int reach(const char *ip, int port) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -errno;
+  struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(port)};
+  inet_pton(AF_INET, ip, &to.sin_addr);
+  int mode = fcntl(fd, F_GETFL);
+  fcntl(fd, F_SETFL, mode | O_NONBLOCK);
+  if (connect(fd, (struct sockaddr *)&to, sizeof to) < 0) {
+    int why = errno;
+    struct pollfd wait = {.fd = fd, .events = POLLOUT};
+    socklen_t size = sizeof why;
+    if (why != EINPROGRESS || poll(&wait, 1, 5000) != 1 ||
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &why, &size) < 0 || why) {
+      close(fd);
+      return -(why ? why : ETIMEDOUT);
+    }
+  }
+  fcntl(fd, F_SETFL, mode);
+  return fd;
+}
+
+/* The proxy's first line for a CONNECT to target. */
+static void through_proxy(const char *key, int port, const char *target) {
+  int fd = reach("127.0.0.1", port);
+  if (fd < 0) return put(key, "no proxy");
+  char ask[256], answer[256] = "";
+  snprintf(ask, sizeof ask, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target);
+  if (write(fd, ask, strlen(ask)) < 0) return close(fd), put(key, "not sent");
+  struct pollfd wait = {.fd = fd, .events = POLLIN};
+  if (poll(&wait, 1, 15000) == 1) {
+    ssize_t got = read(fd, answer, sizeof answer - 1);
+    answer[got > 0 ? got : 0] = 0;
+  }
+  close(fd);
+  put(key, *answer ? answer : "no answer");
+}
+
+static void say(const char *line) {
+  fputs(line, stdout);
+  fputc('\n', stdout);
+  fflush(stdout);
+}
+
+int main(int argc, char **argv) {
+  if (argc == 2 && !strcmp(argv[1], "--version")) return say("2.1.316 (Claude Code)"), 0;
+  if (argc == 4 && !strcmp(argv[1], "auth") && !strcmp(argv[2], "status"))
+    return say("{\"loggedIn\":true,\"authMethod\":\"check\"}"), 0;
+  int task = 0;
+  for (int at = 1; at < argc; at++) task |= !strcmp(argv[at], "--mcp-config");
+  /* The models ask and the broom get no answer. */
+  if (!task) return 0;
+  /* The first message, whole. */
+  int c;
+  while ((c = getchar()) != EOF && c != '\n') {}
+  char text[64];
+  snprintf(text, sizeof text, "%d", (int)getpid());
+  put("pid", text);
+  const char *proxy = getenv("HTTPS_PROXY");
+  const char *colon = proxy ? strrchr(proxy, ':') : NULL;
+  int port = colon ? atoi(colon + 1) : 0;
+  through_proxy("proxy_api", port, "api.anthropic.com:443");
+  through_proxy("proxy_unlisted", port, "example.com:443");
+  through_proxy("proxy_port_80", port, "api.anthropic.com:80");
+  int fd = reach("1.1.1.1", 443);
+  put("direct", fd >= 0 ? "connected" : strerror(-fd));
+  if (fd >= 0) close(fd);
+  fd = open(PROBE_FILE, O_RDONLY);
+  put("file", fd >= 0 ? "read" : strerror(errno));
+  if (fd >= 0) close(fd);
+  DIR *folder = opendir(PROBE_FOLDER);
+  put("folder", folder ? "listed" : strerror(errno));
+  if (folder) closedir(folder);
+  struct addrinfo *found = NULL;
+  int looked = getaddrinfo("example.com", "443", NULL, &found);
+  put("lookup", looked ? gai_strerror(looked) : "resolved");
+  if (found) freeaddrinfo(found);
+  int udp = socket(AF_INET, SOCK_DGRAM, 0);
+  struct sockaddr_in resolver = {.sin_family = AF_INET, .sin_port = htons(53)};
+  inet_pton(AF_INET, "1.1.1.1", &resolver.sin_addr);
+  const char query[] = "\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07" "example\x03" "com\x00\x00\x01\x00\x01";
+  ssize_t sent = udp < 0 ? -1 : sendto(udp, query, sizeof query - 1, 0, (struct sockaddr *)&resolver, sizeof resolver);
+  put("udp", sent >= 0 ? "sent" : strerror(errno));
+  strcat(result, "}\n");
+  /* In its own temporary folder, whole or not at all. */
+  const char *tmp = getenv("CLAUDE_CODE_TMPDIR");
+  char part[1024], whole[1024];
+  snprintf(part, sizeof part, "%s/box-probe.part", tmp ? tmp : ".");
+  snprintf(whole, sizeof whole, "%s/box-probe.json", tmp ? tmp : ".");
+  FILE *file = fopen(part, "w");
+  if (file) {
+    fputs(result, file);
+    fclose(file);
+    rename(part, whole);
+  }
+  say("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Done, from the box stand-in.\"}]}}");
+  say("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"Done\"}");
+  while (getchar() != EOF) {}
+  return 0;
+}
+EOF
+  cc -O -o "$home/.local/bin/claude" "$out/box-claude.c" \
+    -DPROBE_FILE="\"$home/Documents/ilo-box-probe.txt\"" -DPROBE_FOLDER="\"$home/Desktop\"" ||
+    fail "cc couldn't build the box's stand-in for claude"
+  printf '%s\n' '#include <stdio.h>' '#include <stdlib.h>' '#include <sys/types.h>' \
+    'int sandbox_check(pid_t pid, const char *operation, int type, ...);' \
+    'int main(int argc, char **argv) { printf("%d\n", sandbox_check((pid_t)atoi(argv[1]), NULL, 0)); return 0; }' \
+    > "$out/sandboxed.c"
+  cc -O -o "$out/sandboxed" "$out/sandboxed.c" || fail "cc couldn't build the sandbox reader"
+  agents_file="$(dirname "$saved")/Agents"
+  printf '{"on":true,"agents":[]}' > "$agents_file"
+  # The PATH the Dock and Finder give an app, and zsh's files from the run's home.
+  HOME="$home" ZDOTDIR="$home" SHELL=/bin/zsh PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    BROWSER_PROFILE_DIR="${BROWSER_PROFILE_DIR:-$profile_dir}" BROWSER_DRIVE=1 \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await '^browser: agents server on ' || fail "the saved switch didn't start the server"
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  send clickkey $(drawn "toolbar Models")
+  expect '^browser: settings tab Models$' "a click on Models didn't show its tab"
+  line="browser: task agent claude is SignedIn at $home/.local/bin/claude"
+  for _ in $(seq 300); do
+    grep -qxF "$line" "$log" && break
+    sleep 0.1
+  done
+  grep -qxF "$line" "$log" ||
+    fail "the stand-in claude wasn't found signed in: $(grep '^browser: task agent claude ' "$log" | tail -1)"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type "Find a flight in the box"
+  send key tab
+  expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a task"
+  send key return
+  expect '^browser: command bar runs a task on claude$' "↩ didn't run the task on claude"
+  expect_late '^browser: task task-[0-9]* on claude asked from space ' "the task on claude didn't start"
+  task=$(sed -n 's/^browser: task \(task-[0-9]*\) on claude asked from space .*/\1/p' "$log" | tail -1)
+  expect_late "^browser: task $task \\(is boxed in\\|wasn't boxed in: .*\\|failed: .*\\)\$" \
+    "the task's claude neither rose in its box nor failed"
+  grep -q "^browser: task $task is boxed in\$" "$log" ||
+    fail "the task's claude didn't rise in its box: $(grep -e "^browser: task $task " -e "^browser: $task couldn.t start " "$log" | tail -2 | tr '\n' ' ')"
+  probe=
+  for _ in $(seq 600); do
+    probe=$(find "${BROWSER_PROFILE_DIR:-$profile_dir}" -name box-probe.json 2>/dev/null | head -1)
+    [ -n "$probe" ] && break
+    sleep 0.1
+  done
+  [ -n "$probe" ] || fail "the stand-in in the box wrote nothing in its own folder"
+  cp "$probe" "$out/box-probe.json"
+  grep -qF "$secret" "$out/box-probe.json" && fail "the stand-in in the box read the user's file"
+  python3 -I - "$out/box-probe.json" << 'PY' || fail "the box let through what it's for keeping out: $(cat "$out/box-probe.json")"
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as file:
+    got = json.load(file)
+wrong = []
+if " 200" not in got["proxy_api"]:
+    wrong.append("its proxy didn't let it reach Anthropic's API")
+for key in ("proxy_unlisted", "proxy_port_80"):
+    if " 200" in got[key] or got[key] in ("no proxy", "no answer"):
+        wrong.append(f"{key} wasn't refused by its proxy")
+for key, let in (("direct", "connected"), ("file", "read"), ("folder", "listed"),
+                 ("lookup", "resolved"), ("udp", "sent")):
+    if got[key] == let:
+        wrong.append(f"{key} got through")
+if wrong:
+    sys.exit("; ".join(wrong))
+PY
+  boxed_pid=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["pid"])' "$out/box-probe.json")
+  [ "$("$out/sandboxed" "$boxed_pid")" = 1 ] ||
+    fail "the system doesn't say the task's claude ($boxed_pid) is sandboxed"
+  ../tools/window-screenshot.sh "$pid" "$out/task-boxed.png" || fail "no window to capture"
+  quit
+  rm -f "$agents_file"
+  rm -rf "$home"
+  boxed="; on the Mac a task's claude, a stand-in run from ⌘T, rises in its box, sandboxed as the system says, where its proxy reaches Anthropic's API alone and it reaches nothing past it, no name lookup and no file of the user's"
+fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made, the Space button's menu and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$commanded$tasks_found. The user's tab came from the run's own server."
+  echo "ok: $made, the Space button's menu and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$commanded$tasks_found$boxed. The user's tab came from the run's own server."
 else
-  echo "ok: $made and the Space button's menu, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$commanded$tasks_found. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made and the Space button's menu, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$commanded$tasks_found$boxed. The user's tab came from the run's own server. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
 fi
