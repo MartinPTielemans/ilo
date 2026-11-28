@@ -379,8 +379,9 @@ check-glyph = 12.0
 text = 0xffffff
 
 [dock-dot]
-# The icon's own green, which a Space in it leaves alone.
-green = 0x0E9F55
+# The icon's own green, its tile's, which a Space in it leaves alone, so the icon keeps its lime dot
+# as with the switch off.
+green = 0x07803F
 
 [elevation]
 # Three levels, each one recipe (#317): a white rim inside the surface's edge, which reads on dark
@@ -1709,8 +1710,8 @@ keys-radius = 6.0
 keys-fill = 0xffff_ff14
 # From the words to their keys, as the toast sets its chip.
 keys-gap = 8.0
-# The icon's green dot, #0E9F55, the one colour on the card, and the stem at a tile's white 0.10
-# plus a little, so it reads as pressed into the card rather than printed on it.
+# The wordmark's i: its dot in Signal green, #0E9F55, the one colour on the card, and the stem at a
+# tile's white 0.10 plus a little, so it reads as pressed into the card rather than printed on it.
 mark-dot-fill = 0x0e9f_55ff
 mark-stem-fill = 0xffff_ff24
 # From the mark's foot to the line, so they read as a sign and its caption, not one block.

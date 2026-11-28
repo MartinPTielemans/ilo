@@ -31,8 +31,8 @@
 # the window widened, the space a page hasn't drawn at its new size shows the page's own
 # background. In a check VM, the sidebar over grey backdrops is Dia's composite,
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
-# and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
-# in Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
+# and back. On the Mac, the Dock icon takes the Space's color, and stays green with its switch in
+# Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
 # On a hosted Windows runner, at Windows' Text size 110 % the page view keeps its margins.
 
 # A long page that times its frames while it scrolls and puts the numbers in its title.
@@ -1819,9 +1819,10 @@ else
   material="over grey ${material%; }"
 fi
 
-# The Dock icon's dot shows the Space in front, and with Settings › General's "Dock icon takes the
-# Space's color" off it stays green (docs/ux-spec.md › Dock dot), read from the image the app gives
-# the Dock. The Space is black, which no default Space color is, and black over the dot's green
+# The Dock icon takes the color of the Space in front, and with Settings › General's "Dock icon
+# takes the Space's color" off it stays green (docs/ux-spec.md › Dock dot), read at the icon's
+# ground line, which takes it in the Default and Dark styles, from the image the app gives the
+# Dock. The Space is black, which no default Space color is, and black over the ground line's green
 # with a color blend leaves it grey. In the Mac's Tinted and Clear icon styles macOS draws the icon
 # in the style's colors and the app leaves it as it is.
 dock="not on this OS"
@@ -1846,12 +1847,12 @@ if [ "$(uname)" = Darwin ]; then
   grey() { echo "$1" | awk '{ hi = $1; lo = $1; for (i = 2; i <= 3; i++) { if ($i > hi) hi = $i; if ($i < lo) lo = $i }; exit !(hi - lo <= 12) }'; }
   dock_dot 000000
   if [ "$shown" = system ]; then
-    echo "skip: the Dock icon's dot, as this Mac's icon style draws it in its own colors"
+    echo "skip: the Dock icon's Space color, as this Mac's icon style draws it in its own colors"
     dock="left to macOS's icon style"
   else
     dock_icon "$out/dock-icon-black.png"
     black=$icon
-    grey "$black" || fail "the Dock icon's dot in a black Space reads $black, not grey"
+    grey "$black" || fail "the Dock icon's ground line in a black Space reads $black, not grey"
     send menu Settings…
     expect '^browser: settings shown ' "Settings… didn't show Settings for the Dock icon's switch"
     send clickkey $(drawn "toolbar General")
@@ -1864,7 +1865,7 @@ if [ "$(uname)" = Darwin ]; then
     dock_dot green
     dock_icon "$out/dock-icon-off.png"
     plain=$icon
-    green "$plain" || fail "the Dock icon's dot with its switch off reads $plain, not green"
+    green "$plain" || fail "the Dock icon's ground line with its switch off reads $plain, not green"
     send menu Settings…
     expect '^browser: settings shown General$' "Settings… didn't show General again"
     settings_drew General
@@ -1876,8 +1877,8 @@ if [ "$(uname)" = Darwin ]; then
     dock_dot 000000
     dock_icon "$out/dock-icon-on.png"
     again=$icon
-    grey "$again" || fail "the Dock icon's dot back on reads $again, not the Space's grey"
-    dock="dot $black in a black Space, $plain with its switch off, $again on again"
+    grey "$again" || fail "the Dock icon's ground line back on reads $again, not the Space's grey"
+    dock="ground line $black in a black Space, $plain with its switch off, $again on again"
     dock_shots=", $out/dock-icon-black.png, $out/dock-icon-off.png, $out/dock-icon-on.png"
   fi
 elif windows; then
