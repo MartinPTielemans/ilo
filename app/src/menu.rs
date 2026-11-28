@@ -2330,7 +2330,7 @@ impl ContextMenu {
             Outcome::Moved(item, after) => {
                 let moved = self.shown.as_ref().and_then(|shown| shown.reorder.clone());
                 if let Some(reorder) = moved {
-                    // check.sh reads this line, which names no Space.
+                    // Names no Space.
                     log!("browser: menu reordered a row");
                     cx.defer(move |cx| (reorder.moved)(item, after, cx));
                 }
