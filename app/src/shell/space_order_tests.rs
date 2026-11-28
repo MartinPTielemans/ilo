@@ -159,7 +159,7 @@ fn a_card_passing_one_neighbour_moves_only_that_one(cx: &mut TestAppContext) {
     assert_eq!(aside(&shell, cx), [(2, -PITCH)]);
     let at = shell.read_with(cx, |shell, _| shell.space_shift(1));
     assert!(
-        (at - (PITCH + 20. - 6.)).abs() < 1.,
+        (at - (PITCH + 20.)).abs() < 1.,
         "the card follows the pointer: {at}"
     );
     assert!(
@@ -293,4 +293,18 @@ fn a_card_held_at_the_row_s_end_scrolls_the_row(cx: &mut TestAppContext) {
     step(cx, 150);
     let held = shell.read_with(cx, |shell, _| shell.cards_at());
     assert_eq!(held, after, "in the middle it doesn't");
+}
+
+/// A flick, a press, one move and the release with no frame between, as the driver's drag is, is
+/// the same drag as one held: the card lands where the release was (#4452).
+#[gpui::test]
+fn a_flick_with_one_move_still_moves_the_space(cx: &mut TestAppContext) {
+    let (shell, cx, host) = library(cx);
+    let from = handle(&shell, cx, 1);
+    let to = moved(&shell, cx, 1, 1., 20.);
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(host.take_edits(), ["move space 1 after 2"]);
 }

@@ -1618,6 +1618,9 @@ pub struct Shell {
     space_sent: crate::sortable::Sent<u64>,
     /// The card drawn over the others: the one dragged, and while it settles.
     space_lifted: Option<u64>,
+    /// Where a Space card's handle was last pressed, across the window: a drag that starts with its
+    /// first move holds the card where it was pressed, not where that move is.
+    space_press: Option<f32>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -2274,6 +2277,7 @@ impl Shell {
             space_drag: None,
             space_sent: Default::default(),
             space_lifted: None,
+            space_press: None,
             putting_back: false,
             swipe: None,
             settle: None,

@@ -2490,10 +2490,24 @@ impl Shell {
             .opacity(0.)
             .group_hover("space-card", |style| style.opacity(1.))
             .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // GPUI holds the handle where it was pressed; the card is held that far into it.
-            .on_drag(DraggedSpace, move |_, grab, _, cx| {
-                let grab = CARD_MORE_X - half + f32::from(grab.x);
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                    shell.space_press = Some(f32::from(event.position.x));
+                    cx.stop_propagation()
+                }),
+            )
+            // GPUI's offset is where the pointer is as the drag starts, which a flick's first move
+            // already has far from the press: the card is held where the press was.
+            .on_drag(DraggedSpace, move |_, offset, window, cx| {
+                let now = f32::from(window.mouse_position().x);
+                let handle = now - f32::from(offset.x);
+                let pressed = shell
+                    .read_with(cx, |shell, _| shell.space_press)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(now);
+                let grab = CARD_MORE_X - half + (pressed - handle);
                 Shell::start_space_drag(&shell, id, CARD_WIDTH, grab, cx)
             })
             .child(self.said_place("handle", id))
