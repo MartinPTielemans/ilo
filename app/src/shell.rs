@@ -2093,8 +2093,8 @@ pub struct Shell {
     window_active: bool,
     window_watches: Vec<Subscription>,
     /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
-    /// its header's glyphs dim while it isn't. Its own overlays and page having the keyboard
-    /// leave it so, unlike GPUI's activation.
+    /// its header's glyphs dim while it isn't, and it alone tells a screen reader of a task. Its
+    /// own overlays and page having the keyboard leave it so, unlike GPUI's activation.
     window_main: bool,
     /// Whether the header's glyphs were last drawn dimmed, which the log says when it changes.
     nav_dimmed_drawn: Cell<Option<bool>>,

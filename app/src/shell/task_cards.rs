@@ -456,7 +456,9 @@ impl Shell {
         }
         // What a screen reader is told of a task that came to need the user or to be done.
         let (mut told, mut answered) = (None, false);
-        let read = self.a11y && self.window_active;
+        // The window the user is in, as its host says: on Windows GPUI never hears the UI's window
+        // inside the browser window's activate (#4244).
+        let read = self.a11y && self.window_main;
         let drawn = (read.then(|| self.talk_agent()).flatten())
             .filter(|_| self.watched_task_page().is_none());
         let now = self.clock.now();
@@ -472,7 +474,7 @@ impl Shell {
                 // not.
                 let how = match (read, drawn.as_ref() == Some(&card.agent)) {
                     (false, _) if !self.a11y => "not told, no screen reader",
-                    (false, _) => "not told, the window isn't active",
+                    (false, _) => "not told, the user isn't in the window",
                     // Its conversation is drawn: its own line says a need, and the answer a finish.
                     (true, true) => {
                         answered |= came == Told::Done && card.replies;
