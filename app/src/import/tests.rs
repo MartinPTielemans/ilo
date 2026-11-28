@@ -618,7 +618,8 @@ fn linux_finds_flatpak_snap_and_xdg_installs() {
 }
 
 /// On Windows, the Chromium family in Local AppData, Opera's one profile in Roaming, and Firefox
-/// from its Microsoft Store package beside the one from its installer; none of Linux's folders.
+/// and Dia from their Microsoft Store packages beside the ones from their installers; none of
+/// Linux's folders.
 #[test]
 fn windows_finds_the_chromium_family_operas_profile_and_store_installs() {
     let home = home("windows-installs");
@@ -643,6 +644,11 @@ fn windows_finds_the_chromium_family_operas_profile_and_store_installs() {
     chrome("imput/Helium/User Data", 80);
     firefox_dir(home.join("AppData/Roaming/zen"), 90);
     firefox_dir(home.join("AppData/Roaming/librewolf"), 100);
+    chrome(
+        "Packages/TheBrowserCompany.Dia_ttt1ap7aakyb4/LocalCache/Local/Dia/User Data",
+        110,
+    );
+    chrome("Dia/User Data", 120);
     write(home.join(".config/google-chrome/Default/Preferences"), "{}");
     firefox_dir(home.join(".mozilla/firefox"), 5);
     assert_eq!(
@@ -658,6 +664,8 @@ fn windows_finds_the_chromium_family_operas_profile_and_store_installs() {
             "Helium",
             "Zen",
             "LibreWolf",
+            "Dia (Microsoft Store)",
+            "Dia",
         ]
     );
     fs::remove_dir_all(home).unwrap();
