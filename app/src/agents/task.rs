@@ -20,8 +20,12 @@ use serde_json::Value;
 
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
-use super::{Agents, Client, Question, ToolResult, page, site, tools};
+use super::sign_in::Offer;
+use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
+use crate::agents::tier::Tier;
 use crate::shell::MenuEntry;
+
+pub mod ilo;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -76,10 +80,11 @@ pub enum State {
         resets: Option<SharedString>,
     },
     Stopped,
-    /// It couldn't go on: why, and the command that fixes it, if one does.
+    /// It couldn't go on: why, and whether its assistant's row fixes it, as it does when the
+    /// assistant isn't signed in or isn't installed.
     Failed {
         why: SharedString,
-        command: Option<&'static str>,
+        assistant: bool,
     },
 }
 
@@ -142,6 +147,8 @@ pub struct Conversation {
     pub answers: Vec<SharedString>,
     /// Whether its last line is the message the agent is writing, which comes in as it's written.
     pub writing: bool,
+    /// Its access, which the composer's chip shows and changes.
+    pub tier: Tier,
 }
 
 /// A line of a task's conversation.
@@ -160,6 +167,8 @@ pub enum Line {
         key: usize,
         failed: Option<SharedString>,
     },
+    /// ilo's own line, which only the app makes (ilo.rs).
+    Ilo(ilo::IloLine),
 }
 
 /// A stretch of the agent's work between two messages: a summary line, "Working · 5 steps" or
@@ -217,6 +226,8 @@ pub struct TraceStep {
     pub running: bool,
     pub failed: bool,
     pub opens: Opens,
+    /// The line under it, or empty: "With ilo's notes for GitHub" (#4122).
+    pub under: SharedString,
 }
 
 /// What a trace's line opens to.
@@ -249,6 +260,9 @@ pub struct Traced {
     pub picture: Option<Arc<gpui::Image>>,
     /// How a close ended when its page had a say.
     pub close: Option<tools::Close>,
+    /// The site whose notes its call's answer carried (#4122), by its note's name. From the
+    /// answer's own field, which only the app sets, never from the answer's text.
+    pub notes: Option<&'static str>,
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -410,8 +424,8 @@ pub struct Card {
     pub open: Vec<(u64, SharedString)>,
     /// Limit's Retry.
     pub retry: bool,
-    /// The command that fixes a failure.
-    pub command: Option<&'static str>,
+    /// A failure's fix, its assistant's row's own button: Sign in to …, Cancel or Get ….
+    pub fix: Option<(Cli, Offer)>,
 }
 
 impl Card {
@@ -452,6 +466,20 @@ pub enum TaskAction {
     /// The Archive's Delete from Archive, and ⌘Z's undoing of it.
     Delete,
     Undelete,
+    /// A failed card's Sign in to …, and its Cancel while that runs: the assistant's row's own.
+    SignIn,
+    CancelSignIn,
+    /// An ilo line's Take over: the tab is the user's.
+    TakeOver(u64),
+    /// A Stopped line's step up, or the composer's tier chip, up or down: only the user's press
+    /// sets a task's access.
+    SetTier(Tier),
+    /// A Sites line's Any site.
+    AnySite,
+    /// An ilo line's Hand back: the tab goes back to the agent.
+    HandBack(u64),
+    /// A step's Not now, by its line's key.
+    NotNow(usize),
 }
 
 /// A task the user dismissed, as the Library's Archived Tabs lists it among the tabs.
@@ -512,6 +540,10 @@ pub struct Tasks {
     )>,
     /// Where tasks run: a directory of their own each, under the profile's.
     pub dir: Option<PathBuf>,
+    /// The sign-ins under way and what each row says of its last.
+    pub(super) sign_ins: super::sign_in::SignIns,
+    /// Whether a look asked for while one ran waits for it to end, as after a sign-in.
+    pub(super) look_again: bool,
 }
 
 impl Agents {
@@ -606,6 +638,14 @@ impl Agents {
             TaskAction::OpenTab(tab) => return (self.open_result(agent, Some(tab), cx), None),
             TaskAction::Delete => self.delete_task(agent, true, cx),
             TaskAction::Undelete => self.delete_task(agent, false, cx),
+            TaskAction::SignIn => self.sign_in_for_task(agent, cx),
+            TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
+            // The surface's buttons, which the tier model wires (#4086 step 2).
+            TaskAction::TakeOver(_)
+            | TaskAction::SetTier(_)
+            | TaskAction::AnySite
+            | TaskAction::HandBack(_)
+            | TaskAction::NotNow(_) => {}
         }
         (None, None)
     }
@@ -690,6 +730,8 @@ impl Agents {
                 _ => Vec::new(),
             },
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
+            // The tier model (#4086 step 2) keeps each task's own.
+            tier: Tier::default(),
         })
     }
 
@@ -866,8 +908,13 @@ impl Agents {
             question,
             open,
             retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
-            command: match task.state {
-                State::Failed { command, .. } => command,
+            fix: match (&task.state, task.cli) {
+                (
+                    State::Failed {
+                        assistant: true, ..
+                    },
+                    Some(cli),
+                ) => self.card_offer(cli).map(|offer| (cli, offer)),
                 _ => None,
             },
         }
@@ -922,6 +969,7 @@ impl Agents {
     /// learning already. Once a show: Settings › Agents and ⌘T's ask call it as they first show.
     pub fn look_for_task_agents(&mut self, cx: &mut Context<Self>) {
         if self.tasks.looking {
+            self.tasks.look_again = true;
             return;
         }
         self.tasks.looking = true;
@@ -951,6 +999,10 @@ impl Agents {
                         .into_iter()
                         .find(|cli| agents.found(*cli) == Ready::SignedIn);
                     agents.tasks.default = ready.or(agents.tasks.default);
+                }
+                // A sign-in that ended while it looked may have changed what it found.
+                if std::mem::take(&mut agents.tasks.look_again) {
+                    agents.look_for_task_agents(cx);
                 }
                 cx.notify();
             });
@@ -995,7 +1047,7 @@ impl Agents {
         self.tasks.found.get(&cli)?.models.as_ref()
     }
 
-    /// Run tasks on, in Settings › Agents.
+    /// Run tasks with, in Settings › Agents.
     pub fn set_default_task_agent(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.tasks.default = Some(cli);
         self.save();
@@ -1270,6 +1322,7 @@ impl Agents {
                     kind: None,
                     picture: None,
                     close: None,
+                    notes: None,
                 });
             }
             Out::Ended(None) => {
@@ -1327,16 +1380,16 @@ impl Agents {
                 let why = format!("{} isn't signed in.", cli.name()).into();
                 State::Failed {
                     why,
-                    command: Some(cli.sign_in()),
+                    assistant: true,
                 }
             }
             Failure::Other(why) if why.contains("isn't installed") => State::Failed {
                 why: why.into(),
-                command: Some(cli.install()),
+                assistant: true,
             },
             Failure::Other(why) => State::Failed {
                 why: page::clip(&why, 200).into(),
-                command: None,
+                assistant: false,
             },
         };
         if let State::Limit { resets } = &state {
@@ -1799,6 +1852,7 @@ impl Agents {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         });
         // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
@@ -1903,6 +1957,7 @@ impl Agents {
         error: Option<String>,
         kind: Option<tools::Kind>,
         image: Option<String>,
+        notes: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
         let Some(key) = self.tracer(agent, call) else {
@@ -1942,6 +1997,7 @@ impl Agents {
             .find(|step| step.call == call && step.ended.is_none());
         let Some(step) = step else { return };
         step.ended = Some(at);
+        step.notes = notes;
         // An error's first paragraph: a wait's goes on with the page's outline.
         step.kind = kind.filter(|_| error.is_some());
         step.error = error.map(|error| {
@@ -3183,6 +3239,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             running: false,
             failed: false,
             opens: Opens::Nothing,
+            under: SharedString::default(),
         };
     }
     let description = match (&step.error, took) {
@@ -3214,6 +3271,12 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         running: step.ended.is_none(),
         failed: step.error.is_some(),
         opens,
+        // The app's own words for the app's own note: nothing of the answer's text is read.
+        under: (step
+            .notes
+            .and_then(|name| notes::NOTES.iter().find(|note| note.name == name)))
+        .map(|note| note.with().into())
+        .unwrap_or_default(),
     }
 }
 
@@ -3250,6 +3313,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             running: false,
             failed: false,
             opens: Opens::Steps(tabs),
+            under: SharedString::default(),
         };
     }
     let failed = tabs.iter().filter(|tab| tab.failed).count();
@@ -3300,6 +3364,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         running: running > 0,
         failed: failed > 0,
         opens: Opens::Steps(tabs),
+        under: SharedString::default(),
     }
 }
 

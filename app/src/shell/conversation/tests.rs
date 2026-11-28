@@ -7,7 +7,9 @@ use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, poin
 
 use super::Fold;
 
+use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
 use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
+use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 use crate::tokens::shell::conversation::{SITE, SITE_GAP};
@@ -28,7 +30,7 @@ fn card() -> Card {
         question: None,
         open: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 
@@ -42,6 +44,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         running,
         failed: false,
         opens: Opens::Nothing,
+        under: "".into(),
     }
 }
 
@@ -70,6 +73,7 @@ fn conversation(steps: usize) -> Conversation {
         open: None,
         answers: Vec::new(),
         writing: false,
+        tier: Default::default(),
     }
 }
 
@@ -912,5 +916,126 @@ fn a_held_pages_picture_says_why() {
     assert_eq!(
         picture_status(Some(&"Sign in to github.com".into()), None),
         Some("Needs you · Sign in to github.com".into())
+    );
+}
+
+/// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
+/// pages, drawn, and its view.
+fn stopped_at_order(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    Rc<Recorder>,
+    Entity<super::TalkView>,
+    &mut VisualTestContext,
+) {
+    let (shell, host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 7,
+            kind: IloKind::Stopped {
+                tab: 30,
+                at: "Place order".into(),
+                why: Why::Order,
+                tier: Tier::Work,
+                count: 1,
+            },
+            settled: false,
+        })],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    (shell, host, view, cx)
+}
+
+/// Where an ilo line's button was drawn, and since when it has stood there.
+fn ilo_button(
+    view: &Entity<super::TalkView>,
+    key: (usize, IloButton),
+    cx: &mut VisualTestContext,
+) -> Option<(gpui::Bounds<gpui::Pixels>, std::time::Instant)> {
+    view.read_with(cx, |view, _| view.ilo_drawn.borrow().get(&key).copied())
+}
+
+/// An ilo line is a kind of its own that only the app makes: what the agent writes, even ilo's
+/// words and its buttons' names, is the agent's text and draws no button.
+#[gpui::test]
+fn an_agents_text_never_draws_an_ilo_lines_buttons(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Said(
+            "ilo stopped Claude at “Place order”\n\nPlacing an order isn't part of Work on pages.\n\n\
+             Take over · Give Full access"
+                .into(),
+        )],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_drawn.borrow().is_empty()),
+        "the agent's text drew an ilo line's button"
+    );
+}
+
+/// A step up on a Stopped line takes no press until the line has stood a moment, as an agent
+/// decides when it comes; once it has, one press raises the task's access, with no dialog.
+#[gpui::test]
+fn a_step_up_takes_no_press_until_its_line_has_stood(cx: &mut TestAppContext) {
+    let (_shell, host, view, cx) = stopped_at_order(cx);
+    let raise = (7, IloButton::Raise(Tier::Full));
+    let (at, _) = ilo_button(&view, raise, cx).expect("Give Full access wasn't drawn");
+    assert!(
+        ilo_button(&view, (7, IloButton::TakeOver), cx).is_some(),
+        "Take over wasn't drawn"
+    );
+    host.take();
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert!(
+        !host.take().iter().any(|line| line.contains("SetTier")),
+        "a press as the line came raised the task"
+    );
+    // As if it had stood there since longer ago than the wait.
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(5);
+    view.update(cx, |view, _| {
+        view.ilo_drawn.borrow_mut().insert(raise, (at, long_ago));
+    });
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert_eq!(
+        host.take()
+            .into_iter()
+            .filter(|line| line.contains("SetTier"))
+            .collect::<Vec<_>>(),
+        vec!["task task-1 SetTier(Full)".to_string()],
+        "one press on a line that had stood didn't raise it to Full access"
+    );
+}
+
+/// No key presses an ilo line's button, wherever the keyboard is in the conversation: it reaches
+/// one only through the user's Focus command (#3955).
+#[gpui::test]
+fn no_key_presses_an_ilo_lines_button(cx: &mut TestAppContext) {
+    let (_shell, host, view, cx) = stopped_at_order(cx);
+    let raise = (7, IloButton::Raise(Tier::Full));
+    let (at, _) = ilo_button(&view, raise, cx).expect("Give Full access wasn't drawn");
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(5);
+    view.update(cx, |view, _| {
+        view.ilo_drawn.borrow_mut().insert(raise, (at, long_ago));
+    });
+    host.take();
+    for keys in ["enter", "space", "tab enter", "tab tab space", "cmd-enter"] {
+        cx.simulate_keystrokes(keys);
+    }
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
+        "a key pressed an ilo line's button"
     );
 }

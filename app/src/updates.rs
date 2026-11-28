@@ -11,10 +11,9 @@ use std::time::Instant;
 
 use gpui::{
     App, Bounds, Context, Global, Pixels, SharedString, Subscription, Window, canvas, div,
-    prelude::*, px, rgb,
+    prelude::*, px,
 };
 
-use crate::palette::NO_THEME_ACCENT;
 use crate::settings_rows::{
     Look, SLIDE, button, detailed_row, drawn, named_button, named_switch, switch,
 };
@@ -637,7 +636,7 @@ impl Render for NightlyRow {
                 named_switch(control, NIGHTLY_NAME, on)
             })
             .relative()
-            .child(switch(&self.look, on, slid, rgb(NO_THEME_ACCENT)))
+            .child(switch(&self.look, on, slid, self.look.on))
             .child(drawn(format!("switch {NIGHTLY}"), self.logged.clone()))
             .child(at)
             .on_click(cx.listener(move |row, _, _, cx| {

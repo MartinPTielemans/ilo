@@ -3,7 +3,7 @@
 // the keyboard's walk over the selectable rows and the submenu's open and close. Copyright Zed
 // Industries, Inc. Licensed under the GNU General Public License, version 3 or later.
 
-//! ilo's own context menu, the same on every platform (#324): an opaque panel of 24-pt rows, with
+//! ilo's own context menu, the same on every platform (#324): a panel of 24-pt rows, with
 //! submenus, keys, type-to-select, press-drag-release and a safe triangle on the way to a
 //! submenu. GPUI can't draw over the page's native view, so it's a window of its own that the host
 //! shows over the browser window, as its child, with the keyboard, as the command bar is
@@ -22,12 +22,16 @@ use gpui::{
 };
 
 use crate::{
-    elevation::{Level as Elevation, Reach},
+    elevation::Reach,
     shell::{MenuEntry, Shell, keystroke_label},
     text_input::FieldMenu,
 };
 
 pub use crate::tokens::menu::*;
+
+/// The panel's colour, 0xRRGGBBAA: what floats over a dark or a light window (#4090).
+pub const DARK_FILL: u32 = (crate::tokens::palette::OVERLAY_DARK << 8) | 0xff;
+pub const LIGHT_FILL: u32 = (crate::tokens::palette::OVERLAY_LIGHT << 8) | 0xff;
 
 /// A release this close to the press that opened the menu leaves it open, as a click.
 const DRAG_SLOP: f32 = 4.;
@@ -67,9 +71,7 @@ const LIGHT: Palette = Palette {
     destructive: LIGHT_DESTRUCTIVE,
 };
 
-/// The row under the pointer or the keys: the Space's accent, the accent pressed while the button
-/// is down on it, and the label the palette solves on the accent, which the press moves the accent
-/// away from, so it reads at least as well pressed.
+/// A plate under a label: its fill, the fill while the button is down on it, and the label on it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Highlight {
     pub fill: Rgba,
@@ -78,11 +80,27 @@ pub struct Highlight {
 }
 
 impl Highlight {
+    /// The Space's accent, pressed moved away from the label the palette solves on it, so it reads
+    /// at least as well pressed: what capture's markup marks chosen.
     pub fn of(palette: &crate::palette::Palette) -> Self {
         Highlight {
             fill: palette.accent,
             pressed: palette.accent_pressed().into(),
             label: palette.accent_label,
+        }
+    }
+
+    /// The row under the pointer or the keys in a `light` or dark menu: a neutral plate in the
+    /// label's ink, never the Space's accent (#4090), under the label in its whole ink.
+    pub fn plate(light: bool) -> Self {
+        let ink = rgba(if light { LIGHT_LABEL } else { DARK_LABEL });
+        Highlight {
+            fill: Rgba { a: PLATE, ..ink },
+            pressed: Rgba {
+                a: PLATE_PRESSED,
+                ..ink
+            },
+            label: Rgba { a: 1., ..ink },
         }
     }
 }
@@ -102,12 +120,12 @@ impl Swatch {
     }
 }
 
-/// The menu's look: the panel's material, Ink in a dark window and Paper in a light one, and the
-/// highlight in its Space's accent.
+/// The menu's look: the panel's material, Ink in a dark window and Paper in a light one, and its
+/// Space's accent, which capture's markup marks what's chosen in; a menu's rows take the plate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look {
     pub light: bool,
-    pub highlight: Highlight,
+    pub accent: Highlight,
 }
 
 impl Default for Look {
@@ -126,13 +144,77 @@ impl Look {
     pub fn plain(light: bool) -> Self {
         Look {
             light,
-            highlight: Highlight::of(&crate::palette::Palette::default()),
+            accent: Highlight::of(&crate::palette::Palette::default()),
         }
     }
 
     pub fn palette(self) -> &'static Palette {
         if self.light { &LIGHT } else { &DARK }
     }
+
+    /// The row under the pointer or the keys.
+    pub fn plate(self) -> Highlight {
+        Highlight::plate(self.light)
+    }
+
+    /// The panel as drawn: frosted where the host blurs under the menu's window (#4090).
+    pub fn fill(self) -> Rgba {
+        let tone = match self.light {
+            true => crate::palette::Tone::Light,
+            false => crate::palette::Tone::Dark,
+        };
+        crate::palette::Float::Menu.fill(tone)
+    }
+}
+
+/// `panel` in a `light` or dark menu's glass (#4090): its fill, frosted where the host blurs under
+/// it, a light from the top, the rim inside its edge, and where it's `shadowed`, `radius` corners,
+/// its shadows and the outline. Its children go over the light.
+pub fn glass<E: Styled + ParentElement + gpui::prelude::FluentBuilder>(
+    panel: E,
+    light: bool,
+    radius: f32,
+    shadowed: bool,
+) -> E {
+    let look = Look::plain(light);
+    let (top, end) = match light {
+        true => (LIGHT_TOP_LIGHT, LIGHT_TOP_LIGHT_END),
+        false => (DARK_TOP_LIGHT, DARK_TOP_LIGHT_END),
+    };
+    // GPUI draws a border over what's inside, and an inset shadow from the panel's edge under it,
+    // so a line inside the 1-pt rim lies 2 pt in.
+    let inner = |color: u32, y: f32, spread: f32| gpui::BoxShadow {
+        color: rgba(color).into(),
+        offset: point(px(0.), px(y)),
+        blur_radius: px(0.),
+        spread_radius: px(spread),
+        inset: true,
+    };
+    let mut shadows = match shadowed {
+        true => crate::elevation::menu_shadow(light),
+        false => Vec::new(),
+    };
+    shadows.push(match light {
+        true => inner(LIGHT_INNER_RIM, 0., 2.),
+        false => inner(DARK_TOP_LINE, 2., 0.),
+    });
+    panel
+        .when(shadowed, |panel| panel.rounded(px(radius)))
+        .bg(look.fill())
+        .border_1()
+        .border_color(rgba(look.palette().rim))
+        .shadow(shadows)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .when(shadowed, |light| light.rounded(px(radius)))
+                .bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(rgba(top), 0.),
+                    gpui::linear_color_stop(rgba(end), TOP_LIGHT_STOP),
+                )),
+        )
 }
 
 /// What the menu asks of its window. Both are called once the menu's update is over, as putting a
@@ -249,17 +331,30 @@ pub(crate) struct Level {
     bounds: Bounds<Pixels>,
     /// Each item's top, from the panel's top.
     tops: Vec<f32>,
-    /// Whether a column for checks comes before the titles.
+    /// Whether a column for checks comes before the titles: a level of choices, in quiet rows.
     checks: bool,
 }
 
+/// How tall `entry` stands in its level, a line or a row, quiet in a level of choices.
+fn row_height(entry: &MenuEntry, choices: bool) -> f32 {
+    match (entry.title.is_empty(), choices) {
+        (true, _) => LINE,
+        (false, true) => QUIET_ROW,
+        (false, false) => ROW,
+    }
+}
+
 impl Level {
+    /// The panel's corner and its rows', quiet in a level of choices.
+    fn radii(&self) -> (f32, f32) {
+        match self.checks {
+            true => (QUIET_RADIUS, QUIET_ROW_RADIUS),
+            false => (RADIUS, ROW_RADIUS),
+        }
+    }
+
     fn row_bounds(&self, at: usize, entries: &[MenuEntry]) -> Bounds<Pixels> {
-        let height = if entries[self.items[at]].title.is_empty() {
-            LINE
-        } else {
-            ROW
-        };
+        let height = row_height(&entries[self.items[at]], self.checks);
         let origin = self.bounds.origin + point(px(PADDING), px(self.tops[at]));
         Bounds::new(
             origin,
@@ -380,9 +475,8 @@ fn clamped(origin: Point<Pixels>, size: (f32, f32), area: Bounds<Pixels>) -> Poi
 /// so a control can open it with its foot where it wants.
 pub(crate) fn height(entries: &[MenuEntry]) -> f32 {
     let top = (entries.iter()).filter(|entry| entry.parent.is_none() && !entry.alternate);
-    let rows: f32 = top
-        .map(|entry| if entry.title.is_empty() { LINE } else { ROW })
-        .sum();
+    let choices = top.clone().any(|entry| entry.checked);
+    let rows: f32 = top.map(|entry| row_height(entry, choices)).sum();
     PADDING + rows + PADDING
 }
 
@@ -407,17 +501,13 @@ pub(crate) fn lay_out(
         let items: Vec<usize> = (0..entries.len())
             .filter(|&at| entries[at].parent == parent && !entries[at].alternate)
             .collect();
+        let checks = items.iter().any(|&item| entries[item].checked);
         let mut tops = Vec::with_capacity(items.len());
         let mut y = PADDING;
         for &item in &items {
             tops.push(y);
-            y += if entries[item].title.is_empty() {
-                LINE
-            } else {
-                ROW
-            };
+            y += row_height(&entries[item], checks);
         }
-        let checks = items.iter().any(|&item| entries[item].checked);
         let size = (panel_width(entries, &items, checks, width_of), y + PADDING);
         let origin = match parent {
             None => {
@@ -461,7 +551,7 @@ pub(crate) fn lay_out(
             checks,
         });
     }
-    let frame = framed(&levels, Elevation::Popover.reach());
+    let frame = framed(&levels, crate::elevation::menu_reach());
     Layout { levels, frame }
 }
 
@@ -479,7 +569,10 @@ pub(crate) fn lay_out_over(
         return layout;
     };
     let lead = if root.checks { CHECK + GAP } else { 0. };
-    let title = root.row_bounds(row, entries).origin + point(px(ROW_X + lead), px(0.));
+    // A taller row centres its title lower, so its title, not its top, lands on the button's.
+    let bounds = root.row_bounds(row, entries);
+    let lower = (f32::from(bounds.size.height) - ROW) / 2.;
+    let title = bounds.origin + point(px(ROW_X + lead), px(lower));
     lay_out(entries, at - (title - root.bounds.origin), area, width_of)
 }
 
@@ -1537,6 +1630,7 @@ impl ContextMenu {
         let entry = &tracking.entries[as_held(&tracking.entries, item, shown.alt)];
         let bounds = lay.row_bounds(row, &tracking.entries);
         let top = bounds.origin.y - lay.bounds.origin.y;
+        let (_, row_radius) = lay.radii();
         let placed = div()
             .absolute()
             .left(px(PADDING))
@@ -1551,7 +1645,7 @@ impl ContextMenu {
                 .into_any_element();
         }
         let lit = lit == Some(item);
-        let highlight = shown.look.highlight;
+        let highlight = shown.look.plate();
         let (fill, on_fill): (Rgba, Rgba) = match entry.destructive {
             true => (rgba(DESTRUCTIVE_FILL), rgba(DESTRUCTIVE_LABEL)),
             false => (highlight.fill, highlight.label),
@@ -1636,7 +1730,7 @@ impl ContextMenu {
         let (position, of) = (titled(&lay.items[..row]) + 1, titled(&lay.items));
         placed
             .id(("menu-item", item))
-            .rounded(px(ROW_RADIUS))
+            .rounded(px(row_radius))
             .px(px(ROW_X))
             .flex()
             .items_center()
@@ -1651,7 +1745,7 @@ impl ContextMenu {
                     div()
                         .absolute()
                         .inset_0()
-                        .rounded(px(ROW_RADIUS))
+                        .rounded(px(row_radius))
                         .bg(rgba(PRESSED)),
                 )
             })
@@ -1712,7 +1806,6 @@ impl ContextMenu {
         let tracking = &shown.tracking;
         let open = tracking.open[depth];
         let level = &tracking.layout.levels[open.level];
-        let palette = shown.look.palette();
         let at = level.bounds.origin - shown.origin;
         let next = tracking.open.get(depth + 1).map(|next| next.level);
         let rows = (0..level.items.len()).map(|row| {
@@ -1723,22 +1816,15 @@ impl ContextMenu {
         let name = level.parent.map_or(SharedString::from("Menu"), |parent| {
             tracking.entries[parent].title.clone()
         });
-        div()
+        let panel = div()
             .id(("menu", open.level))
             .absolute()
             .left(at.x)
             .top(at.y)
             .w(level.bounds.size.width)
-            .h(level.bounds.size.height)
-            // Where the window can't blend, a round corner or a shadow would show black.
-            .when(shown.blends, |panel| {
-                panel
-                    .rounded(px(RADIUS))
-                    .shadow(Elevation::Popover.shadow())
-            })
-            .bg(rgba(palette.fill))
-            .border_1()
-            .border_color(rgba(palette.rim))
+            .h(level.bounds.size.height);
+        // Where the window can't blend, a round corner or a shadow would show black.
+        glass(panel, shown.look.light, level.radii().0, shown.blends)
             .text_size(px(TEXT))
             .children(rows)
             // The root level's rows go under the window's own node, which has the keyboard.

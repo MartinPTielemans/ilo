@@ -15,9 +15,9 @@ use crate::tooltip::{self, Anchor, Tip};
 
 use super::{
     Curve, DEVELOPER_TILE, DIVIDER, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X,
-    FOOTER_HEIGHT, HAIRLINE, HOVERED, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE,
+    FOOTER_HEIGHT, HAIRLINE, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE,
     SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP,
-    TILE_HEIGHT, TILE_HOVERED, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING,
+    TILE_HEIGHT, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING,
     TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme,
     access::Accessible, developer_outline, rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
@@ -27,7 +27,7 @@ use crate::palette::{Palette, Tone};
 /// and a list longer already, from before or an import, is kept. A split view counts as one.
 pub(super) const MOST_FAVORITES: usize = 12;
 
-use crate::tokens::shell::SPLIT_TILE_FAVICON;
+use crate::tokens::shell::{LIGHT_TILE, SPLIT_TILE_FAVICON};
 
 /// Who shares the favorites, as Settings lists the choices. Each is the core's BC_FAVORITES_ value
 /// of the same name, which the bin checks at compile time.
@@ -133,16 +133,16 @@ impl Shell {
         let (tab, [left, top, width, height, radius], turned) = self.turning_shape()?;
         let selected = tab == self.selected && self.shown_has_plate();
         let row_fill = if selected {
-            self.palette.selected(0.)
+            self.palette.shown(0.)
         } else {
-            self.palette.plate(HOVERED)
+            self.palette.hovered_row()
         };
         let row_fill = self.window_fill().blend(row_fill);
         let theme = selected.then(|| self.tile_theme(tab)).flatten();
         let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
         let tile_fill = match selected {
             true => shown,
-            false => self.palette.plate(TILE_HOVERED),
+            false => tile_fill(&self.palette, false, 1.),
         };
         let (ring_width, ring) = match selected {
             true => (ring_width, ring),
@@ -864,12 +864,22 @@ impl Shell {
     }
 }
 
-/// A tile's fill while it isn't shown, `hover` of the way to its hover fill: a step firmer for a
-/// tab in Developer Mode.
+/// A tile's fill while it isn't shown, `hover` of the way to its hover fill: the ink's quiet plate
+/// on a dark window and white on a light one, a step firmer for a tab in Developer Mode.
 fn tile_fill(palette: &Palette, developer: bool, hover: f32) -> Hsla {
-    let rest = if developer { DEVELOPER_TILE } else { TILE };
-    let under = crate::palette::state_alpha(rest, crate::palette::STATE_HOVERED);
-    palette.plate(rest + (under - rest) * hover)
+    let (color, rest) = match palette.tone {
+        Tone::Dark => (palette.plate(1.), TILE),
+        Tone::Light => (gpui::white(), LIGHT_TILE),
+    };
+    let rest = if developer {
+        rest + DEVELOPER_TILE - TILE
+    } else {
+        rest
+    };
+    // The ladder's hover step over the resting plate, uncapped, as a light tile's white is
+    // already past the ladder's top.
+    let under = rest + crate::palette::STATE_HOVERED * (1. - rest);
+    color.opacity(rest + (under - rest) * hover)
 }
 
 /// The selected tile's fill, ring width and ring: a colourful icon's ring is drawn with the blurred

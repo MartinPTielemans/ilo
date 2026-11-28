@@ -67,6 +67,11 @@ struct Made {
     no_dialog: std::cell::Cell<bool>,
     /// Words the core refuses with in place of its own, as a later core may word them.
     reworded: RefCell<Option<&'static str>>,
+    /// The sign-in pages opened, each with its tab, and the tabs and windows closed; and whether
+    /// none can open.
+    sign_in_pages: RefCell<Vec<(String, u64)>>,
+    sign_in_closed: RefCell<Vec<(u64, u64)>>,
+    no_sign_in_page: std::cell::Cell<bool>,
 }
 
 impl Made {
@@ -402,6 +407,22 @@ impl Browser for Made {
             .borrow_mut()
             .push((profile, read, url.into(), max_bytes, timeout_ms));
     }
+
+    /// Each page in a tab of its own, 700 on across the tests, which share which tabs are quiet, in
+    /// a window numbered as the tab less 600.
+    fn open_sign_in(&self, url: &str, _: &mut App) -> Option<(u64, u64)> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(700);
+        if self.no_sign_in_page.get() {
+            return None;
+        }
+        let tab = NEXT.fetch_add(1, Ordering::SeqCst);
+        self.sign_in_pages.borrow_mut().push((url.into(), tab));
+        Some((tab, tab - 600))
+    }
+
+    fn close_sign_in(&self, tab: u64, window: u64, _: &mut App) {
+        self.sign_in_closed.borrow_mut().push((tab, window));
+    }
 }
 
 /// The clients' configs as Connect and Disconnect left them.
@@ -417,6 +438,31 @@ struct Configs {
     looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
     /// Whether the user's shell leaves out the `ilo` command's folder.
     unsearched: Mutex<bool>,
+    /// Each sign-in started, as a stand-in the test says what it hears through; the CLIs whose
+    /// sign-in was cancelled; those signed out; and what the next sign-out answers, else Ok.
+    sign_ins: Mutex<Vec<(crate::agents::runner::Cli, SignInHeard)>>,
+    sign_ins_cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+    signed_out: Mutex<Vec<crate::agents::runner::Cli>>,
+    sign_out_answers: Mutex<Option<Result<(), Option<String>>>>,
+    /// Whether the next sign-in can't start.
+    sign_in_fails: Mutex<bool>,
+}
+
+type SignInHeard = futures::channel::mpsc::UnboundedSender<crate::agents::sign_in::Heard>;
+
+/// A sign-in in the tests: a cancel is recorded, and ends it as a CLI's does.
+struct StandInSignIn {
+    cli: crate::agents::runner::Cli,
+    heard: SignInHeard,
+    cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+}
+
+impl crate::agents::sign_in::Session for StandInSignIn {
+    fn cancel(&mut self) {
+        use crate::agents::sign_in::{Ended, Heard};
+        self.cancelled.lock().unwrap().push(self.cli);
+        _ = self.heard.unbounded_send(Heard::Ended(Ended::Cancelled));
+    }
 }
 
 impl Clients for Configs {
@@ -455,6 +501,38 @@ impl Clients for Configs {
             },
             |(_, found)| found.clone(),
         )
+    }
+
+    /// The tests never start a CLI of this computer's: the test says what each sign-in hears.
+    fn start_sign_in(
+        &self,
+        cli: crate::agents::runner::Cli,
+        _: &crate::agents::ready::Found,
+        heard: SignInHeard,
+    ) -> std::io::Result<Box<dyn crate::agents::sign_in::Session>> {
+        if std::mem::take(&mut *self.sign_in_fails.lock().unwrap()) {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        self.sign_ins.lock().unwrap().push((cli, heard.clone()));
+        let cancelled = self.sign_ins_cancelled.clone();
+        Ok(Box::new(StandInSignIn {
+            cli,
+            heard,
+            cancelled,
+        }))
+    }
+
+    fn sign_out(
+        &self,
+        cli: crate::agents::runner::Cli,
+        _: &crate::agents::ready::Found,
+    ) -> Result<(), Option<String>> {
+        self.signed_out.lock().unwrap().push(cli);
+        self.sign_out_answers
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or(Ok(()))
     }
 }
 
@@ -5951,6 +6029,7 @@ mod tasks {
     use super::*;
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::{self, Cli, Failure, Out};
+    use crate::agents::sign_in::Offer;
     use crate::agents::task::{AskedOn, Dot, State, TaskAction};
 
     /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
@@ -6016,6 +6095,13 @@ mod tasks {
             agents.tasks.default = Some(Cli::Claude);
         });
         (agents, browser)
+    }
+
+    /// What the last look found of Claude Code.
+    fn set_found(agents: &Entity<Agents>, ready: Ready, cx: &mut TestAppContext) {
+        agents.update(cx, |agents, _| {
+            agents.tasks.found.get_mut(&Cli::Claude).unwrap().ready = ready
+        });
     }
 
     fn page() -> Option<AskedOn> {
@@ -6243,12 +6329,12 @@ mod tasks {
     fn a_cli_not_installed_says_how_to_install_it(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         start(&agents, "Find a flight", cx);
+        // As the look its failure starts finds it.
+        set_found(&agents, Ready::NotFound, cx);
         let card = card_of(&agents, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
-        assert_eq!(
-            card.command,
-            Some("npm install -g @anthropic-ai/claude-code")
-        );
+        // Its row's own Get.
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
         assert_eq!(card.dot, Dot::Ended);
     }
 
@@ -7028,11 +7114,19 @@ mod tasks {
         let listed = agents.read_with(cx, |agents, _| agents.ask_agents());
         assert_eq!(listed[0].resets.as_deref(), Some(resets.as_str()));
         said(&agents, &agent, Out::Ended(Some(Failure::SignedOut)), cx);
+        // As the look its failure starts finds it: the card offers its row's own Sign in.
+        set_found(&agents, Ready::SignedOut, cx);
         let card = card_of(&agents, cx);
         assert_eq!(
-            (card.status.as_ref(), card.command),
-            ("Claude isn't signed in.", Some("claude auth login"))
+            (card.status.as_ref(), card.fix),
+            (
+                "Claude isn't signed in.",
+                Some((Cli::Claude, Offer::SignIn))
+            )
         );
+        // Signed in since, it offers nothing more.
+        set_found(&agents, Ready::SignedIn, cx);
+        assert_eq!(card_of(&agents, cx).fix, None);
     }
 
     #[gpui::test]
@@ -7106,6 +7200,7 @@ mod tasks {
             error,
             kind: result.kind,
             image: result.image.clone(),
+            notes: result.notes.map(|note| note.name),
         };
         agents.update(cx, |agents, cx| agents.handle(answered, cx));
         result
@@ -7514,6 +7609,7 @@ mod tasks {
             kind: Some(Kind::NotWebPage),
             picture: None,
             close: None,
+            notes: None,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -7557,6 +7653,7 @@ mod tasks {
                 kind,
                 picture: None,
                 close: None,
+                notes: None,
             };
             let lines = fold(&[], &[failed], true, false, None);
             let [Line::Trace(trace)] = lines.as_slice() else {
@@ -7737,6 +7834,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -7807,6 +7905,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -7845,6 +7944,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         };
         let messages = [Message {
             who: Who::User,
@@ -8387,6 +8487,7 @@ mod sessions {
             error: None,
             kind: None,
             image: None,
+            notes: None,
         };
         agents.update(cx, |agents, cx| agents.handle(event, cx));
     }
@@ -9651,6 +9752,7 @@ mod sessions {
                 error: None,
                 kind: None,
                 image: None,
+                notes: None,
             };
             agents.update(cx, |agents, cx| agents.handle(event, cx));
             let closed = Event::Closed {
@@ -10222,6 +10324,8 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod notes;
+mod sign_ins;
 mod uploads;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
