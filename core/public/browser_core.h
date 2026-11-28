@@ -1175,6 +1175,11 @@ typedef struct bc_host {
   // that a window shows, or on its dialog, such as Chrome's warning before http. The page or the
   // dialog still gets the press. Not asked for a user's tab.
   void (*tab_page_pressed)(void* context, bc_id tab);
+  // The page of an agent's tab has the keyboard in a field, or no longer does: its focused element
+  // takes text, as bc_key.editing says, while its window is key and the page, not the UI, has the
+  // keyboard. Said only when it changes, and false as the tab closes or leaves the agent's Space.
+  // Never for a user's tab. The app holds the agent's next act on the tab meanwhile (#4462).
+  void (*tab_page_in_field)(void* context, bc_id tab, bool in_field);
   // Zap (bc_tab_boost_zap) took a left press on the tab's page: |selector| is a CSS selector for
   // what was under it, for the app to add to the site's Boost, or null for the body or nothing.
   void (*tab_boost_zapped)(void* context, bc_id tab, const char* selector);

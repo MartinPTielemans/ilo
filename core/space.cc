@@ -18,6 +18,7 @@
 #include "browser_core/boost_colors.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
+#include "browser_core/page_in_field_rule.h"
 #include "browser_core/page_log_rule.h"
 #include "browser_core/session.h"
 
@@ -1258,6 +1259,8 @@ void Space::ReportChanged() {
                        // A tab that came to an agent's Space is heard for its page_log, and one
                        // that left it isn't any more.
                        PageLogsSpacesChanged();
+                       // One kept from an agent's Space lets the field its page has go.
+                       PageInFieldsSpacesChanged();
                        if (FromId(id) && Host().space_changed) {
                          Host().space_changed(Host().context, id);
                        }
