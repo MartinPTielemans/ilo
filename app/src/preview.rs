@@ -3144,6 +3144,18 @@ fn main() {
                         });
                         shell.set_favicon(tab, favicon, cx);
                     }
+                    // PREVIEW_NOTIFICATIONS=<count> gives the first favorite unseen notifications,
+                    // as a page that posted them while its tab wasn't shown, for its badge.
+                    if let Ok(count) = std::env::var("PREVIEW_NOTIFICATIONS") {
+                        if let Ok(count) = count.parse::<u32>() {
+                            let tab = favorites[0];
+                            let page = Page {
+                                notifications: count,
+                                ..shell.page(tab)
+                            };
+                            shell.set_page(tab, page, cx);
+                        }
+                    }
                     for (index, (title, url)) in TABS.iter().enumerate() {
                         let tab = index as u64 + 1;
                         // PREVIEW_RECENT's pinned tab is on GitHub, for its card's rows.

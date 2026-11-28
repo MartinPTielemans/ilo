@@ -45,6 +45,14 @@ fn rows() -> Vec<Entry> {
         row(
             Section::TabsAndSidebar,
             None,
+            "Show unseen notifications on favorites",
+            Some(
+                "A favorite's tile counts the notifications its page posted while the tab wasn't shown.",
+            ),
+        ),
+        row(
+            Section::TabsAndSidebar,
+            None,
             "Sidebar position",
             Some("The side of the window the sidebar and the window's buttons are on."),
         ),
@@ -93,6 +101,21 @@ fn pip_finds_the_mini_player_by_another_name() {
     assert_eq!(names("pip"), ["Mini Player"]);
     assert_eq!(names("picture"), ["Mini Player"]);
     assert_eq!(names("link prev"), ["Peek"]);
+}
+
+/// The row's other names hold its sides, as Sidebar position's do (#2407): "badges" and the
+/// words of its name find it, and the notifications question in Privacy stays its own row.
+#[test]
+fn badges_find_the_favorites_row_by_another_name() {
+    assert_eq!(names("badges"), ["Show unseen notifications on favorites"]);
+    assert_eq!(
+        names("notification count"),
+        ["Show unseen notifications on favorites"]
+    );
+    assert_eq!(
+        names("unseen notifications"),
+        ["Show unseen notifications on favorites"]
+    );
 }
 
 /// The drawings have no words to find, so the row's other names hold its sides: either side's

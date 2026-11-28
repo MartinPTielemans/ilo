@@ -1379,6 +1379,20 @@ bool Tab::muted() const {
   return web_contents() ? web_contents()->IsAudioMuted() : unloaded_ && unloaded_->muted;
 }
 
+void Tab::NotificationPosted(const std::string& notification) {
+  if (!notifications_.Posted(notification)) {
+    return;
+  }
+  ReportStateSoon();
+}
+
+void Tab::Shown() {
+  if (!notifications_.Shown()) {
+    return;
+  }
+  ReportStateSoon();
+}
+
 void Tab::DidOpenRequestedURL(content::WebContents* new_contents,
                               content::RenderFrameHost* source_render_frame_host,
                               const GURL& url,
@@ -1498,6 +1512,7 @@ void Tab::ReportState() {
         .loading = false,
         .unloaded = true,
         .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
+        .notifications = notifications(),
         .audible = false,
         .muted = muted(),
         .icon = icon_.c_str(),
@@ -1551,6 +1566,7 @@ void Tab::ReportState() {
       .loading = page ? page->loading() : contents->ShouldShowLoadingUI(),
       .unloaded = !page && (history.NeedsReload() || waiting_),
       .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
+      .notifications = notifications(),
       .audible = page ? page->audible() : audible && audible->WasRecentlyAudible(),
       .muted = page ? page->muted() : contents->IsAudioMuted(),
       .volume = volume_,

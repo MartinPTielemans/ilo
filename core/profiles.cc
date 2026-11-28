@@ -26,6 +26,7 @@
 #include "browser_core/favorites.h"
 #include "browser_core/history_deletions.h"
 #include "browser_core/host.h"
+#include "browser_core/notifications.h"
 #include "browser_core/search.h"
 #include "browser_core/session.h"
 #include "browser_core/space.h"
@@ -347,6 +348,7 @@ void UseProfile(Profile* profile) {
   GiveArchiveDefault(profile);
   ObserveDownloads(profile);
   ObserveExtensions(profile);
+  ObserveNotifications(profile);
   ObserveHistoryDeletions(profile);
   FollowProxy(profile);
   ApplyAutoPictureInPicture(/*changed=*/false);

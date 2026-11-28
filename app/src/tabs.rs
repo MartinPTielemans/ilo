@@ -348,6 +348,7 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         loading: state.loading,
         unloaded: state.unloaded,
         away_from_pinned_url: state.away_from_pinned_url,
+        notifications: state.notifications as u32,
         audible: state.audible,
         muted: state.muted,
         volume: Volume(state.volume as f32),

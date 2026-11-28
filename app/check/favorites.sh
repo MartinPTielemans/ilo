@@ -53,6 +53,26 @@ tile="114 114"
 tiled_row() {
   echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
 }
+# Ends the run when another app has taken the Mac, as the badges guards below do.
+skip_cards() {
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the hover cards weren't checked"
+  exit 0
+}
+# expect, for a card line: another app taking the Mac mid-wait closes the card with the keyboard
+# (#968), so the wait skips the run instead of reading the close as a failure the app never made.
+expect_card() {
+  wait_begins
+  for _ in $(seq 100); do
+    logged "$1" "${3:-}" && return 0
+    since "${3:-}" | grep -q '^browser: app activated ' && skip_cards
+    exited_without "$1" "$2" "${3:-}"
+    sleep 0.1
+  done
+  ran_out "$1" "${3:-$step}"
+  fail "$2"
+}
 open_from_bar "http://localhost:$port/two.html"
 b=$tab
 expect_tabs "$b $a" "$b" "after opening a tab"
@@ -93,17 +113,17 @@ expect "^browser: today $b\$" "the favorite is still in Today: Today is \"$(toda
 # be before the move onto it. It's the tab shown, so its card has no picture, and a favorite's only
 # button takes it out of the favorites.
 send move $tile
-expect "^browser: hover card shown $a unfavorite none\$" \
+expect_card "^browser: hover card shown $a unfavorite none\$" \
   "resting on the tile the row was dropped on didn't show its card" "$released"
 send move 100 400
 expect '^browser: hover card hidden$' "the pointer leaving the tile didn't hide its card"
 # The press showed the favorite, so the click on its tile below has a tab to change from.
 switch "2 cmd" "$b"
 send move $tile
-expect "^browser: hover card shown $a unfavorite \(picture\|favicon\)\$" \
+expect_card "^browser: hover card shown $a unfavorite \(picture\|favicon\)\$" \
   "resting on the tile again didn't show its card"
-expect '^browser: hover card window shown$' "the tile's card didn't show"
-expect '^browser: hover card settled$' "the tile's card didn't come to rest"
+expect_card '^browser: hover card window shown$' "the tile's card didn't show"
+expect_card '^browser: hover card settled$' "the tile's card didn't come to rest"
 # It starts at the tile's top, 90 down, right of the tile's middle, beside the rows, and the window
 # the host put over the page is where the UI asked.
 since_move() {
@@ -603,9 +623,9 @@ fi
 switch "1 cmd" "$a"
 # Two tiles across the sidebar: the split's is the second, 118 in and 102 wide.
 send move 169 113
-expect "^browser: hover card shown $x unfavorite \(picture\|favicon\)\$" \
+expect_card "^browser: hover card shown $x unfavorite \(picture\|favicon\)\$" \
   "resting on the split's tile didn't show its card"
-expect '^browser: hover card settled$' "the split's card didn't settle"
+expect_card '^browser: hover card settled$' "the split's card didn't settle"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-split-card.png" || fail "no window to capture"
 send move $page_point
 post rightclick 169 113
@@ -701,6 +721,7 @@ card_settled() {
   for _ in $(seq 100); do
     [ "$(grep -E '^browser: hover card (settled|hidden)$' "$log" | tail -1)" = 'browser: hover card settled' ] &&
       return 0
+    since | grep -q '^browser: app activated ' && skip_cards
     sleep 0.1
   done
   fail "$1"
@@ -709,8 +730,8 @@ card_settled() {
 # inside the window, placed where the UI asked. Sets $left to where it starts.
 beside() {
   send move $1 110
-  expect "^browser: hover card shown $2 " "resting on the tile at $1 didn't show tab $2's card"
-  expect '^browser: hover card window at ' "tab $2's card wasn't put over the window"
+  expect_card "^browser: hover card shown $2 " "resting on the tile at $1 didn't show tab $2's card"
+  expect_card '^browser: hover card window at ' "tab $2's card wasn't put over the window"
   asked=$(since_move '^browser: hover card at ')
   placed=$(since_move '^browser: hover card window at ')
   echo "$asked $placed" | awk -v window=$(drawn_width) '
@@ -796,7 +817,225 @@ expect '^browser: more settings$' "a click on Chromium settings didn't run it"
 expect '^browser: settings hidden$' "Chromium settings didn't hide Settings"
 expect '^browser: loaded [0-9]* chrome://settings/$' \
   "Chromium settings didn't open them"
-# The warning stayed off, so ⌘Q quits without asking. It's the driver's last command.
+# A favorite's tile counts its page's notifications the user hasn't seen and draws the count as a
+# badge (#679). The badges page posts one each time it hides, and once as it loads already hidden,
+# so a tab that never comes up, as an agent's, posts too. A relaunch brings a favorite back on its
+# pinned URL, whatever page it was showing at the quit, so each of the two relaunches below puts
+# the badges page in the favorite it shows.
+printf '%s' '<title>loading</title><script src="painted.js"></script><script>
+let posted = 0;
+const post = () => {
+  posted++;
+  const note = new Notification("ilo check " + posted, {tag: "check " + posted});
+  note.onclick = () => focus();
+  document.title = "badges posted " + posted;
+};
+painted(() => document.title = "badges ready");
+document.onvisibilitychange = () => {
+  if (!document.hidden) return;
+  post();
+};
+if (document.hidden) post();
+</script>' > "$out/site/badges.html"
+# A click on the favorite's tile, the first of the three at the sidebar's top, at 41 114, shows
+# it, whatever tab the Chromium settings left shown, so its page can go to the badges page.
+send front
+send click 41 114
+expect '^browser: command select via favorite$' "a click on the favorite's tile didn't show it"
+go_from_bar "${site}badges.html"
+await '^browser: title [0-9][0-9]* badges ready$' || fail "the badges page didn't paint"
+# The warning stayed off, so ⌘Q quits without asking, saving the favorite shown with the Spaces.
+echo "key q cmd" >&3
+exec 3>&-
+await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
+exited
+grep -q '^browser: dialog shown Quit' "$log" && fail "⌘Q asked first with the warning off"
+
+# The Mac may have come back in use as the run went, and the notifications the rest of this run
+# posts would cover it, so the rest is skipped, as the run is when it begins in use. The badges
+# section reads the state again at each tab key it sends: an app that isn't the active one can't
+# take the keyboard, so the keys its driver posts route by the menu bar, whose ⌘2 runs Capture
+# instead of selecting the tab.
+if [ "$active" != 1 ]; then
+  echo "skip: the Mac is in use, so the badges weren't checked"
+  exit 0
+fi
+
+# The site may notify, in the profile, before the app reads it, and not after the run: the app is
+# down, so its permission goes in as the notifications run's does.
+MSYS2_ARG_CONV_EXCL='*' python3 -I - "$(native_path "$profile_dir/Default/Preferences")" \
+  "${site%/},*" << 'PY' || fail "the profile's notifications for the site couldn't be set"
+import json, os, sys
+path, pattern = sys.argv[1], sys.argv[2]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+prefs = {}
+if os.path.exists(path):
+    with open(path) as file:
+        prefs = json.load(file)
+settings = prefs.setdefault("profile", {}).setdefault("content_settings", {})
+notifications = settings.setdefault("exceptions", {}).setdefault("notifications", {})
+notifications[pattern] = {"setting": 1}
+with open(path, "w") as file:
+    json.dump(prefs, file)
+PY
+
+# Launched again with no page to open over the Spaces it brings back, the favorite comes back
+# shown, on its pinned URL, its icon taken out earlier in the run, and the permission is read
+# as it starts.
+log="$out/favorites-badges.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the favorites"
+await '^browser: favorites\( [0-9][0-9]*\)\{3\}$' || fail "the three favorites didn't come back: \"$(favorites)\""
+a=$(favorites | cut -d' ' -f1)
+x=$(favorites | cut -d' ' -f2)
+await '^browser: today ' || fail "the Today tabs didn't come back"
+await "^browser: selected $a\( in .*\)\{0,1\}\$" || fail "the relaunch didn't show the favorite shown last"
+go_from_bar "${site}badges.html"
+await "^browser: title $a badges ready$" || fail "the badges page didn't paint in the restored favorite"
+
+# Hidden behind the second favorite, the first's page posts, and its tile draws the count as its
+# badge.
+send key 2 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the badges weren't checked"
+  exit 0
+fi
+expect "^browser: selected $x\( in .*\)\{0,1\}\$" "⌘2 didn't show the second favorite over the first"
+expect "^browser: tile $a drawn with badge 1\$" "the favorite's tile didn't count its page's notification"
+../tools/window-screenshot.sh "$pid" "$out/favorite-badge.png" || fail "no window to capture"
+
+# The second favorite goes to the badges page too: its page's posts are its own document's, never
+# the first's, though their URLs are the same.
+go_from_bar "${site}badges.html"
+await "^browser: title $x badges ready$" || fail "the second favorite's badges page didn't paint"
+
+# An agent's tab is no favorite whatever its page, and its badges page loads hidden, so it posts
+# as it loads: the engine's map of a notification to the document that posted it is under test
+# too, as its page shares the favorite's URL.
+post agentspace claude-code Claude Code
+expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the agent's Space wasn't made"
+send agentopen claude-code "${site}badges.html"
+expect "^browser: agent claude-code opened [0-9]*\$" "the agent didn't open the badges page"
+agent_tab=$(grep "^browser: agent claude-code opened " "$log" | tail -1 | cut -d' ' -f5)
+await "^browser: title $agent_tab badges posted 1$" ||
+  fail "the agent's badges page didn't post as it loaded"
+none_since "^browser: tile $a drawn with badge [0-9]" ||
+  fail "the agent's page's notification reached the favorite's badge"
+
+# The agent may not act on the user's tabs, whatever it asks, and the refusal reaches the
+# activity log.
+user_tab=$(today | cut -d' ' -f1)
+send agentmayact claude-code "$user_tab"
+expect "^browser: agent claude-code may act on $user_tab: 0\$" "the agent may act on the user's tab"
+expect "^browser: agent activity claude-code $user_tab navigate refused: The tab isn't in the agent's own Space.\$" \
+  "the refusal didn't reach the activity log"
+
+# Shown again, the favorite's badge goes, and the second favorite's page, hidden as the favorite
+# takes the window, posts as its own document only.
+send key 1 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the rest of the badges weren't checked"
+  exit 0
+fi
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘1 didn't show the favorite again"
+expect "^browser: tile $a drawn with badge none\$" "showing the favorite didn't take its badge away"
+await "^browser: title $x badges posted 1$" || fail "the second favorite's badges page didn't post as it hid"
+none_since "^browser: tile $a drawn with badge [0-9]" ||
+  fail "the second favorite's notification reached the first's badge"
+
+# Hidden again, the favorite's page posts once more, and its tile draws the count again.
+send key 2 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the rest of the badges weren't checked"
+  exit 0
+fi
+expect "^browser: selected $x\( in .*\)\{0,1\}\$" "⌘2 didn't show the second favorite over the first again"
+expect "^browser: tile $a drawn with badge 1\$" "the favorite's tile didn't count its page's second notification"
+
+# The switch off takes every favorite's badge away, whatever its count, and the quit below saves
+# it with the Spaces.
+send click $sidebar_point
+send key , cmd
+expect '^browser: command settings via ui$' "⌘, from the UI didn't run Settings"
+expect '^browser: settings shown General$' "⌘, from the UI didn't show Settings"
+settings_drew General
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+in_sight "switch favorite notification badges" || fail "Settings didn't draw the badges' switch"
+send clickkey $at
+expect '^browser: favorite notification badges off$' "the switch off didn't reach the core"
+expect "^browser: tile $a drawn with badge none\$" "the switch off didn't take the favorite's badge away"
+
+# Quit and launched again, the setting comes back off with the Spaces. The second favorite, the
+# last shown, comes back shown, and the second's page posts as the first takes the window again:
+# the page's script runs whatever the core counts.
+exec 3>&-
+quit
+log="$out/favorites-badges-off.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch didn't restore the favorites"
+grep -q '"favorite_notification_badges"' "$saved" || fail "the badges setting didn't save with the Spaces"
+await '^browser: favorites\( [0-9][0-9]*\)\{3\}$' || fail "the three favorites didn't come back: \"$(favorites)\""
+a=$(favorites | cut -d' ' -f1)
+x=$(favorites | cut -d' ' -f2)
+await '^browser: today ' || fail "the Today tabs didn't come back"
+await "^browser: selected $x\( in .*\)\{0,1\}\$" || fail "the relaunch didn't show the favorite shown last"
+go_from_bar "${site}badges.html"
+await "^browser: title $x badges ready$" || fail "the badges page didn't paint in the last favorite shown"
+send key 1 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the badges' switch wasn't checked"
+  exit 0
+fi
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘1 didn't show the first favorite again"
+await "^browser: title $x badges posted 1$" || fail "the second favorite's page didn't post as it hid"
+
+# The second favorite shows for the quit, so the run below takes the first favorite out with
+# another tab shown: its click on Today's top row has a tab to change from. The first's page
+# posts as it hides, with the setting off, so it counts for nothing.
+send key 2 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the badges' switch wasn't checked"
+  exit 0
+fi
+expect "^browser: selected $x\( in .*\)\{0,1\}\$" "⌘2 didn't show the second favorite for the quit"
+
+# The switch had come back off if a click on it turns the setting on. Posts while it was off
+# counted for nothing, so no badge came with the relaunch.
+send click $sidebar_point
+send key , cmd
+expect '^browser: command settings via ui$' "⌘, from the UI didn't run Settings"
+expect '^browser: settings shown General$' "⌘, from the UI didn't show Settings"
+settings_drew General
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+in_sight "switch favorite notification badges" || fail "Settings didn't draw the badges' switch"
+send clickkey $at
+expect '^browser: favorite notification badges on$' "the switch hadn't come back off across the quit"
+settings_close
+post clickkey $close
+expect '^browser: settings hidden$' "the close button didn't hide Settings"
+
+# The warning stayed off, so ⌘Q quits without asking, and the app stays down for the run below,
+# whose surgery reads the Spaces the quit saves.
 echo "key q cmd" >&3
 exec 3>&-
 await '^browser: command quit via ' || fail "⌘Q didn't reach the UI"
@@ -875,4 +1114,4 @@ none_since '^browser: drag shape tile$' "$over" ||
 [ "$(favorites)" = "$twelve" ] || fail "with 12 favorites, the drag changed them: \"$(favorites)\""
 exec 3>&-
 quit
-echo "ok: a Today tab's menu is Arc's, whose Copy Link with ⌥ held copies a Markdown link to the tab, and its row dragged onto the Space's name makes the tab a tile above the Space's rows, which shows its hover card beside the rows, with its page's picture once another tab is shown, which other apps don't take for the window in front, while the Library and sidebar buttons name themselves and their keys in a tooltip, which a click shows and ⌘1–⌘9 count first, with an edge under them while the list is scrolled, which scrolls to the row of a tab shown under its bottom, and marks the row of the tab shown scrolled out of it at that edge, a click on the mark scrolling back to it. A double-click on the tile takes it back to its URL, and ⌘W unloads it and keeps the tile. Its menu duplicates it into Today, and after a quit the favorite comes back, shown, and Remove from Favorites puts it at the top of Today. Rows dragged onto the tiles turn into tiles, and tiles dragged into the list into rows. Rows dragged onto the tiles become favorites where they're dropped, tiles reorder and go into Today, and Escape puts a dragged tile back. A split's row dragged onto the tiles is one favorite, a click in its right page focuses it and ⌘2 shows it focused there, as do a Space switch and a relaunch, its card has its pages, and Remove from Favorites puts it whole at the top of Today. Tiles taller than 40 % of the window scroll with the list, under the URL field. ⌘, from the page and the UI opens Settings, whose switches set the warning before quitting and the haptics and whose pop-ups set the archive's time and who shares the favorites (Each Space, with the favorite kept in it across the quit, and back), all kept across a quit, when ⌘Q quits without asking; ⌘W and its close button hide it, and Chromium settings at its column.s foot opens them. Three tiles with a long, a medium and a short title each show their card beside the rows at their own top, along them and back, placed where the UI asked, and inside a narrow window. Remove from Favorites offers Undo, and ⌘Z puts the tile back with the tab out of Today, and ⇧⌘Z removes it again. Change Icon… on the tile hangs the icon picker under it, its pick is the tile's icon and Remove Icon takes it out. 13 favorites saved come back whole, and with 12 a pinned tab's menu dims Add to Favorites and its row dragged over the tiles stays a row. Windows: $out/tab-menu-option.png, $out/favorite-icon-picker.png, $out/favorite-icon.png, $out/favorites-most.png, $out/favorites-full-menu.png, $out/favorite-card.png, $out/favorite-cards.png, $out/favorite-card-narrow.png, $out/library-tooltip.png, $out/header-tooltip.png, $out/favorites.png, $out/scroll-edge.png, $out/list-scrolled.png, $out/shown-marker.png, $out/favorite-unloaded.png, $out/favorites-restored.png, $out/favorite-drag.png, $out/favorite-drag-out.png, $out/favorite-split-tile.png, $out/favorite-split-space.png, $out/favorite-split-restored.png, $out/favorite-split-card.png, $out/tiles-tall.png, $out/tiles-scrolled.png, $out/settings.png"
+echo "ok: a Today tab's menu is Arc's, whose Copy Link with ⌥ held copies a Markdown link to the tab, and its row dragged onto the Space's name makes the tab a tile above the Space's rows, which shows its hover card beside the rows, with its page's picture once another tab is shown, which other apps don't take for the window in front, while the Library and sidebar buttons name themselves and their keys in a tooltip, which a click shows and ⌘1–⌘9 count first, with an edge under them while the list is scrolled, which scrolls to the row of a tab shown under its bottom, and marks the row of the tab shown scrolled out of it at that edge, a click on the mark scrolling back to it. A double-click on the tile takes it back to its URL, and ⌘W unloads it and keeps the tile. Its menu duplicates it into Today, and after a quit the favorite comes back, shown, and Remove from Favorites puts it at the top of Today. Rows dragged onto the tiles turn into tiles, and tiles dragged into the list into rows. Rows dragged onto the tiles become favorites where they're dropped, tiles reorder and go into Today, and Escape puts a dragged tile back. A split's row dragged onto the tiles is one favorite, a click in its right page focuses it and ⌘2 shows it focused there, as do a Space switch and a relaunch, its card has its pages, and Remove from Favorites puts it whole at the top of Today. Tiles taller than 40 % of the window scroll with the list, under the URL field. ⌘, from the page and the UI opens Settings, whose switches set the warning before quitting and the haptics and whose pop-ups set the archive's time and who shares the favorites (Each Space, with the favorite kept in it across the quit, and back), all kept across a quit, when ⌘Q quits without asking; ⌘W and its close button hide it, and Chromium settings at its column.s foot opens them. A favorite's tile counts its page's notifications the user hasn't seen and draws the count as a badge, which showing the favorite takes away, posts from a second favorite or an agent's tab never reach, and the switch off takes away, staying off across a quit. Three tiles with a long, a medium and a short title each show their card beside the rows at their own top, along them and back, placed where the UI asked, and inside a narrow window. Remove from Favorites offers Undo, and ⌘Z puts the tile back with the tab out of Today, and ⇧⌘Z removes it again. Change Icon… on the tile hangs the icon picker under it, its pick is the tile's icon and Remove Icon takes it out. 13 favorites saved come back whole, and with 12 a pinned tab's menu dims Add to Favorites and its row dragged over the tiles stays a row. Windows: $out/tab-menu-option.png, $out/favorite-icon-picker.png, $out/favorite-icon.png, $out/favorites-most.png, $out/favorites-full-menu.png, $out/favorite-card.png, $out/favorite-cards.png, $out/favorite-card-narrow.png, $out/library-tooltip.png, $out/header-tooltip.png, $out/favorites.png, $out/scroll-edge.png, $out/list-scrolled.png, $out/shown-marker.png, $out/favorite-unloaded.png, $out/favorites-restored.png, $out/favorite-drag.png, $out/favorite-drag-out.png, $out/favorite-split-tile.png, $out/favorite-split-space.png, $out/favorite-split-restored.png, $out/favorite-split-card.png, $out/tiles-tall.png, $out/tiles-scrolled.png, $out/settings.png"

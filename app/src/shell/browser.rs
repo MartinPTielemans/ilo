@@ -1204,6 +1204,10 @@ pub struct Page {
     /// The tab is pinned or a favorite, and its page isn't the one it was pinned or made a favorite
     /// at.
     pub away_from_pinned_url: bool,
+    /// The notifications the page has posted that the user hasn't seen, as its favorite's badge
+    /// counts them: one a notification the page posted while the tab wasn't shown, cleared as a
+    /// window shows it again. Not kept across a quit.
+    pub notifications: u32,
     /// The page is playing sound, muted or not, or was in the last 2 s.
     pub audible: bool,
     pub muted: bool,

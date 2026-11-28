@@ -7,7 +7,10 @@ use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
 
 use crate::{
     hover_card::Anchor,
-    shell::{Folders, LIST_TOP, PLATE_INSET, Row, Shell, TILE_HEIGHT, recorder::Recorder},
+    shell::{
+        Folders, LIST_TOP, PLATE_INSET, Page, Row, Shell, TILE_HEIGHT, favorites::badge_words,
+        recorder::Recorder,
+    },
 };
 
 /// A drawn shell with the favorites 10, 11 and 12.
@@ -554,5 +557,65 @@ fn a_split_dragged_onto_the_tiles_is_one_favorite(cx: &mut TestAppContext) {
             .iter()
             .any(|edit| edit.starts_with("favorite split 1 ")),
         "{edits:?}"
+    );
+}
+
+/// A favorite's badge counts its page's unseen notifications: one to 99 draw their count, and
+/// past 99, which no digit fits, 99 stands for the rest. The count reaching 0, as a window
+/// showing the tab does and the setting off does, hides the badge (bc_tab_state's notifications).
+#[test]
+fn a_badge_draws_its_count_and_99_stands_for_more() {
+    assert_eq!(badge_words(1), "1");
+    assert_eq!(badge_words(7), "7");
+    assert_eq!(badge_words(10), "10");
+    assert_eq!(badge_words(99), "99");
+    assert_eq!(badge_words(100), "99");
+    assert_eq!(badge_words(4096), "99");
+}
+
+/// A page's report carries its unseen notifications, and its tile draws their count as its badge,
+/// which the count reaching 0 takes away, as a window showing the tab does (Tab::Shown) and the
+/// setting off does (bc_set_favorite_notification_badges clearing every count).
+#[gpui::test]
+fn a_tiles_badge_draws_its_count_and_leaves_at_0(cx: &mut TestAppContext) {
+    let (shell, cx, _) = with_tiles(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_page(
+            10,
+            Page {
+                url: "https://youtube.com/watch?v=one".into(),
+                notifications: 3,
+                ..Default::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    // The tile drew its badge, and the other tiles drew none: a count of 0 draws no badge.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.tile_badges_drawn.borrow()[&10]),
+        3
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.tile_badges_drawn.borrow()[&11]),
+        0
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_page(
+            10,
+            Page {
+                url: "https://youtube.com/watch?v=one".into(),
+                notifications: 0,
+                ..Default::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    // The count reaching 0 leaves the tile with no badge, as the window showing the tab does and
+    // the setting off does.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.tile_badges_drawn.borrow()[&10]),
+        0
     );
 }

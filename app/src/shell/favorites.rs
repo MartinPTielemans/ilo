@@ -4,8 +4,8 @@
 use std::{collections::HashMap, rc::Rc};
 
 use gpui::{
-    App, Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px,
-    rgba, svg,
+    App, Context, Hsla, MouseButton, MouseDownEvent, Role, SharedString, canvas, div, hsla, img,
+    prelude::*, px, rgb, rgba, svg,
 };
 
 use super::return_mark::{Bitmap, Source};
@@ -21,13 +21,15 @@ use super::{
     TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme,
     access::Accessible, developer_outline, rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
-use crate::palette::{Palette, Tone};
+use crate::palette::{PAPER, Palette, Tone};
 
 /// The most favorites a Space shows, as Arc's 12 a profile. Past it a tab doesn't become one,
 /// and a list longer already, from before or an import, is kept. A split view counts as one.
 pub(super) const MOST_FAVORITES: usize = 12;
 
-use crate::tokens::shell::SPLIT_TILE_FAVICON;
+use crate::tokens::shell::{
+    SPLIT_TILE_FAVICON, TILE_BADGE_HEIGHT, TILE_BADGE_RADIUS, TILE_BADGE_TEXT,
+};
 
 /// Who shares the favorites, as Settings lists the choices. Each is the core's BC_FAVORITES_ value
 /// of the same name, which the bin checks at compile time.
@@ -560,8 +562,10 @@ impl Shell {
             })
             .child(self.framed(tab, if selected { ring_width } else { HAIRLINE }))
             .children(self.tile_mark(tab))
+            .children(self.tile_badge(tab))
             .children(self.keyed_ring(tab, TILE_RADIUS))
             .child(self.icon_drawn(tab))
+            .child(self.badge_drawn(tab))
     }
 
     /// A favorite's mark in its tile's top right: what its page captures or shares, as its row's,
@@ -582,6 +586,34 @@ impl Shell {
         )
     }
 
+    /// A favorite's badge in its tile's top left, the mark's opposite: the notifications its page
+    /// posted while the tab wasn't shown and the user hasn't seen (bc_tab_state's notifications).
+    /// The count reaching 0 hides it, as the setting off does (bc_set_favorite_notification_badges
+    /// clears every count) and a window showing the tab does.
+    fn tile_badge(&self, tab: u64) -> Option<impl IntoElement + use<>> {
+        let count = self.page(tab).notifications;
+        if count == 0 {
+            return None;
+        }
+        Some(
+            div()
+                .absolute()
+                .top(px(TILE_MARK_INSET))
+                .left(px(TILE_MARK_INSET))
+                .h(px(TILE_BADGE_HEIGHT))
+                .min_w(px(TILE_BADGE_HEIGHT))
+                .px(px(TILE_BADGE_TEXT / 2.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(TILE_BADGE_RADIUS))
+                .bg(self.palette.accent)
+                .text_size(px(TILE_BADGE_TEXT))
+                .text_color(rgb(PAPER))
+                .child(badge_words(count)),
+        )
+    }
+
     /// Logs the icon `tab`'s tile draws once it's another than the one it drew, or first draws one,
     /// as after a relaunch, so a capture waits for the frame that shows it.
     fn icon_drawn(&self, tab: u64) -> impl IntoElement + use<> {
@@ -593,6 +625,30 @@ impl Shell {
                     // check.sh reads this line.
                     let icon = if icon.is_empty() { "none" } else { &icon };
                     log!("browser: tile {tab} drawn with icon {icon}");
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Logs the count `tab`'s tile's badge draws once it's another than the one it drew, or first
+    /// draws one, so a capture waits for the frame that shows it, and the count reaching 0 logs
+    /// none, the badge gone.
+    fn badge_drawn(&self, tab: u64) -> impl IntoElement + use<> {
+        let (drawn, count) = (self.tile_badges_drawn.clone(), self.page(tab).notifications);
+        canvas(
+            move |_, _, _| {
+                let before = drawn.borrow_mut().insert(tab, count);
+                if before.map_or(count > 0, |before| before != count) {
+                    // check.sh reads this line.
+                    let words: SharedString = if count == 0 {
+                        "none".into()
+                    } else {
+                        badge_words(count)
+                    };
+                    log!("browser: tile {tab} drawn with badge {words}");
                 }
             },
             |_, _, _, _| {},
@@ -861,6 +917,15 @@ impl Shell {
                 .w(px(self.width()))
                 .children(tiles)
         })
+    }
+}
+
+/// A badge's words: its count, as many digits as fit at the tile's scale, 99 standing for more.
+/// Only asked for a count of one or more; none draws no badge.
+fn badge_words(count: u32) -> SharedString {
+    match count {
+        1..=99 => count.to_string().into(),
+        _ => "99".into(),
     }
 }
 

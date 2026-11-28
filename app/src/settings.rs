@@ -1968,6 +1968,24 @@ impl Settings {
             Some("Its page loads again there, without this profile's logins and cookies.".into()),
             vec![moving],
         );
+        let badges = self.toggle(
+            "favorite notification badges",
+            "Show unseen notifications on favorites",
+            unsafe { bc::bc_favorite_notification_badges() },
+            set_favorite_notification_badges,
+            accent,
+            cx,
+        );
+        let badges = setting(
+            look,
+            "Show unseen notifications on favorites",
+            Some(
+                "A favorite's tile counts the notifications its page posted while the tab wasn't \
+                 shown. Showing the tab clears its count."
+                    .into(),
+            ),
+            vec![badges],
+        );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
             Block::Rows(
@@ -1976,7 +1994,7 @@ impl Settings {
                     .chain([unload, battery, moving])
                     .collect(),
             ),
-            Block::Rows(vec![favorites]),
+            Block::Rows(vec![favorites, badges]),
         ];
         let right = shell::sidebar_right(cx);
         let line: SharedString =
@@ -5354,6 +5372,11 @@ fn set_ask_where_to_save(ask: bool, _: &mut App) {
 
 fn set_notification_prompts(on: bool, _: &mut App) {
     unsafe { bc::bc_set_notification_prompts(on) };
+}
+
+/// Off clears the counts every favorite had (bc_set_favorite_notification_badges), so no badge stays.
+fn set_favorite_notification_badges(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_favorite_notification_badges(on) };
 }
 
 fn set_warn_moving_profiles(warn: bool, _: &mut App) {

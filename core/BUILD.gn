@@ -635,6 +635,15 @@ source_set("closing_way_back") {
   ]
 }
 
+# The count of a page's unseen notifications, apart so browser_core_unittests tests the rule
+# alone.
+source_set("notification_count") {
+  sources = [
+    "notification_count.cc",
+    "notification_count.h",
+  ]
+}
+
 # The frame a window the window manager maximized un-maximizes to, apart so browser_core_unittests
 # tests the rule alone.
 source_set("window_frames") {
@@ -833,6 +842,8 @@ source_set("browser_core") {
     "network_refuser.h",
     "notes.cc",
     "notes.h",
+    "notifications.cc",
+    "notifications.h",
     "open_app_dialog.cc",
     "open_app_dialog.h",
     "page_menu.cc",
@@ -934,6 +945,7 @@ source_set("browser_core") {
     ":boost_colors",
     ":boost_script",
     ":clear_both_engines",
+    ":notification_count",
     ":drm_request",
     ":history_removal",
     ":idle_check",
@@ -1285,6 +1297,7 @@ test("browser_core_unittests") {
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
     "clear_both_engines_unittest.cc",
+    "notification_count_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
     "history_removal_unittest.cc",
     "idle_check_unittest.cc",
@@ -1357,6 +1370,7 @@ test("browser_core_unittests") {
     ":boost_colors",
     ":boost_script",
     ":clear_both_engines",
+    ":notification_count",
     ":history_removal",
     ":idle_check",
     ":mini_player_place",

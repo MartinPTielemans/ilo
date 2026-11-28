@@ -85,6 +85,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Reopen your windows and tabs" => &["restore session"],
         "Page zoom" => &["text size", "font size"],
         "Let sites ask to send notifications" => &["notifications"],
+        "Show unseen notifications on favorites" => &["badges", "notification count"],
         "Ask where to save each file" => &["downloads"],
         "Tasks from the command bar" => &["agent tasks", "ask claude", "ask codex"],
         "Appearance" => &["dark mode", "light mode"],

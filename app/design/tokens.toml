@@ -1304,6 +1304,12 @@ split-tile-favicon = 12.0
 # or is shared, or plays sound (ours).
 tile-mark = 12.0
 tile-mark-inset = 4.0
+# A favorite's unseen-notification badge in its tile's top left, the mark's opposite: the
+# extensions' badge's shape and words, at the tile's scale, the Space's accent under white words
+# (ours).
+tile-badge-height = 13.0
+tile-badge-text = 9.0
+tile-badge-radius = 6.5
 # The players at the sidebar's foot for tabs playing out of sight, as Arc 1.171's stack (an outside
 # measurement, #700): at rest only the newest card shows, this tall, 8 in from the sidebar's sides
 # and its bottom where the list ends, and up to two older ones peek out behind it, each this much
