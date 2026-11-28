@@ -100,8 +100,8 @@ pub fn on_leave<T: 'static>(
 }
 
 /// The user went away from the field with the keyboard still in it: a press outside it, which
-/// moves the keyboard only where it lands on something that takes it, or its own menu closed by a
-/// press away from both or by the user going to another window or app.
+/// moves the keyboard only where it lands on something that takes it, or its own menu closed by
+/// the user going to another window or app. A press that only closes that menu isn't one.
 pub struct Away;
 
 impl EventEmitter<Away> for TextInput {}
@@ -370,6 +370,8 @@ pub struct TextInput {
     spoken: Option<SharedString>,
     /// The frame last drawn gave its window the field's input handler, which text needs to get in.
     keyboard_drawn: bool,
+    /// The placeholder starts past the caret, which would otherwise stand on its first letter.
+    after_caret: bool,
 }
 
 impl TextInput {
@@ -397,6 +399,7 @@ impl TextInput {
             menu_shown: false,
             spoken: None,
             keyboard_drawn: false,
+            after_caret: false,
         }
     }
 
@@ -502,6 +505,21 @@ impl TextInput {
     /// field, which may change with the Space.
     pub fn set_fade(&mut self, width: Pixels, ground: Hsla) {
         self.fade = Some((width, ground));
+    }
+
+    /// The placeholder starts past the caret, where a field with no other mark of its start, as a
+    /// reply field in a conversation, would show the caret on the placeholder's first letter.
+    pub fn placeholder_after_caret(mut self) -> Self {
+        self.after_caret = true;
+        self
+    }
+
+    /// How far in from the field's start its placeholder is drawn, while it shows.
+    pub fn placeholder_inset(&self) -> Pixels {
+        match self.after_caret && self.content.is_empty() {
+            true => CARET + CARET_GAP,
+            false => px(0.),
+        }
     }
 
     pub fn caret_color(mut self, color: impl Into<Hsla>) -> Self {
@@ -916,11 +934,9 @@ impl TextInput {
         let chosen: Chosen = Box::new(move |closed, window, cx| {
             let away = field.update(cx, |field, _| {
                 field.menu_shown = false;
-                match closed {
-                    Closed::PressedAt(at) => !field.last_bounds.is_some_and(|it| it.contains(&at)),
-                    Closed::Left => true,
-                    Closed::Chose(_) | Closed::Otherwise => false,
-                }
+                // A press that closed the menu was spent on it, wherever it was, so the field goes
+                // on as it was: only the user leaving the window takes them away from it.
+                closed == Closed::Left
             });
             if let Some(action) = closed
                 .chosen()
@@ -1393,7 +1409,9 @@ struct PrepaintState {
 }
 
 /// The caret's width.
-const CARET: Pixels = px(2.);
+pub(crate) const CARET: Pixels = px(2.);
+/// The room between the caret and a placeholder that starts past it.
+const CARET_GAP: Pixels = px(2.);
 
 /// Where a fade is the ground at full, from its inner side: its outer third is solid, so a glyph
 /// the field's edge cuts doesn't show a sliver.
@@ -1610,7 +1628,8 @@ impl Element for TextElement {
             if let Some(selection) = prepaint.selection.take() {
                 window.paint_quad(selection)
             }
-            let origin = point(bounds.left() - prepaint.scroll, bounds.top());
+            let inset = self.input.read(cx).placeholder_inset();
+            let origin = point(bounds.left() - prepaint.scroll + inset, bounds.top());
             line.paint(origin, tall, gpui::TextAlign::Left, None, window, cx)
                 .unwrap();
             for fade in prepaint.fades.drain(..) {

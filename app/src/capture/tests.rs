@@ -6,7 +6,7 @@ use std::{
     io::Cursor,
 };
 
-use gpui::{Modifiers, TestAppContext, VisualTestContext, hsla};
+use gpui::{Modifiers, TestAppContext, VisualTestContext};
 
 use super::*;
 use crate::tokens::menu::OVERLAP;
@@ -129,7 +129,7 @@ impl Mode {
     fn new(cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
         cx.update(|cx| {
-            let look = |_: &App| (hsla(0., 0., 0., 1.), Default::default());
+            let look = |_: &App| Default::default();
             toast::open(Rc::new(Toasts), look, cx)
         })
         .expect("no window for the toast");

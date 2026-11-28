@@ -10,10 +10,10 @@ use gpui::{
 };
 
 use super::{
-    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X,
-    Request, Swatch, Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
+    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer,
+    QUIET_RADIUS, RADIUS, ROW_X, Request, Swatch, Tracking, as_held, described, described_held,
+    key_of, lay_out, lay_out_over,
 };
-use crate::elevation::Level as Elevation;
 use crate::shell::MenuEntry;
 
 /// Seven points a character, near enough to SF's 13 pt for where things go.
@@ -270,7 +270,10 @@ fn a_menu_opens_at_the_pointer_and_flips_where_the_screen_ends() {
         "no narrower than the least"
     );
     // Six rows and two lines, inside the padding.
-    assert_eq!(f32::from(root.size.height), 4. + 7. * 24. + 2. * 9. + 4.);
+    assert_eq!(
+        f32::from(root.size.height),
+        PADDING + 7. * 24. + 2. * 9. + PADDING
+    );
 
     let menu = lay_out(&tab_menu(), at(1200., 780.), area(), &width_of);
     let root = level_of(&menu, None);
@@ -303,7 +306,7 @@ fn the_menus_window_sits_on_whole_points_round_its_shadow() {
             .levels
             .iter()
             .fold(menu.levels[0].bounds, |all, level| all.union(&level.bounds));
-        let reach = Elevation::Popover.reach();
+        let reach = crate::elevation::menu_reach();
         assert!(
             origin.x <= union.left() - px(reach.sides) && origin.y <= union.top() - px(reach.above)
         );
@@ -353,8 +356,8 @@ fn a_submenu_opens_beside_its_row_and_on_the_left_where_the_right_has_no_room() 
         "over its parent's edge by 4"
     );
     // Its first row is level with the row that opened it.
-    let row_top = 100. + 4. + 4. * 24. + 9.;
-    assert_eq!(sub.top(), px(row_top - 4.));
+    let row_top = 100. + PADDING + 4. * 24. + 9.;
+    assert_eq!(sub.top(), px(row_top - PADDING));
 
     let menu = lay_out(&tab_menu(), at(1000., 100.), area(), &width_of);
     let root = level_of(&menu, None);
@@ -452,11 +455,10 @@ fn a_release_on_what_cant_be_chosen_leaves_the_menu_open() {
 fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
     let all = [
         Closing::Chose(0),
-        Closing::PressedAt(at(600., 400.)),
+        Closing::PressedOutside,
         Closing::Left,
         Closing::Escape,
         Closing::Shortcut,
-        Closing::ScrolledOutside,
         Closing::ReleasedOutside,
         Closing::Replaced,
     ];
@@ -481,19 +483,11 @@ fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
         assert_eq!(named, None, "the line names an item: {line}");
     }
     let answers: Vec<Closed> = all.iter().map(|closing| closing.closed()).collect();
-    assert_eq!(
-        answers[..3],
-        [
-            Closed::Chose(0),
-            Closed::PressedAt(at(600., 400.)),
-            Closed::Left
-        ]
-    );
-    assert!(
-        answers[3..]
-            .iter()
-            .all(|closed| *closed == Closed::Otherwise)
-    );
+    assert_eq!(answers[0], Closed::Chose(0));
+    assert_eq!(answers[2], Closed::Left);
+    for way in [1, 3, 4, 5, 6] {
+        assert_eq!(answers[way], Closed::Otherwise, "{:?}", all[way]);
+    }
 }
 
 #[test]
@@ -594,6 +588,8 @@ struct Recorder {
     calls: RefCell<Vec<&'static str>>,
     /// Each window the menu asked for, and its panels in it.
     shown: RefCell<Vec<(Bounds<Pixels>, Vec<Bounds<Pixels>>)>>,
+    /// The panels the host was asked to put its material under each time, and whether light.
+    glass: RefCell<Vec<(Vec<(Bounds<Pixels>, f32)>, bool)>>,
     /// Whether its window can't blend (`Host::blends`).
     opaque: bool,
 }
@@ -602,6 +598,10 @@ impl super::Host for Recorder {
     fn show(&self, frame: Bounds<Pixels>, panels: &[Bounds<Pixels>]) {
         self.calls.borrow_mut().push("show");
         self.shown.borrow_mut().push((frame, panels.to_vec()));
+    }
+
+    fn glass(&self, panels: &[(Bounds<Pixels>, f32)], light: bool) {
+        self.glass.borrow_mut().push((panels.to_vec(), light));
     }
 
     fn hide(&self) {
@@ -651,7 +651,7 @@ fn the_menu_takes_the_pointer_on_its_panels_and_not_in_their_shadows(cx: &mut Te
         2,
         "the tab menu and its Move to submenu: {panels:?}"
     );
-    let reach = crate::elevation::Level::Popover.reach();
+    let reach = crate::elevation::menu_reach();
     let window = Bounds::new(point(px(0.), px(0.)), frame.size);
     for panel in panels {
         assert!(
@@ -718,6 +718,95 @@ fn where_the_window_cant_blend_it_holds_the_open_panels_alone(cx: &mut TestAppCo
     assert_eq!(*host.calls.borrow(), ["show", "show", "show", "hide"]);
 }
 
+/// The host's material goes under the panels that show, each with its own corner, and follows a
+/// submenu as it opens and closes (#4090), so no glass shows in the shadows' room round them or
+/// where a closed submenu was.
+#[gpui::test]
+fn the_material_goes_under_the_open_panels_alone(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    show_menu(cx);
+    let panels = host.shown.borrow()[0].1.clone();
+    let last = || {
+        host.glass
+            .borrow()
+            .last()
+            .cloned()
+            .expect("no glass asked for")
+    };
+    assert_eq!(
+        last(),
+        (vec![(panels[0], RADIUS)], false),
+        "the tab menu's panel alone, in its dark look, though the window holds Move to's too"
+    );
+
+    cx.simulate_keystrokes("m right");
+    assert_eq!(
+        last().0,
+        [(panels[0], RADIUS), (panels[1], QUIET_RADIUS)],
+        "and Move to's as it opens, with a list of choices' quieter corner"
+    );
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(last().0, [(panels[0], RADIUS)], "Move to's closed");
+}
+
+/// Where the window can't blend, the panels are square, and so is what the host puts under them.
+#[gpui::test]
+fn where_the_window_cant_blend_the_material_is_square(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder {
+        opaque: true,
+        ..Recorder::default()
+    });
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    show_menu(cx);
+    cx.simulate_keystrokes("m right");
+    let (glass, _) = host
+        .glass
+        .borrow()
+        .last()
+        .cloned()
+        .expect("no glass asked for");
+    let panels = host.shown.borrow().last().unwrap().1.clone();
+    assert_eq!(glass, [(panels[0], 0.), (panels[1], 0.)]);
+}
+
+/// A scroll is the menu's while it shows, over it or outside it: the host hears it's taken, so
+/// nothing under the pointer scrolls, and the menu stays open with the keys.
+#[gpui::test]
+fn a_scroll_leaves_the_menu_open_and_goes_no_further(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    let chosen = show_menu(cx);
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    let over = point(px(150.), px(100. + PADDING + 12.)) - menu_at;
+    let outside = point(px(60.), px(40.)) - menu_at;
+    for (place, at) in [("over the menu", over), ("outside it", outside)] {
+        assert!(
+            cx.cx
+                .update(|cx: &mut App| super::pointer(Pointer::Scrolled, at, cx)),
+            "a scroll {place} went on to what's under it"
+        );
+        cx.run_until_parked();
+        assert_eq!(chosen.get(), None, "a scroll {place} closed the menu");
+    }
+    assert_eq!(*host.calls.borrow(), ["show"]);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+}
+
 /// The menu in its window, driven the ways the host drives it: keys through the window, pointer
 /// events and the driver's choose and dismiss. Each closes it from inside the menu's update, which
 /// must leave its window alone until the update is over, or drawing it finds the menu held.
@@ -741,9 +830,9 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
     // Press and release on Duplicate, in the window's terms, which start left of the menu and
     // above it by the room its shadow takes.
     let chosen = show_menu(cx);
-    let reach = crate::elevation::Level::Popover.reach();
+    let reach = crate::elevation::menu_reach();
     let window_at = point(px(100. - reach.sides), px(100. - reach.above));
-    let duplicate = point(px(150.), px(100. + 85. + 12.)) - window_at;
+    let duplicate = point(px(150.), px(100. + PADDING + 81. + 12.)) - window_at;
     cx.cx.update(|cx: &mut App| {
         super::pointer(Pointer::Released, point(px(100.), px(100.)) - window_at, cx);
         assert!(super::pointer(Pointer::Moved, duplicate, cx));
@@ -766,8 +855,8 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
     cx.run_until_parked();
     assert_eq!(chosen.get(), Some(Closed::Left));
 
-    // A press outside it, which it takes, says where it landed in the browser window, so a field
-    // whose menu it was knows whether the user went away from it.
+    // A press outside it, which it takes, was spent on the menu: it answers as the menu's keys do,
+    // with nothing of where the press was, so whatever had the menu goes on as it was.
     let chosen = show_menu(cx);
     let page = point(px(60.), px(40.));
     let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
@@ -776,7 +865,7 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
             .update(|cx: &mut App| super::pointer(Pointer::Pressed, page - menu_at, cx))
     );
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(Closed::PressedAt(page)));
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
 
     // A menu opened over one that shows takes its place and stays.
     show_menu(cx);
@@ -821,7 +910,7 @@ fn holding_option_shows_and_picks_an_items_alternate(cx: &mut TestAppContext) {
         .update(|cx| super::open(host.clone(), cx))
         .expect("no window for the menu");
     let cx = &mut VisualTestContext::from_window(window.into(), cx);
-    let reach = crate::elevation::Level::Popover.reach();
+    let reach = crate::elevation::menu_reach();
     let window_at = point(px(100. - reach.sides), px(100. - reach.above));
     let copy = point(px(150.), px(100. + PADDING + 12.)) - window_at;
     let click = |alt: Modifiers, cx: &mut VisualTestContext| {
@@ -883,10 +972,16 @@ fn a_pop_ups_menu_opens_with_its_choice_over_the_buttons_title() {
         button.x,
         "the title's left on the button's"
     );
-    assert_eq!(row.origin.y, button.y, "the row's top on the button's text");
+    // A menu of choices has quiet rows, whose titles sit lower in them than a command row's.
+    let lower = (super::QUIET_ROW - super::ROW) / 2.;
+    assert_eq!(
+        row.origin.y + px(lower),
+        button.y,
+        "the row's title on the button's text"
+    );
     assert_eq!(
         root.bounds.origin.y,
-        button.y - px(PADDING + super::ROW),
+        button.y - px(PADDING + super::QUIET_ROW + lower),
         "Default above it"
     );
 
@@ -1122,11 +1217,15 @@ fn contrast(a: u32, b: u32) -> f32 {
 }
 
 /// Every label a menu draws reads at 4.5:1 against what it's on, in both looks, which are all a
-/// theme picks of the menu, as the panel is opaque over it, and on the highlight of any Space's
-/// accent, pressed or not. Dimmed items are exempt, as WCAG's rule exempts what can't be used.
+/// theme picks of the menu, as the panel is opaque over it: anywhere down its glass's light, and on
+/// the plate under the pointer, pressed or not (#4090). Capture's markup reads on the highlight of
+/// any Space's accent. Dimmed items are exempt, as WCAG's rule exempts what can't be used.
 #[test]
 fn every_label_reads_at_4_5_to_1_in_both_looks() {
-    use super::{DESTRUCTIVE_FILL, DESTRUCTIVE_LABEL, Highlight, PRESSED};
+    use super::{
+        DARK_TOP_LIGHT, DARK_TOP_LIGHT_END, DESTRUCTIVE_FILL, DESTRUCTIVE_LABEL, Highlight,
+        LIGHT_TOP_LIGHT, LIGHT_TOP_LIGHT_END, PRESSED,
+    };
     use crate::{
         palette::{Palette, Tone},
         theme::{Appearance, Theme},
@@ -1142,14 +1241,36 @@ fn every_label_reads_at_4_5_to_1_in_both_looks() {
         },
     ] {
         let palette = look.palette();
-        let panel = palette.fill >> 8;
-        for (what, color) in [
-            ("label", palette.label),
-            ("shortcut", palette.secondary),
-            ("destructive", palette.destructive),
+        let lights = match look.light {
+            true => [LIGHT_TOP_LIGHT, LIGHT_TOP_LIGHT_END],
+            false => [DARK_TOP_LIGHT, DARK_TOP_LIGHT_END],
+        };
+        let opaque = |ground: u32| (ground << 8) | 0xff;
+        let fill = palette.fill >> 8;
+        for panel in [
+            fill,
+            over(lights[0], palette.fill),
+            over(lights[1], palette.fill),
         ] {
-            let ratio = contrast(over(color, palette.fill), panel);
-            assert!(ratio >= 4.5, "{:?}'s {what} is {ratio:.2}:1", look.light);
+            for (what, color) in [
+                ("label", palette.label),
+                ("shortcut", palette.secondary),
+                ("destructive", palette.destructive),
+            ] {
+                let ratio = contrast(over(color, opaque(panel)), panel);
+                assert!(ratio >= 4.5, "{:?}'s {what} is {ratio:.2}:1", look.light);
+            }
+            let plate = Highlight::plate(look.light);
+            let label = crate::theme::packed(plate.label);
+            for (what, fill) in [("plate", plate.fill), ("pressed plate", plate.pressed)] {
+                let fill = crate::theme::packed(fill) << 8 | (fill.a * 255.).round() as u32;
+                let ratio = contrast(label, over(fill, opaque(panel)));
+                assert!(
+                    ratio >= 4.5,
+                    "{:?}'s {what} label is {ratio:.2}:1",
+                    look.light
+                );
+            }
         }
         let ratio = contrast(
             over(DESTRUCTIVE_LABEL, DESTRUCTIVE_FILL),

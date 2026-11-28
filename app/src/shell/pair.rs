@@ -75,7 +75,7 @@ impl Shell {
     pub fn set_pair(&mut self, tab: u64, pair: Option<Pair>, cx: &mut Context<Self>) {
         match pair {
             Some(pair) => {
-                let placeholder = self.palette.text(FORM_PLACEHOLDER);
+                let placeholder = self.palette.gray(FORM_PLACEHOLDER);
                 let pin = cx.new(|cx| {
                     TextInput::new("PIN", cx)
                         .placeholder_color(placeholder)
@@ -168,12 +168,18 @@ impl Shell {
                 .bg(self.palette.plate(FORM_PLATE))
                 .text_color(self.palette.text(FORM_TEXT))
                 .key_context("Naming")
-                .on_action(
-                    cx.listener(move |shell, _: &KeepName, _, cx| shell.answer_pair(tab, cx)),
-                )
-                .on_action(
-                    cx.listener(move |shell, _: &CancelName, _, cx| shell.cancel_pair(tab, cx)),
-                )
+                .on_action(cx.listener(move |shell, _: &KeepName, _, cx| {
+                    let pin = shell.pairs.get(&tab).map(|pairing| pairing.pin.clone());
+                    if crate::dismissal::submits(&pin, cx) {
+                        shell.answer_pair(tab, cx)
+                    }
+                }))
+                .on_action(cx.listener(move |shell, _: &CancelName, _, cx| {
+                    let pin = shell.pairs.get(&tab).map(|pairing| pairing.pin.clone());
+                    if crate::dismissal::Close::escape_from(&pin, cx).is_some() {
+                        shell.cancel_pair(tab, cx)
+                    }
+                }))
                 .child(pairing.pin.clone())
         });
         let takes = match pair.kind {

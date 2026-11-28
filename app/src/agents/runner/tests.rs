@@ -22,6 +22,8 @@ fn launch(cli: Cli) -> Launch {
         model: Some("haiku".into()),
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
+        helpers: false,
+        wall: None,
     }
 }
 
@@ -31,6 +33,51 @@ fn read(lines: &[Value]) -> Vec<Out> {
         .iter()
         .flat_map(|line| claude_read(line, &mut turn))
         .collect()
+}
+
+/// What ilo sets on a CLI's process, by name.
+fn set(launch: &Launch) -> Vec<(String, String)> {
+    let mut command = crate::child::command(&launch.program);
+    environment(&mut command, launch);
+    (command.get_envs())
+        .filter_map(|(name, value)| {
+            let text = |text: &std::ffi::OsStr| text.to_string_lossy().into_owned();
+            Some((text(name), text(value?)))
+        })
+        .collect()
+}
+
+/// A task without helpers is started with none of the helpers' variables, and one with them has
+/// each, set on its process, so ilo's value is the one it reads whatever ilo's own environment
+/// holds. Codex's start has none either way.
+#[test]
+fn only_a_task_with_helpers_is_started_with_their_variables() {
+    let helpers = |set: &[(String, String)]| -> Vec<(String, String)> {
+        let ours = |(name, _): &&(String, String)| name.starts_with("CLAUDE_");
+        set.iter().filter(ours).cloned().collect()
+    };
+    let off = set(&launch(Cli::Claude));
+    assert_eq!(helpers(&off), []);
+    assert_eq!(off.len(), 1, "more than the PATH is set: {off:?}");
+    let mut on = launch(Cli::Claude);
+    on.helpers = true;
+    let wanted: Vec<(String, String)> = (crate::agents::helpers::ENV.iter())
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    let mut has = helpers(&set(&on));
+    has.sort();
+    let mut sorted = wanted.clone();
+    sorted.sort();
+    assert_eq!(has, sorted);
+    for name in [
+        "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS",
+        "CLAUDE_CODE_FORK_SUBAGENT",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+        "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH",
+    ] {
+        assert!(wanted.iter().any(|(each, _)| each == name), "{name}");
+    }
+    assert_eq!(helpers(&set(&launch(Cli::Codex))), []);
 }
 
 #[test]
@@ -159,12 +206,14 @@ fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither
         ] } }),
         json!({ "type": "result", "subtype": "success", "is_error": false, "result": "Found one." }),
     ]);
-    let Out::Thought { text, .. } = &outs[0] else {
+    // Its first line lists no kind of helper, which is read as one that isn't ilo's (helpers.rs).
+    assert_eq!(outs[0], Out::Kinds { ours: false });
+    let Out::Thought { text, .. } = &outs[1] else {
         panic!("{outs:?}")
     };
     assert_eq!(text, "Hmm.");
     assert_eq!(
-        outs[1..],
+        outs[2..],
         [
             Out::Said("Looking for flights.".into()),
             Out::Calling,

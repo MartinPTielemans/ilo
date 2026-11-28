@@ -529,7 +529,7 @@ if windows; then
   rm -rf "$home"
   python=$(python3 -I -c 'import sys; print(sys.executable)')
   # What a stand-in answers, as the CLI named first, which is the kind of program it is second:
-  # claude's and codex's status, codex's app-server's model list, with a model named for the kind,
+  # claude's status, codex's app-server's account and model list, with a model named for the kind,
   # and a task on either, whose instructions and first message it writes beside itself, as
   # task-<cli>.json, before it answers and ends its turn.
   cat > "$out/task-cli.py" << 'EOF'
@@ -543,8 +543,6 @@ def say(message):
     print(json.dumps(message), flush=True)
 if cli == "claude" and args == ["auth", "status", "--json"]:
     say({"loggedIn": True, "authMethod": "check"})
-elif cli == "codex" and args == ["login", "status"]:
-    print("Logged in using ChatGPT")
 elif cli == "claude" and "-p" in args:
     at = args.index("--append-system-prompt-file") + 1
     with open(args[at], encoding="utf-8") as file:
@@ -562,6 +560,8 @@ elif cli == "codex" and args == ["app-server"]:
         method, id = message.get("method"), message.get("id")
         if method == "initialize":
             say({"id": id, "result": {}})
+        elif method == "account/read":
+            say({"id": id, "result": {"account": {"type": "chatgpt", "planType": "plus"}, "requiresOpenaiAuth": True}})
         elif method == "model/list":
             say({"id": id, "result": {"data": [{"id": f"check-{kind}", "displayName": f"Check {kind}"}]}})
         elif method == "thread/start":
