@@ -140,14 +140,22 @@ glass_follows_card() {
       for (i = 1; i <= n; i++) {
         split(went[i], g, " ")
         shape = g[1] " " g[2]
-        if (!(shape in card)) continue
+        # A shape the card never drew in the exit puts glass on screen that no frame of the card matches.
+        if (!(shape in card)) {
+          printf "glass %s went out with frame %d, a shape the card never drew in the exit; ", shape, g[3]
+          continue
+        }
         read++
         if (g[3] != card[shape])
           printf "glass %s went out with frame %d, the card drew it at frame %d; ", shape, g[3], card[shape]
       }
       if (!read) printf "no glass shape of the grow matched a frame the card drew in it"
     }' "$log")
-  [ -z "$lag" ] || fail "$1the grow's glass didn't go out with the card's frame: $lag"
+  # With the UI's calls that shaped the glass in the exit, and the host's commits between them.
+  [ -z "$lag" ] || fail "$1the grow's glass didn't go out with the card's frame: $lag
+$(sed -n '/^browser: onboarding exit grows$/,$p' "$log" |
+    grep -e '^browser: first run shaped ' -e '^browser: first run glass ' \
+      -e '^browser: onboarding card frame ' | head -40)"
 }
 
 # Light: each step captured once settled and left the way that takes nothing it offers.

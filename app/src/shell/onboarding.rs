@@ -1362,6 +1362,13 @@ impl Shell {
                 let (_, _, w, h, radius) = plate;
                 onboarding.drawn += 1;
                 if onboarding.shaped != Some((w, h, radius)) {
+                    // check.sh reads this line: which call shaped the glass, and from which window.
+                    log!(
+                        "browser: first run shaped {w:.1} {h:.1} at frame {} by {} in window {}",
+                        onboarding.drawn,
+                        "the end",
+                        window.window_handle().window_id().as_u64()
+                    );
                     self.browser.shape_first_run(w, h, radius, onboarding.drawn);
                 }
                 log!(
@@ -1538,6 +1545,13 @@ impl Shell {
         // The host commits the glass's shape as it's told it, so it goes out with the frame that
         // draws the card in it, and fill and glass grow together.
         if before != Some(shape) {
+            // check.sh reads this line: which call shaped the glass, and from which window.
+            log!(
+                "browser: first run shaped {w:.1} {h:.1} at frame {} by {} in window {}",
+                onboarding.drawn,
+                if exit.is_some() { "the exit" } else { "a step" },
+                window.window_handle().window_id().as_u64()
+            );
             self.browser.shape_first_run(w, h, radius, onboarding.drawn);
         }
         // check.sh reads the exit's frames against the host's lines for its glass.
