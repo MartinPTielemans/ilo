@@ -51,7 +51,7 @@ else
   edge_asks "left, the page has the keyboard" 223
   # Over the page GPUI applies no style, so the page's own cursors stay Chromium's: the pointer
   # over the page's view isn't over GPUIView, and the platform asks of none while it is. The
-  # driver moves no real pointer, which the platform reads, so this holds the ask count only.
+  # driver moves no real pointer, so the platform tests the last event GPUI heard.
   asks_before=$(grep -c '^browser: cursor style ' "$log")
   reads_before=$(grep -c '^browser: cursor [^s]' "$log")
   send cursor 700 300

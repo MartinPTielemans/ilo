@@ -440,7 +440,7 @@ index 4b48188131..66886fff2a 100644
          drop(lock);
          callback();
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f2208d35ec..b50812d19c 100644
+index f2208d35ec..b83661ebcc 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -11,7 +11,7 @@ use dispatch2::DispatchQueue;
@@ -623,7 +623,7 @@ index f2208d35ec..b50812d19c 100644
          let mut window_state = window_state.lock();
          if window_state.cursor_style != style {
              window_state.cursor_style = style;
-@@ -407,16 +488,52 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
+@@ -407,16 +488,54 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
      }
  }
  
@@ -644,10 +644,12 @@ index f2208d35ec..b50812d19c 100644
 +            .iter()
 +            .find(|(window, _)| *window == key_window as usize)
 +            .and_then(|(_, state)| state.upgrade())?;
-+        let view = state.lock().native_view.as_ptr();
++        let (view, at) = {
++            let state = state.lock();
++            (state.native_view.as_ptr(), state.last_pointer?)
++        };
 +        let content: *mut AnyObject = msg_send![key_window, contentView];
 +        let superview: *mut AnyObject = msg_send![content, superview];
-+        let at: NSPoint = msg_send![key_window, mouseLocationOutsideOfEventStream];
 +        let at: NSPoint = msg_send![superview, convertPoint: at, fromView: ptr::null_mut::<AnyObject>()];
 +        let hit: *mut AnyObject = msg_send![content, hitTest: at];
 +        if hit.is_null() {
@@ -681,7 +683,7 @@ index f2208d35ec..b50812d19c 100644
          decl.add_method(
              sel!(canBecomeKeyWindow),
              yes as extern "C" fn(_, Sel) -> Bool,
-@@ -648,6 +765,8 @@ struct MacWindowState {
+@@ -648,6 +767,8 @@ struct MacWindowState {
      cursor_style: CursorStyle,
      cursor_visible: Arc<AtomicBool>,
      frame_source: Option<WindowFrameSource>,
@@ -690,15 +692,18 @@ index f2208d35ec..b50812d19c 100644
      renderer: renderer::Renderer,
      request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
      event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
-@@ -665,7 +784,6 @@ struct MacWindowState {
+@@ -665,7 +786,9 @@ struct MacWindowState {
      input_handler: Option<PlatformInputHandler>,
      last_key_equivalent: Option<KeyDownEvent>,
      last_left_mouse_down_event: Option<Retained<AnyObject>>,
 -    synthetic_drag_counter: usize,
++    /// Where the last mouse event this view heard was, in its window, or none once the pointer left.
++    /// What a cursor ask is tested against, since a driver's events move no real pointer.
++    last_pointer: Option<NSPoint>,
      traffic_light_position: Option<Point<Pixels>>,
      traffic_light_frames: Option<TrafficLightFrames>,
      pre_fullscreen_traffic_light_frames: Option<TrafficLightFrames>,
-@@ -673,9 +791,21 @@ struct MacWindowState {
+@@ -673,9 +796,21 @@ struct MacWindowState {
      previous_modifiers_changed_event: Option<PlatformInput>,
      keystroke_for_do_command: Option<Keystroke>,
      do_command_handled: Option<bool>,
@@ -720,7 +725,7 @@ index f2208d35ec..b50812d19c 100644
      // When true, the whole content view is reported as app-owned titlebar content via
      // `_opaqueRectForWindowMoveWhenInTitlebar`, so AppKit does not drag the window from
      // the titlebar or delay titlebar clicks (a delay first observed on macOS 27). Such
-@@ -694,9 +824,85 @@ struct MacWindowState {
+@@ -694,9 +829,86 @@ struct MacWindowState {
      accesskit_adapter: Option<accesskit_macos::SubclassingAdapter>,
      // The parent window if this window is a sheet (Dialog kind)
      sheet_parent: Option<*mut AnyObject>,
@@ -771,6 +776,7 @@ index f2208d35ec..b50812d19c 100644
 +            input_handler: None,
 +            last_key_equivalent: None,
 +            last_left_mouse_down_event: None,
++            last_pointer: None,
 +            traffic_light_position: titlebar.and_then(|titlebar| titlebar.traffic_light_position),
 +            traffic_light_frames: None,
 +            pre_fullscreen_traffic_light_frames: None,
@@ -806,7 +812,7 @@ index f2208d35ec..b50812d19c 100644
      fn move_traffic_light(&mut self) {
          if let Some(traffic_light_position) = self.traffic_light_position {
              if self.is_fullscreen() && !self.is_exiting_fullscreen {
-@@ -909,10 +1115,14 @@ impl MacWindowState {
+@@ -909,10 +1121,14 @@ impl MacWindowState {
      }
  
      fn content_size(&self) -> Size<Pixels> {
@@ -825,7 +831,7 @@ index f2208d35ec..b50812d19c 100644
          size(px(width as f32), px(height as f32))
      }
  
-@@ -960,6 +1170,19 @@ impl MacWindow {
+@@ -960,6 +1176,19 @@ impl MacWindow {
          renderer_context: renderer::Context,
          marker: MainThreadMarker,
      ) -> Self {
@@ -845,7 +851,7 @@ index f2208d35ec..b50812d19c 100644
          autoreleasepool(|_| unsafe {
              let allows_automatic_window_tabbing = tabbing_identifier.is_some();
              if allows_automatic_window_tabbing {
-@@ -1061,67 +1284,25 @@ impl MacWindow {
+@@ -1061,67 +1290,25 @@ impl MacWindow {
              let native_view: *mut AnyObject = msg_send![native_view, initWithFrame: content_bounds];
              assert!(!native_view.is_null());
  
@@ -926,7 +932,7 @@ index f2208d35ec..b50812d19c 100644
              let mut window = Self(state, marker);
  
              (*native_window)
-@@ -1289,6 +1470,99 @@ impl MacWindow {
+@@ -1289,6 +1476,99 @@ impl MacWindow {
          })
      }
  
@@ -1026,7 +1032,7 @@ index f2208d35ec..b50812d19c 100644
      pub fn active_window() -> Option<AnyWindowHandle> {
          unsafe {
              let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-@@ -1366,6 +1640,23 @@ impl Drop for MacWindow {
+@@ -1366,6 +1646,23 @@ impl Drop for MacWindow {
          // renderer's command queue are actually released with the window.
          drop(this.accesskit_adapter.take());
          this.renderer.destroy();
@@ -1050,7 +1056,7 @@ index f2208d35ec..b50812d19c 100644
          let window = this.native_window;
          let sheet_parent = this.sheet_parent.take();
          this.frame_source.take();
-@@ -1683,6 +1974,15 @@ impl PlatformWindow for MacWindow {
+@@ -1683,6 +1980,15 @@ impl PlatformWindow for MacWindow {
          self.0.as_ref().lock().input_handler.take()
      }
  
@@ -1066,7 +1072,7 @@ index f2208d35ec..b50812d19c 100644
      fn prompt(
          &self,
          level: PromptLevel,
-@@ -1841,6 +2141,10 @@ impl PlatformWindow for MacWindow {
+@@ -1841,6 +2147,10 @@ impl PlatformWindow for MacWindow {
  
          let opaque = background_appearance == WindowBackgroundAppearance::Opaque;
          this.renderer.update_transparency(!opaque);
@@ -1077,7 +1083,7 @@ index f2208d35ec..b50812d19c 100644
  
          unsafe {
              let _: () = msg_send![this.native_window, setOpaque: opaque.to_objc()];
-@@ -1993,6 +2297,25 @@ impl PlatformWindow for MacWindow {
+@@ -1993,6 +2303,25 @@ impl PlatformWindow for MacWindow {
          }
      }
  
@@ -1103,7 +1109,7 @@ index f2208d35ec..b50812d19c 100644
      fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
          self.0.as_ref().lock().request_frame_callback = Some(callback);
      }
-@@ -2315,9 +2638,6 @@ impl PlatformWindow for MacWindow {
+@@ -2315,9 +2644,6 @@ impl PlatformWindow for MacWindow {
              ];
  
              let started = !session.is_null();
@@ -1113,7 +1119,7 @@ index f2208d35ec..b50812d19c 100644
              log::debug!(
                  "start_external_drag completed: started={}, item_count={}",
                  started,
-@@ -2345,12 +2665,22 @@ impl PlatformWindow for MacWindow {
+@@ -2345,12 +2671,22 @@ impl PlatformWindow for MacWindow {
          };
          let action_handler = A11yActionHandler(callbacks.action);
  
@@ -1141,7 +1147,7 @@ index f2208d35ec..b50812d19c 100644
          };
  
          lock.accesskit_adapter = Some(adapter);
-@@ -2477,6 +2807,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
+@@ -2477,6 +2813,26 @@ extern "C" fn dealloc_view(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -1168,7 +1174,7 @@ index f2208d35ec..b50812d19c 100644
  fn add_mouse_tracking_area(native_view: &NSView) {
      let options = NSTrackingAreaOptions::MouseEnteredAndExited
          | NSTrackingAreaOptions::MouseMoved
-@@ -2555,13 +2905,58 @@ extern "C" fn handle_key_equivalent(
+@@ -2555,13 +2911,58 @@ extern "C" fn handle_key_equivalent(
      _: Sel,
      native_event: *mut AnyObject,
  ) -> Bool {
@@ -1227,7 +1233,7 @@ index f2208d35ec..b50812d19c 100644
  extern "C" fn handle_key_up(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      handle_key_event(this, native_event, false);
  }
-@@ -2645,15 +3040,40 @@ extern "C" fn handle_key_event(
+@@ -2645,15 +3046,40 @@ extern "C" fn handle_key_event(
          return Bool::NO;
      };
  
@@ -1275,7 +1281,7 @@ index f2208d35ec..b50812d19c 100644
      };
  
      match event {
-@@ -2728,6 +3148,12 @@ extern "C" fn handle_key_event(
+@@ -2728,6 +3154,12 @@ extern "C" fn handle_key_event(
                      }
                  };
                  window_state.as_ref().lock().keystroke_for_do_command.take();
@@ -1288,7 +1294,7 @@ index f2208d35ec..b50812d19c 100644
                  if let Some(handled) = window_state.as_ref().lock().do_command_handled.take() {
                      return handled.to_objc();
                  } else if handled == Bool::YES {
-@@ -2785,7 +3211,6 @@ extern "C" fn handle_key_event(
+@@ -2785,12 +3217,19 @@ extern "C" fn handle_key_event(
  
  extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
      let window_state = unsafe { get_window_state(this) };
@@ -1296,7 +1302,20 @@ index f2208d35ec..b50812d19c 100644
      let mut lock = window_state.as_ref().lock();
      let window_height = lock.content_size().height;
      let native_event_type: NSEventType = unsafe { msg_send![native_event, type] };
-@@ -2886,33 +3311,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
++    match native_event_type {
++        NSEventType::MouseMoved | NSEventType::LeftMouseDragged | NSEventType::LeftMouseUp => {
++            lock.last_pointer = Some(unsafe { msg_send![native_event, locationInWindow] });
++        }
++        NSEventType::MouseExited => lock.last_pointer = None,
++        _ => {}
++    }
+     match native_event_type {
+         NSEventType::LeftMouseDown => {
++            lock.last_pointer = Some(unsafe { msg_send![native_event, locationInWindow] });
+             // AppKit owns `native_event` for the callback; retain it so the drag session can still
+             // be started later, once the pointer leaves the window.
+             lock.last_left_mouse_down_event = unsafe { Retained::retain(native_event) };
+@@ -2886,33 +3325,6 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
                  }
                  lock = window_state.as_ref().lock();
              }
@@ -1330,7 +1349,7 @@ index f2208d35ec..b50812d19c 100644
              PlatformInput::ModifiersChanged(ModifiersChangedEvent {
                  modifiers,
                  capslock,
-@@ -2934,14 +3332,145 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+@@ -2934,14 +3346,145 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
              _ => {}
          }
  
@@ -1478,7 +1497,7 @@ index f2208d35ec..b50812d19c 100644
  fn visibility(state: &MacWindowState) -> WindowVisibility {
      let is_visible = state
          .native_window()
-@@ -3339,9 +3868,60 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+@@ -3339,9 +3882,60 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
          lock.request_frame_callback = Some(callback);
          lock.renderer.set_presents_with_transaction(false);
          lock.start_display_link();
@@ -1539,7 +1558,7 @@ index f2208d35ec..b50812d19c 100644
  extern "C" fn step(view: *mut c_void) {
      let view = view as *mut AnyObject;
      let window_state = unsafe { get_window_state(&*view) };
-@@ -3362,7 +3942,14 @@ extern "C" fn step(view: *mut c_void) {
+@@ -3362,7 +3956,14 @@ extern "C" fn step(view: *mut c_void) {
              signal_source,
              ..Default::default()
          });
@@ -1555,7 +1574,7 @@ index f2208d35ec..b50812d19c 100644
      }
  }
  
-@@ -3451,11 +4038,9 @@ extern "C" fn insert_text(
+@@ -3451,11 +4052,9 @@ extern "C" fn insert_text(
              text
          };
  
@@ -1570,7 +1589,7 @@ index f2208d35ec..b50812d19c 100644
      }
  }
  
-@@ -3473,16 +4058,14 @@ extern "C" fn set_marked_text(
+@@ -3473,16 +4072,14 @@ extern "C" fn set_marked_text(
          } else {
              text
          };
@@ -1592,7 +1611,7 @@ index f2208d35ec..b50812d19c 100644
  }
  
  extern "C" fn attributed_substring_for_proposed_range(
-@@ -3521,19 +4104,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
+@@ -3521,19 +4118,22 @@ extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
      let state = unsafe { get_window_state(this) };
      let mut lock = state.as_ref().lock();
      let keystroke = lock.keystroke_for_do_command.take();
@@ -1622,7 +1641,7 @@ index f2208d35ec..b50812d19c 100644
  }
  
  extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
-@@ -3555,6 +4141,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
+@@ -3555,6 +4155,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -1633,7 +1652,7 @@ index f2208d35ec..b50812d19c 100644
  extern "C" fn accepts_first_mouse(this: &AnyObject, _: Sel, _: *mut AnyObject) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let mut lock = window_state.as_ref().lock();
-@@ -3717,54 +4307,11 @@ extern "C" fn dragging_session_ended(
+@@ -3717,54 +4321,11 @@ extern "C" fn dragging_session_ended(
      let window_state = unsafe { get_window_state(this) };
      {
          let mut lock = window_state.lock();
@@ -1688,7 +1707,7 @@ index f2208d35ec..b50812d19c 100644
  /// Sends the specified FileDropEvent using `PlatformInput::FileDrop` to the window
  /// state and updates the window state according to the event passed.
  fn send_file_drop_event(
-@@ -3781,10 +4328,9 @@ fn send_file_drop_event(
+@@ -3781,10 +4342,9 @@ fn send_file_drop_event(
      if let Some(mut callback) = lock.event_callback.take() {
          drop(lock);
          callback(PlatformInput::FileDrop(file_drop_event));
