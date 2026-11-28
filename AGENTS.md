@@ -1,6 +1,6 @@
 # ilo
 
-An open-source, Arc-style browser: ungoogled-chromium underneath, a GPUI (Rust) interface on top, faster to use than Chrome, and built to be the browser AI agents work in. Mac first, portable above a thin platform layer; the iPhone app, `mobile/ios`, is Swift on WebKit. Pre-alpha. [docs/decisions.md](docs/decisions.md) says why the stack is what it is; [docs/roadmap.md](docs/roadmap.md) gives each phase's exit check.
+An open-source, Arc-style browser: ungoogled-chromium underneath, a GPUI (Rust) interface on top, faster to use than Chrome, and built to be the browser AI agents work in. Mac first, portable above a thin platform layer; the iPhone app, `mobile/ios`, is Swift on WebKit, and the Android app, `mobile/android`, is Kotlin on Android's system WebView. Pre-alpha. [docs/decisions.md](docs/decisions.md) says why the stack is what it is; [docs/roadmap.md](docs/roadmap.md) gives each phase's exit check.
 
 ## What we never compromise on
 

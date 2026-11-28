@@ -2,7 +2,7 @@
 
 The browser the owner uses on the phone, in place of Safari, not a companion beside it. Sync with ilo on the computer is what makes it ilo: the same Spaces, pinned tabs and Today tabs. The test for phone work is a week without Safari.
 
-It's native Swift in `mobile/ios`, and paths below start there. This file adds to the root `AGENTS.md` for work under `mobile/`.
+It's native Swift in `mobile/ios`, and paths below start there. This file adds to the root `AGENTS.md` for work under `mobile/ios/`; the Android app, in `mobile/android`, has its own `AGENTS.md`.
 
 ## What differs from the desktop
 
@@ -54,10 +54,10 @@ xcodebuild -project ilo.xcodeproj -scheme ilo -configuration Release \
 
 - **Done** is both test suites green, the Release compile, and a look at it running, in light and in dark, through the device tools.
 - **Read the skipped count.** IloSync's tests start an ilo-server of their own from `~/.cache/ilo-ios-spike/ilo-server-target/release/ilo-server` and skip without it. Report a skip, not a pass.
-- **CI runs the same three** (`.github/workflows/mobile-ios.yml`) for a change to `mobile/` or to what the phone reads of the desktop's. The app's run on iOS 27 simulators alone: iOS 26, the oldest it runs on, is yours to run. IloSync's run with GitHub's `macos-26` Swift, an earlier one than Xcode 27.1's, so the package keeps to what its manifest's 6.0 allows.
+- **CI runs the same three** (`.github/workflows/mobile-ios.yml`) for a change to `mobile/ios/` or to what the phone reads of the desktop's. The app's run on iOS 27 simulators alone: iOS 26, the oldest it runs on, is yours to run. IloSync's run with GitHub's `macos-26` Swift, an earlier one than Xcode 27.1's, so the package keeps to what its manifest's 6.0 allows.
 - **CI runs a suite with a failed test once more, after the rest**, and the second run is its result: the runner's simulator holds a page's load for a minute or more at times in its first ten minutes, and a test run again at once meets the same hold. The job's summary names each suite run again; one named often has a fault of its own. A test's waits go by the clock (`eventually` in `Tests/Loopback.swift`) and add up to well under its suite's time limit, since a test that outlasts the limit ends the whole test process.
 - **`ci_scripts/ci_post_clone.sh` makes the rules and the project** in CI, and is the script Xcode Cloud runs after it clones. A tool or a made file the build comes to need goes there.
-- **A PR that changes only `mobile/`** starts none of the desktop's jobs and needs none of its Mac runs or trains: a green Check is its gate.
+- **A PR that changes only `mobile/ios/`** starts none of the desktop's jobs and needs none of its Mac runs or trains: a green Check is its gate.
 
 ## Versions
 

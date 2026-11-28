@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The night copy of the theme: the page's WebView reads its darkness as the page's
+         color-scheme, so the theme follows the system, as the app's own setting follows it
+         when it says system. -->
+    <style name="Theme.Ilo" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

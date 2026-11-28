@@ -43,14 +43,23 @@ const JOBS = {
   // The iPhone app (mobile/AGENTS.md), and what it reads of the desktop's: the core's sync code,
   // which IloSync writes for and mirrors, the site searches and the tokens a phone test reads, and
   // the ad blocker's pin its rules are built from. Nothing else of the desktop's starts it, and
-  // mobile/ starts no desktop job.
+  // the phone's half of mobile/ starts no Android job.
   mobile_ios: [
-    /^mobile\//,
+    /^mobile\/ios\//,
+    /^mobile\/AGENTS\.md$/,
+    /^mobile\/CLAUDE\.md$/,
     /^core\/sync/,
     /^core\/site_searches\.cc$/,
     /^app\/design\/tokens\.toml$/,
     /^app\/ublock\.ini$/,
     /^\.github\/workflows\/mobile-ios\.yml$/,
+  ],
+  // The Android app (mobile/android/AGENTS.md), which reads nothing of the desktop's beyond the
+  // same tokens the phone's tests do. It builds alone, without an emulator, so its changes start
+  // no desktop job and the phone's start no Android one.
+  mobile_android: [
+    /^mobile\/android\//,
+    /^\.github\/workflows\/mobile-android\.yml$/,
   ],
   // The website (site/AGENTS.md), which reads nothing of the browser's and starts nothing of it.
   site: [/^site\//, /^\.github\/workflows\/site\.yml$/],
