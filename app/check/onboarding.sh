@@ -283,7 +283,9 @@ for each in $steps; do
       # On Windows Alt+F4, ⌃F4 to the driver, asks first run's window to close, as its close
       # button and the taskbar's Close window do: the card has no close, so it stays, and the
       # browser window waits hidden behind it.
-      ! windows || send key f4 ctrl
+      if windows; then
+        send key f4 ctrl
+      fi
       # A last command, handled after the keys, so by its end they have done what they do.
       send state
       [ "$(last_move)" = "browser: onboarding step 4 settled" ] ||
