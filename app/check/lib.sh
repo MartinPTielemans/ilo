@@ -61,6 +61,15 @@ cmd_key=metaKey
 # Linux hasn't.
 url_toast='^browser: toast shown Copied Current URL \[share\]$'
 [ "$(uname)" != Linux ] || url_toast='^browser: toast shown Copied Current URL$'
+# The page's corner radius as the driver lists it: the card's, 6, except on Windows 11, which rounds
+# a window that's neither full screen nor maximized at 8 points, so the card, 10 in and concentric
+# with it, is square there and the driver lists no radius (card_radius in shell.rs, by the build as
+# build_info.rs reads it; #3020). check_layout reads the window's state from the log.
+page_radius=6
+if windows; then
+  windows_build=$(cmd //c ver | sed -n 's/.*Version [0-9]*\.[0-9]*\.\([0-9]*\).*/\1/p')
+  if [ "${windows_build:-0}" -ge 22000 ]; then page_radius=; fi
+fi
 # Points from the window's top-left corner. The sidebar is 228 wide.
 page_point="600 400"
 sidebar_point="100 400"
@@ -1088,7 +1097,11 @@ check_layout() {
   case "${2:-}" in [0-9]*) left=$2 ;; esac
   expected="$left,10 $((width - left - 10))x$((height - 20))"
   # Rounded as the card's corners, square when it fills the window.
-  expected_radius=6
+  expected_radius=$page_radius
+  # The shell's own lines for the state its card_radius reads.
+  window_full=$(grep -E '^browser: window (entered|left) full screen$' "$log" | tail -1)
+  window_max=$(grep -E '^browser: window maximized (true|false)$' "$log" | tail -1)
+  case "$window_full $window_max" in *entered*|*true) expected_radius=6 ;; esac
   [ "${2:-}" = fills ] && expected="0,0 $content" && expected_radius=
   [ "${2:-}" = inset ] && expected="10,10 $((width - 20))x$((height - 20))"
   [ "$view" = "$expected" ] || fail "$1: the page view is at $view in a $content window"
