@@ -316,7 +316,7 @@ impl Shell {
                     .h(px(DETAIL_LINE))
                     .truncate()
                     .text_size(px(text::SMALL))
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(detail),
             )
             .child(

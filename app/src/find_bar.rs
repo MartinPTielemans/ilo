@@ -8,7 +8,7 @@ use std::{cell::RefCell, collections::HashMap, ffi::CString, ffi::c_void, rc::Rc
 use browser::{
     elevation::Level,
     find_status, log,
-    palette::{Palette, STATE_HOVERED, STATE_PRESSED},
+    palette::{Float, Palette, STATE_HOVERED, STATE_PRESSED, Tone},
     shell::{self, keystroke_keys},
     text_input::TextInput,
     tooltip::{self, Anchor, Tip},
@@ -30,8 +30,6 @@ use browser::tokens::find_bar::HEIGHT;
 use browser::tokens::find_bar::RADIUS;
 use browser::tokens::find_bar::WIDTH;
 const RIGHT: f32 = shell::CARD_INSET * 2.;
-// Arc's fill, a navy unlike its window's colour (one Space captured).
-use browser::tokens::find_bar::FILL;
 const TOP: f32 = shell::CARD_INSET * 2.;
 use browser::tokens::find_bar::ARROW_OVERLAP;
 use browser::tokens::find_bar::BUTTON;
@@ -397,6 +395,22 @@ impl FindBar {
             .update(cx, |input, cx| input.reset(text, window, cx));
     }
 
+    /// Escape closes the bar, unless it was an input method's, composing in its field (dismissal's
+    /// rule).
+    fn escape(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
+        if browser::dismissal::Close::escape_from([&self.input.clone()], cx).is_some() {
+            self.close(&Close, window, cx);
+        }
+    }
+
+    /// ↩ and ⇧↩ find the next match and the one before, unless it was an input method's,
+    /// composing in the field. ⌘G and ⇧⌘G are the same actions, and wait for a composition alike.
+    fn find_key(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if browser::dismissal::submits([&self.input.clone()], cx) {
+            self.find_next(forward, cx);
+        }
+    }
+
     fn close(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
         self.end_tip(cx);
         unsafe { bc::bc_tab_find_close(self.tab) };
@@ -597,19 +611,19 @@ impl Render for FindBar {
                         .key_context("FindBar")
                         // A key ends a button's tooltip, as a click does.
                         .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
-                        .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
+                        .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_key(true, cx)))
                         .on_action(
-                            cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)),
+                            cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_key(false, cx)),
                         )
                         .on_action(cx.listener(Self::select_all))
-                        .on_action(cx.listener(Self::close))
+                        .on_action(cx.listener(Self::escape))
                         .size_full()
                         .relative()
                         .flex()
                         .items_center()
                         .px(px(INSET))
                         .rounded(px(RADIUS))
-                        .bg(rgb(FILL))
+                        .bg(Float::FindBar.fill(Tone::Dark))
                         .text_color(rgb(TEXT))
                         .text_size(px(text::BODY))
                         .line_height(px(TEXT_LINE))

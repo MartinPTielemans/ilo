@@ -31,7 +31,7 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, agent_request, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
+    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
     log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
     toast, tooltip, updates, zoom_hud,
@@ -612,6 +612,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The transparency level the window and what floats over it are drawn at, before the
+        // first window draws (#4128).
+        browser::transparency::level(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
         // which the host writes as the first window opens, under its AppUserModelID.
         if let (Ok(title), Ok(switch)) = (
@@ -860,11 +863,18 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
 }
 
+/// Off to another app: a toast showing waits until the user is back.
+extern "C" fn resigning_active() {
+    quitting::launch_picture_on_resigning();
+    update_app_later(|cx| browser::toast::app_away(true, cx));
+}
+
 /// Back from another app, such as System Settings, where the user may have changed the default
 /// browser, given the app Full Disk Access or changed when scroll bars show.
 extern "C" fn became_active() {
     // Later: AppKit can say so from inside the update that activated the app to show a window.
     update_app_later(|cx| {
+        browser::toast::app_away(false, cx);
         settings::check_default_browser(cx);
         import_host::became_active(cx);
         daily_count_host::became_active(cx);
@@ -925,6 +935,7 @@ fn profile_dir() -> String {
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
+    browser::palette::set_window_material(unsafe { platform::host_has_window_material() });
     let profile = profile_dir();
     // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
     // portal, which asks the user, rather than through a grant of every device (#3166). Without a

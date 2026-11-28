@@ -138,6 +138,43 @@ impl Picker {
             .unwrap()
     }
 
+    /// An input method composes "ぴ" in the search.
+    fn compose(&mut self) {
+        use gpui::EntityInputHandler as _;
+        self.cx.update(|window, cx| {
+            let picker = window.root::<IconPicker>().flatten().expect("the picker");
+            let search = picker.read(cx).search.clone();
+            search.update(cx, |search, cx| {
+                search.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+            });
+        });
+        self.cx.run_until_parked();
+    }
+
+    /// The input method ends what it composes in the search, as it does when it takes the key
+    /// itself: committing `text` in its place, or with `text` empty dropping it.
+    fn end_composition(&mut self, text: &str) {
+        use gpui::EntityInputHandler as _;
+        self.cx.update(|window, cx| {
+            let picker = window.root::<IconPicker>().flatten().expect("the picker");
+            let search = picker.read(cx).search.clone();
+            search.update(cx, |search, cx| {
+                search.replace_text_in_range(None, text, window, cx)
+            });
+        });
+        self.cx.run_until_parked();
+    }
+
+    /// What the search holds, and whether an input method composes there.
+    fn search(&mut self) -> (String, bool) {
+        self.window
+            .read_with(&self.cx.cx, |picker, cx| {
+                let search = picker.search.read(cx);
+                (search.text().to_string(), search.composing())
+            })
+            .unwrap()
+    }
+
     fn keys(&mut self, keys: &str) {
         self.cx.simulate_keystrokes(keys);
         self.cx.run_until_parked();
@@ -229,6 +266,48 @@ fn escape_closes_it_with_no_change(cx: &mut TestAppContext) {
     let mut picker = Picker::new("🦊", cx);
     picker.keys("escape");
     assert_eq!(picker.calls(), ["hide"]);
+}
+
+/// Esc while an input method composes in the search is the composition's: it closes nothing and
+/// leaves the marked text for the method. Once the method has dropped it, the next Esc closes the
+/// picker.
+#[gpui::test]
+fn escape_while_composing_closes_nothing(cx: &mut TestAppContext) {
+    let mut picker = Picker::new("🦊", cx);
+    picker.compose();
+    picker.keys("escape");
+    assert_eq!(
+        picker.calls(),
+        Vec::<String>::new(),
+        "esc closed it while composing"
+    );
+    assert_eq!(picker.search(), ("ぴ".into(), true));
+    picker.end_composition("");
+    picker.keys("escape");
+    assert_eq!(picker.calls(), ["hide"]);
+}
+
+/// ↩ while an input method composes in the search is the composition's: it picks nothing and
+/// leaves the marked text for the method. Once the method has ended it, the next ↩ picks what's on
+/// the plate.
+#[gpui::test]
+fn return_while_composing_picks_nothing(cx: &mut TestAppContext) {
+    let mut picker = Picker::for_tab("", cx);
+    picker.type_in_search("fox");
+    picker.compose();
+    picker.keys("enter");
+    assert_eq!(
+        picker.calls(),
+        Vec::<String>::new(),
+        "↩ picked while composing"
+    );
+    assert_eq!(picker.search(), ("foxぴ".into(), true));
+    picker.end_composition("");
+    picker.keys("enter");
+    assert_eq!(
+        picker.calls(),
+        ["recents \"🦊\\n\"", "hide", "picked \"🦊\""]
+    );
 }
 
 #[gpui::test]

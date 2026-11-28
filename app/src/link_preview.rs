@@ -20,9 +20,10 @@ use gpui::{
     size, svg,
 };
 
+use crate::dismissal::{self, By, Why};
 use crate::elevation::Level;
 use crate::icon_picker::outline;
-use crate::palette::{self, Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{self, Float, Palette, STATE_HOVERED, STATE_PRESSED};
 use crate::shell::{cubic_bezier, keystroke_keys, scaled::scaled};
 use crate::tokens::dialog::DIM;
 use crate::tokens::link_preview::{
@@ -404,7 +405,7 @@ fn plate(id: &'static str, palette: &Palette, shadow: Vec<BoxShadow>) -> gpui::S
         .flex_none()
         .h(px(CONTROLS))
         .rounded_full()
-        .bg(palette.overlay)
+        .bg(Float::LinkPreview.fill(palette.tone))
         .border(px(RIM))
         .border_color(Level::Popover.rim_in(palette))
         .shadow(shadow)
@@ -896,7 +897,13 @@ pub fn key(window: u64, tab: u64, keystroke: &str, reserved: bool, cx: &mut App)
         return None;
     }
     update(cx, |preview, _, cx| match key_action(keystroke, reserved) {
-        Some(KeyAction::Close) => preview.close(keystroke, cx),
+        Some(KeyAction::Close) => {
+            let why = match keystroke {
+                "escape" => Why::Escape,
+                _ => Why::CloseCommand,
+            };
+            preview.close(dismissal::Close::new(why, By::Keyboard), cx)
+        }
         Some(KeyAction::Keep) => preview.keep(keystroke, cx),
         Some(KeyAction::CopyUrl) => {
             let url = preview
@@ -919,14 +926,16 @@ pub fn close_over(window: u64, over: u64, cx: &mut App) -> bool {
             return false;
         };
         shown.undone = true;
-        preview.close("redo", cx)
+        preview.close(dismissal::Close::new(Why::CloseCommand, By::Code), cx)
     })
     .unwrap_or(false)
 }
 
 /// The user left the preview for another window. The host has released it already.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |preview, _, cx| preview.close("dismissed", cx));
+    update(cx, |preview, _, cx| {
+        preview.close(dismissal::Close::new(Why::WindowLeft, By::Pointer), cx)
+    });
 }
 
 /// The tab closed, and its preview goes with it at once.
@@ -945,25 +954,48 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
     });
 }
 
+/// The words the log gives `close`, which check.sh reads. The app closes a preview itself only for
+/// redo, which closes the one ⌘Z reopened.
+fn words(close: dismissal::Close) -> &'static str {
+    match (close.why, close.by) {
+        (Why::Escape, _) => "escape",
+        (Why::CloseCommand, By::Keyboard) => "cmd-w",
+        (Why::CloseCommand, By::Pointer) => "button",
+        (Why::CloseCommand, _) => "redo",
+        (Why::PressOutside, _) => "click outside",
+        (Why::WindowLeft, _) => "dismissed",
+        (Why::Toggled | Why::Chosen | Why::FocusLeft | Why::PointerLeft, _) => "left",
+    }
+}
+
 impl LinkPreview {
     /// Closes the preview back into its link, giving the browser window the keyboard and the
     /// clicks at once, and its page once it has left. Whether it was showing.
-    fn close(&mut self, why: &str, cx: &mut Context<Self>) -> bool {
+    fn close(&mut self, close: dismissal::Close, cx: &mut Context<Self>) -> bool {
         // A page under the window can't leave once the user has left it, as laying it out would
         // take the keyboard after them, so the preview goes at once rather than shrink over it.
-        let seconds = match why == "dismissed" && self.host.page_under() {
+        let left = close.why == Why::WindowLeft;
+        let seconds = match left && self.host.page_under() {
             true => 0.,
             false => CLOSE,
         };
-        self.leave(Leave::Close, why, seconds, cx)
+        self.leave(Leave::Close, words(close), left, seconds, cx)
     }
 
     /// Grows the preview into the tab's place, then keeps its page there as a Today tab.
     fn keep(&mut self, why: &str, cx: &mut Context<Self>) -> bool {
-        self.leave(Leave::Keep, why, KEEP, cx)
+        self.leave(Leave::Keep, why, false, KEEP, cx)
     }
 
-    fn leave(&mut self, how: Leave, why: &str, seconds: f32, cx: &mut Context<Self>) -> bool {
+    /// Leaves `how`, for the log's `why`; `left` once the user has left for another window.
+    fn leave(
+        &mut self,
+        how: Leave,
+        why: &str,
+        left: bool,
+        seconds: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
         // A click on a button ends its tooltip, as on other buttons, and a key does too.
         self.end_tip(cx);
         let Some(shown) = self
@@ -986,7 +1018,7 @@ impl LinkPreview {
         // opened over it, and before, where an Esc as the card lands finds it under the plate
         // (#3319).
         let laid = self.host.page_under() && shown.placed == page_in(card(shown.page));
-        shown.releasing = how == Leave::Close && laid && why != "dismissed";
+        shown.releasing = how == Leave::Close && laid && !left;
         // And the card holds at rest until it has, as shrinking would show it round the card, or
         // the window's page in it where the page left with the hole (#2640).
         shown.held = shown.releasing;
@@ -1109,7 +1141,7 @@ impl Render for LinkPreview {
             .key_context("LinkPreview")
             .track_focus(&self.focus)
             .on_action(cx.listener(|preview, _: &Close, _, cx| {
-                preview.close("escape", cx);
+                preview.close(dismissal::Close::new(Why::Escape, By::Keyboard), cx);
             }))
             .on_action(cx.listener(|preview, _: &Keep, _, cx| {
                 preview.keep("cmd-enter", cx);
@@ -1285,7 +1317,7 @@ impl Render for LinkPreview {
         let card = match under {
             // The page lies over all of it but the rim.
             false => card
-                .bg(palette.overlay)
+                .bg(Float::LinkPreview.fill(palette.tone))
                 .border(px(RIM))
                 .border_color(Level::Modal.rim_in(&palette))
                 .shadow(shadow(Level::Modal)),
@@ -1351,7 +1383,7 @@ impl Render for LinkPreview {
                         preview.hover_button(Leave::Close, *hovered, window.viewport_size(), cx);
                     }))
                     .on_click(cx.listener(|preview, _, _, cx| {
-                        preview.close("button", cx);
+                        preview.close(dismissal::Close::new(Why::CloseCommand, By::Pointer), cx);
                     })),
             );
         let dim = div()
@@ -1361,7 +1393,7 @@ impl Render for LinkPreview {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|preview, _, _, cx| {
-                    preview.close("click outside", cx);
+                    preview.close(dismissal::Close::new(Why::PressOutside, By::Pointer), cx);
                 }),
             );
         // Round a page under the window, which it leaves as it is.

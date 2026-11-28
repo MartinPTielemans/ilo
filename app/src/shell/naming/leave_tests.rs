@@ -3,7 +3,7 @@
 //! What's typed is kept, as ↩ keeps it, an empty field changes nothing, and Esc still cancels. A
 //! pinned URL's field is undone instead.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
     AppContext, Empty, Entity, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent,
@@ -449,43 +449,54 @@ fn the_fields_own_menu_leaves_it_open(cx: &mut TestAppContext) {
     assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
 }
 
-/// The press that closes the field's menu goes no further, as a click outside any menu doesn't, but
-/// one away from the field ends it as any other click away does, a click in the page as on
-/// Windows, keeping what's typed. One on the field leaves it open, and so does Esc in the menu.
+/// What the field holds and what's selected in it.
+fn edited(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<(String, Range<usize>)> {
+    shell.read_with(cx, |shell, cx| {
+        let field = shell.renaming.as_ref()?.name.read(cx);
+        Some((field.text().to_string(), field.selection()))
+    })
+}
+
+/// A press that closes the field's menu was spent on the menu, wherever it was, as a click outside
+/// any menu goes no further: the field still edits, its text and selection as they were, and the
+/// next press outside it ends it as any press does, keeping what's typed. The user going to another
+/// window or app with the menu up ends it.
 #[gpui::test]
-fn a_press_away_that_closes_the_fields_menu_ends_it(cx: &mut TestAppContext) {
+fn a_press_that_closes_the_fields_menu_leaves_it_editing(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     let shown = field_menus(cx);
-    let page = shell.read_with(cx, |shell, _| point(px(shell.width() + 200.), px(300.)));
     rename(&shell, cx, &host, 3);
     cx.simulate_input("Work");
+    cx.simulate_keystrokes("shift-left shift-left");
+    let before = edited(&shell, cx);
+    assert_eq!(before, Some(("Work".into(), 2..4)));
     let field = row(&shell, cx, 3);
-    for closed in [Closed::PressedAt(field), Closed::Otherwise] {
-        press(cx, field, MouseButton::Right, 1);
-        let chosen = shown
-            .take()
-            .expect("a right-click in the field showed no menu");
-        cx.update(|window, cx| chosen(closed, window, cx));
-        cx.run_until_parked();
-        assert!(
-            naming(&shell, cx) == Some(Naming::Tab(3)),
-            "{closed:?} closed the field"
-        );
-    }
     press(cx, field, MouseButton::Right, 1);
     let chosen = shown
         .take()
         .expect("a right-click in the field showed no menu");
-    cx.update(|window, cx| chosen(Closed::PressedAt(page), window, cx));
+    cx.deactivate_window();
+    // A press outside the menu answers as its keys do, with nothing of where it was (the menu's
+    // tests), and the menu's window gives the keyboard back.
+    cx.update(|window, cx| chosen(Closed::Otherwise, window, cx));
+    cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
     assert!(
-        naming(&shell, cx).is_none(),
-        "a press in the page left the field open"
+        naming(&shell, cx) == Some(Naming::Tab(3)),
+        "the press that closed its menu ended the field"
     );
-    assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
+    assert_eq!(edited(&shell, cx), before, "the field isn't as it was");
+    cx.simulate_input("ld");
+    assert_eq!(edited(&shell, cx), Some(("Wold".into(), 4..4)));
+    leave(&shell, cx, Way::AnotherRow);
+    assert!(
+        naming(&shell, cx).is_none(),
+        "the next press outside left the field open"
+    );
+    assert_eq!(host.take_edits(), ["rename tab 3 Wold"]);
     shell.update(cx, |shell, cx| shell.set_selected(3, cx));
 
-    // The user going to another window or app, with the menu up, ends it too.
+    // The user going to another window or app, with the menu up, ends it.
     rename(&shell, cx, &host, 3);
     cx.simulate_input("Home");
     press(cx, field, MouseButton::Right, 1);
@@ -504,4 +515,23 @@ fn a_press_away_that_closes_the_fields_menu_ends_it(cx: &mut TestAppContext) {
         "leaving with the menu up left the field open"
     );
     assert_eq!(host.take_edits(), ["rename tab 3 Home"]);
+}
+
+/// A field the Library's search took the keyboard from ends, keeping its name, and leaves the
+/// keyboard in the search: closing never takes it back from where it went (#4108).
+#[gpui::test]
+fn the_element_that_took_the_keyboard_keeps_it_as_the_field_ends(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    rename(&shell, cx, &host, 3);
+    cx.simulate_input("Work");
+    shell.update(cx, |shell, cx| {
+        shell.run(crate::shell::commands::Command::ViewLibrary, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert!(naming(&shell, cx).is_none(), "the field stayed open");
+    assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
+    assert!(
+        cx.update(|window, cx| shell.read(cx).library_search_keys(window, cx)),
+        "the field took the keyboard back from the Library's search"
+    );
 }

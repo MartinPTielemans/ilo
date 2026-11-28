@@ -2,22 +2,28 @@
 //! as it's made and keeping it, and the window's colours and grain from it (docs/ux-spec.md ›
 //! Themes).
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
-use gpui::{
-    App, ColorSpace, Context, Global, Hsla, Rgba, canvas, div, linear_color_stop, linear_gradient,
-    point, prelude::*, px, rgb, size,
-};
+use gpui::{App, Context, Global, Rgba, canvas, div, point, prelude::*, px, size};
 
 use super::{
     Shell,
     undo::{Prop, Value},
 };
 use crate::{
-    palette::{self, Palette, SECOND_AT, Tone},
-    theme::{self, Appearance, GRAIN_TILE, INACTIVE_TEXTURE, Texture, Theme},
+    glow,
+    palette::{self, Palette, Tone},
+    theme::{Appearance, GRAIN_TILE, INACTIVE_TEXTURE, Texture, Theme},
     theme_picker::{self, Changed},
 };
+
+/// What the window's reckoning was last logged from: its tint, its glows, its size and its side.
+type Reckoned = (Rgba, Rgba, Rgba, f32, f32, bool);
+
+thread_local! {
+    /// Compared each frame, so the reckoning is made and logged only when it changes.
+    static RECKONED: Cell<Option<Reckoned>> = const { Cell::new(None) };
+}
 
 /// The appearance View › Appearance chose for every window, which stands in for the system's
 /// where it isn't automatic. The user's preference: agents have no call to change it.
@@ -35,6 +41,9 @@ pub fn app_appearance(cx: &App) -> Appearance {
 /// How many themes' palettes a window keeps, the least recently drawn going first: more than
 /// the Spaces whose swatches a frame draws, and the one the picker is making.
 const PALETTES: usize = 64;
+
+/// What a Space's palette is worked out for: its theme, its tone and the transparency level.
+pub(super) type PaletteKey = (Option<Theme>, Tone, crate::transparency::Transparency);
 
 impl Shell {
     /// The theme `space` shows: the one the picker is making for it, else its own.
@@ -164,7 +173,11 @@ impl Shell {
     /// `space`'s palette, worked out once for each theme and tone it shows rather than while
     /// drawing.
     pub(super) fn palette_of(&self, space: u64) -> Palette {
-        let key = (self.space_theme(space), self.tone_of(space));
+        let key = (
+            self.space_theme(space),
+            self.tone_of(space),
+            crate::palette::transparency(),
+        );
         let mut palettes = self.palettes.borrow_mut();
         if let Some(at) = palettes.iter().position(|(each, _)| *each == key) {
             let kept = palettes.remove(at);
@@ -189,6 +202,10 @@ impl Shell {
             palette = palette.toward(&self.palette_of(beside), t);
         }
         self.palette = palette;
+        // Only check/window.sh reads it, so a user's window does no work for it.
+        if beside.is_none() && crate::checked() {
+            self.log_window_reckoning();
+        }
         let light = palette.tone == Tone::Light;
         if self.window_light != Some(light) {
             self.window_light = Some(light);
@@ -290,30 +307,13 @@ impl Shell {
         }
     }
 
-    /// `theme`'s colour `x` of the way across the window and `y` of the way down, at `alpha`: one
-    /// colour going to the same at HSL lightness + 0.25 down the window, as a Space's colour does;
-    /// two from the main one at the top left to the second along the diagonal; and a third coming
-    /// in toward the bottom.
-    pub(super) fn theme_color_at(&self, theme: &Theme, alpha: f32, x: f32, y: f32) -> Rgba {
-        let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
-        let main = Hsla::from(colors[0]);
-        let color = match colors.len() {
-            1 => Rgba::from(Hsla {
-                l: (main.l + 0.25 * y).min(1.),
-                ..main
-            }),
-            count => {
-                let (width, height) = (self.viewport.width.into(), self.viewport.height.into());
-                let along = (theme::diagonal(x, y, width, height) / SECOND_AT).min(1.);
-                let two = theme::mix_oklab(colors[0], colors[1], along);
-                if count > 2 {
-                    theme::mix_oklab(two, colors[2], y)
-                } else {
-                    two
-                }
-            }
-        };
-        Rgba { a: alpha, ..color }
+    /// Each Space whose colour is shown, and how much of it: one, or two while the sidebar pages
+    /// between them, one's fading into the other's as the pages move.
+    pub(super) fn paged_weights(&self) -> Vec<(u64, f32)> {
+        match self.colored_pages() {
+            (space, Some((beside, t))) => vec![(space, 1. - t), (beside, t)],
+            (space, None) => vec![(space, 1.)],
+        }
     }
 
     /// Where the sidebar's middle is across the window, 0 to 1, where the window's colour is taken
@@ -326,97 +326,75 @@ impl Shell {
         }
     }
 
-    /// The window's colour behind everything: the gradient down it, or with a Space of more than
-    /// one colour shown, its colours across it, one Space's over the other's as the sidebar pages
-    /// between them; and each one's texture over them, fainter while the window isn't active.
+    /// What the window's palette makes of the empty sidebar 60 points in and 450 down, where
+    /// check/window.sh reads it over a grey backdrop: the window over black, grey 128 and white on
+    /// a black desktop, and over black as much lighter as a desktop picture can make it, as grey
+    /// levels, logged when it changes. The check reads a grey between them as between these.
+    /// Called only while the checks run the app.
+    pub(super) fn log_window_reckoning(&self) {
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
+        let palette = &self.palette;
+        let key = (
+            palette.tint,
+            palette.glow,
+            palette.far_glow,
+            width,
+            height,
+            self.right(),
+        );
+        if width <= 0. || height <= 0. || RECKONED.get() == Some(key) {
+            return;
+        }
+        RECKONED.set(Some(key));
+        let (foot, far) = glow::strengths(60., 450., width, height, self.right());
+        let level = |at: Rgba| ((at.r + at.g + at.b) / 3. * 255.).round() as u8;
+        let [black, grey, white] = palette.window_over_greys(foot, far, 0.).map(level);
+        let [lifted, ..] = palette.window_over_greys(foot, far, 1.).map(level);
+        log!(
+            "browser: window reckons {black} {grey} {white} lifted {lifted} at 60,450 in \
+             {width:.0}x{height:.0}"
+        );
+    }
+
+    /// The window's colour behind everything: the Space's glows from the sidebar's foot and the
+    /// window's far corner, one Space's fading into the other's as the sidebar pages between them,
+    /// or a private window's shade; and each one's texture over them, fainter while the window
+    /// isn't active. The glows are pictures made once for each colour (glow.rs), so a frame that
+    /// changes nothing makes nothing.
     pub(super) fn window_background(&self) -> gpui::Div {
-        let (space, beside) = self.colored_pages();
-        // Each Space shown, and how much of the window's colour is its.
-        let pages = match beside {
-            Some((beside, t)) => vec![(space, 1. - t), (beside, t)],
-            None => vec![(space, 1.)],
-        };
-        let themes: Vec<_> = pages
-            .into_iter()
-            .map(|(space, weight)| {
-                let theme = self.space_theme(space);
-                (space, theme, weight)
-            })
-            .collect();
-        let layered = themes
-            .iter()
-            .any(|(_, theme, _)| theme.is_some_and(|theme| theme.count > 1));
+        let space = self.colored_pages().0;
+        let pages = self.paged_weights();
+        let right = self.right();
         let background = div().absolute().size_full();
-        let background = if layered {
-            background.children(
-                themes
-                    .iter()
-                    .map(|&(space, theme, weight)| self.theme_layer(theme, space).opacity(weight)),
-            )
-        } else {
-            background.bg(self.gradient(None))
+        let background = match self.private {
+            true => background.bg(self.space_color_at(space, 0., 0.)),
+            false => background.children(pages.iter().flat_map(|&(space, weight)| {
+                let palette = self.palette_of(space);
+                [
+                    (glow::Corner::Foot, palette.glow),
+                    (glow::Corner::Far, palette.far_glow),
+                ]
+                .into_iter()
+                .filter(move |(_, color)| color.a > 0. && weight > 0.)
+                .map(move |(corner, color)| glow::glow(corner, right, color, color.a * weight))
+            })),
         };
         let dimmed = if self.window_active {
             1.
         } else {
             INACTIVE_TEXTURE
         };
-        background.children(themes.iter().filter_map(|&(_, theme, weight)| {
-            let theme = theme.filter(|theme| theme.grain > 0.)?;
+        background.children(pages.into_iter().filter_map(|(space, weight)| {
+            let theme = self.space_theme(space).filter(|theme| theme.grain > 0.)?;
             Some(texture_layer(
                 theme.texture,
                 theme.grain_opacity() * weight * dimmed,
             ))
         }))
     }
-
-    /// `space`'s colours over the whole window, with `theme`.
-    fn theme_layer(&self, theme: Option<Theme>, space: u64) -> gpui::Div {
-        let layer = div().absolute().top_0().left_0();
-        let Some(theme) = theme.filter(|theme| theme.count > 1) else {
-            return layer.size_full().bg(self.space_gradient(space));
-        };
-        let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
-        let alpha = self.palette_of(space).layer_alpha;
-        let stop = |color: Rgba, at: f32| linear_color_stop(Rgba { a: alpha, ..color }, at);
-        let (width, height) = (
-            f32::from(self.viewport.width),
-            f32::from(self.viewport.height),
-        );
-        let (side, start, end) = diagonal_stops(width, height);
-        let diagonal = linear_gradient(135., stop(colors[0], start), stop(colors[1], end))
-            .color_space(ColorSpace::Oklab);
-        let layer = layer.size(px(side)).bg(diagonal);
-        match colors.get(2) {
-            Some(&third) => layer.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .w(px(width))
-                    .h(px(height))
-                    .bg(linear_gradient(
-                        180.,
-                        linear_color_stop(Rgba { a: 0., ..third }, 0.),
-                        stop(third, 1.),
-                    )
-                    .color_space(ColorSpace::Oklab)),
-            ),
-            None => layer,
-        }
-    }
-}
-
-/// The square the diagonal is drawn on, from the window's top left, and its stops, for a window
-/// `width` by `height`. GPUI's 135° gradient on a square runs along its diagonal from -0.207 at
-/// its top left corner (0.5 - √2 / 2) to 1.207 at its bottom right, so on one as big as the
-/// window's longer side, these stops put the main colour at the window's top left and the second
-/// SECOND_AT of the way along the window's own 135° line, as CSS draws it.
-fn diagonal_stops(width: f32, height: f32) -> (f32, f32, f32) {
-    let side = width.max(height).max(1.);
-    let start = 0.5 - std::f32::consts::FRAC_1_SQRT_2;
-    let end = start + std::f32::consts::FRAC_1_SQRT_2 * SECOND_AT * (width + height) / side;
-    (side, start, end)
 }
 
 /// `texture` over the whole window at `opacity`, in tiles at one device pixel to a pixel.

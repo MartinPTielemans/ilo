@@ -117,11 +117,11 @@ first_launch() {
   esac
   for each in $steps; do
     case $each in
-      intro) send key a && how=key ;;
+      intro) send key return && how=return ;;
       opt-ins) break ;;
       *) send key escape && how=escape ;;
     esac
-    expect "^browser: onboarding left $each via $how\$" "Esc didn't leave the first launch's $each"
+    expect "^browser: onboarding left $each via $how\$" "$how didn't leave the first launch's $each"
   done
   expect '^browser: onboarding step opt-ins settled$' "the first launch's opt-ins step didn't come"
 }

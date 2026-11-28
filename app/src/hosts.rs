@@ -16,9 +16,6 @@ pub(crate) const BOOST_EDITOR: c_int = 4;
 
 pub(crate) const TAB_SWITCHER: c_int = 5;
 
-/// The whole of an agent's request, beside its question's card (#3548).
-pub(crate) const AGENT_REQUEST: c_int = 6;
-
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
 pub(crate) const SITE_CONTROLS: c_int = 7;
 
@@ -549,34 +546,6 @@ pub(crate) fn recent_emoji() -> icon_picker::Recents {
 /// The user left the icon picker without picking.
 pub(crate) extern "C" fn icon_picker_dismissed() {
     update_app(icon_picker::dismissed);
-}
-
-pub(crate) struct AgentRequestHost;
-
-impl agent_request::Host for AgentRequestHost {
-    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
-        let Some(view) = ui_view_of(window) else {
-            return;
-        };
-        let (left, top, width) = (left.into(), top.into(), agent_request::WIDTH.into());
-        unsafe {
-            platform::host_set_overlay_height(AGENT_REQUEST, height.into());
-            platform::host_show_overlay(AGENT_REQUEST, view, false, left, top, width);
-        }
-    }
-
-    fn set_height(&self, height: f32) {
-        unsafe { platform::host_set_overlay_height(AGENT_REQUEST, height.into()) };
-    }
-
-    fn hide(&self) {
-        unsafe { platform::host_hide_overlay(AGENT_REQUEST) };
-    }
-}
-
-/// The user left the whole request, such as with a click outside it.
-pub(crate) extern "C" fn agent_request_dismissed() {
-    update_app(agent_request::dismissed);
 }
 
 pub(crate) struct FolderPreviewHost;
