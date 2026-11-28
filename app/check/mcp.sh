@@ -60,7 +60,7 @@
 # whose override says GET too. A change without the agent's sentence of what it does is refused
 # for that first (#3548). Settings › Other apps opens each request to the agent's sentence, where it
 # went and what it sent, or that the refused one wasn't, and names each by the method sent. Paying,
-# an order, a message as the user and a bank's site are stopped at Work on pages too, nothing
+# an order, a message as the user and a sensitive site are stopped at Work on pages too, nothing
 # asked (#4086): each is ilo's line in the conversation with Give Full access, which the keys
 # press, and at Full access each goes through, with no answer kept for Settings › Other apps to
 # list.
@@ -106,7 +106,9 @@ forget_login
 trap 'cleanup; forget_login' EXIT
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}]}' "$token" "$product" > "$agents_file"
+# bank.localhost is a sensitive site the way the user makes one (#4369): marked in the profile, where
+# the Agents' file keeps each profile's marks. No host's name says a site is sensitive.
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s","name":"%s"}],"sensitive":{"Default":["bank.localhost"]}}' "$token" "$product" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
 # page, as a password manager puts its own in pages. The frame tells the page it's there. In the
@@ -3629,7 +3631,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
   [ -n "$notes_tab" ] && [ -n "$notes_ref" ] ||
     fail "the agent's tab of the site it downloads from didn't open with its link: $saved_page"
 
-  # Paying, placing an order, sending a message as the user and a bank's site aren't part of Work
+  # Paying, placing an order, sending a message as the user and a sensitive site aren't part of Work
   # on pages, where every task starts: ilo refuses each at once, asking nothing (#4086), the agent
   # hears that only the user changes a task's access, the stop is logged, and nothing is done on the
   # page. Each refusal is ilo's line in the conversation, with the step up that would allow it, and
@@ -3778,29 +3780,30 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     does_at click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}" butik.localhost "$said_tab" \
       'click “Betal”' Order Betalt
   }
-  # A bank's site isn't opened at Work on pages, and at Full access it is, where its Overfør moves
-  # money as any order there goes through. Its charset said, as the site's server says none and
+  # A site the user marked sensitive isn't opened at Work on pages, and at Full access it is, where
+  # its Overfør moves money as any order there goes through; bank.localhost is marked in the Agents'
+  # file above. Its charset said, as the site's server says none and
   # the page would read as Latin-1.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
   printf '%s' "<meta charset=utf-8><title>Konto</title>
 <button onclick=\"document.title = 'Overført'\">Overfør</button>" > "$out/site/move.html"
   bank_steps() {
-    stop='^browser: agent mcp-client stopped Bank at Work on pages: bank\.localhost$'
+    stop='^browser: agent mcp-client stopped Sensitive at Work on pages: bank\.localhost$'
     before=$(grep -c "$stop" "$log" || true)
     allowed=$(call open_tab "$bank")
     case "$level" in
       "Work on pages")
         case "$allowed" in
           "error: $product stopped this: open bank.localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in $product."*) ;;
-          *) fail "a bank's site at Work on pages answered: $allowed" ;;
+          *) fail "a sensitive site at Work on pages answered: $allowed" ;;
         esac
         await_more "$stop" "$before" ||
-          fail "the bank's site refused at Work on pages wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
-        await_log '^browser: agent logged mcp-client open_tab bank\.localhost refused: Using a bank site isn.t part of Work on pages\.$' \
-          "the bank's site refused at Work on pages isn't in the activity log in ilo's sentence: $(grep '^browser: agent logged mcp-client .* bank\.localhost' "$log" | tail -1)"
+          fail "the sensitive site refused at Work on pages wasn't logged as ilo's stop: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
+        await_log '^browser: agent logged mcp-client open_tab bank\.localhost refused: Using a sensitive site isn.t part of Work on pages\.$' \
+          "the sensitive site refused at Work on pages isn't in the activity log in ilo's sentence: $(grep '^browser: agent logged mcp-client .* bank\.localhost' "$log" | tail -1)"
         ;;
       *)
-        case "$allowed" in "Opened tab "*) ;; *) fail "a bank's site at $level answered: $allowed" ;; esac
+        case "$allowed" in "Opened tab "*) ;; *) fail "a sensitive site at $level answered: $allowed" ;; esac
         saying move.html bank Overfør button
         does_at click "{\"tab\":$said_tab,\"ref\":\"$said_ref\"}" bank.localhost "$said_tab" \
           'click “Overfør”' Order Overført
@@ -3829,7 +3832,7 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     sleep 0.1
   done
   [ "${newest:-0}" -gt "${lined:-0}" ] ||
-    fail "the bank's refusal drew no line of ilo's with Give Full access: $(grep '^browser: ilo line ' "$log" | tail -2 | tr '\n' ' ')"
+    fail "the sensitive site's refusal drew no line of ilo's with Give Full access: $(grep '^browser: ilo line ' "$log" | tail -2 | tr '\n' ' ')"
   ../tools/window-screenshot.sh "$pid" "$out/agent-stops.png" || fail "no window to capture"
   follows_log "$out/agent-stops-before.png" "$out/agent-stops.png" \
     "$(sed -n "s/^browser: ilo line $newest Give Full access at //p" "$log" | tail -1)" \
@@ -4718,7 +4721,7 @@ if [ "$driven" = 1 ]; then
     "a Send off the messaging sites is stopped once its page holds a message," \
     "a forum's Comment and a chat's Send in no form," \
     "and not with its field empty," \
-    "a Danish Betal and a bank's site are stopped," \
+    "a Danish Betal and a sensitive site are stopped," \
     "each stop ilo's line with Give Full access on screen as the log draws it ($follows% of its place changed)," \
     "which the keys press," \
     "and each goes through at Full access," \
