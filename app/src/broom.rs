@@ -294,6 +294,9 @@ pub struct Run {
 struct Running {
     child: Option<Child>,
     ended: bool,
+    /// The run's wait for the program's output, which `end` cuts short: whatever else holds the
+    /// output open, such as a process that left the run's group, doesn't keep an ended run waiting.
+    wake: Option<mpsc::Sender<Vec<u8>>>,
 }
 
 impl Run {
@@ -384,6 +387,7 @@ impl Run {
         // A group of its own, which the run's end ends whole.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let (said, heard) = mpsc::channel();
         let (stdin, stdout, rising, id) = {
             let mut running = self.running.lock().unwrap();
             if running.ended {
@@ -396,6 +400,7 @@ impl Run {
             .map_err(|_| Failed::NotStarted)?;
             let pipes = (child.stdin.take(), child.stdout.take(), rising, child.id());
             running.child = Some(child);
+            running.wake = Some(said.clone());
             pipes
         };
         let (mut stdin, stdout, rising, id) = (stdin, stdout, rising, id);
@@ -414,7 +419,6 @@ impl Run {
                 _ = stdin.write_all(&input);
             }
         });
-        let (said, heard) = mpsc::channel();
         std::thread::spawn(move || {
             let mut read = Vec::new();
             if let Some(stdout) = stdout {
@@ -457,6 +461,10 @@ impl Run {
     pub fn end(&self) {
         let mut running = self.running.lock().unwrap();
         running.ended = true;
+        // Nothing is read from a run that was ended, so the wait ends with an empty answer.
+        if let Some(wake) = running.wake.take() {
+            _ = wake.send(Vec::new());
+        }
         if let Some(mut child) = running.child.take() {
             kill(&mut child);
             _ = child.wait();
