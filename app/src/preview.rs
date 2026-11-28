@@ -1850,11 +1850,15 @@ impl Browser for Fake {
 
     fn rename_profile(&self, _: u64, _: &str, _: &mut App) {}
 
-    // The tests' made-up Arc, so the import's step shows a browser to pick.
+    // The tests' made-up Arc, so the import's step shows a browser to pick, and with
+    // PREVIEW_IMPORT a made-up Zen and Dia beside it.
     fn import_host(&self) -> Rc<dyn browser::import::Host> {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/src/import/fixture");
-        let roots = Roots::under(std::path::Path::new(fixture), Os::Mac);
-        Rc::new(browser::import::Detached(roots))
+        let home = match std::env::var_os("PREVIEW_IMPORT") {
+            Some(_) => import_home(std::path::Path::new(fixture)),
+            None => std::path::PathBuf::from(fixture),
+        };
+        Rc::new(browser::import::Detached(Roots::under(&home, Os::Mac)))
     }
 
     fn delete_profile(&self, _: u64, _: &mut App) {}
@@ -2438,6 +2442,165 @@ fn preview_profiles() -> Vec<(u64, SharedString)> {
 
 /// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
 /// as a headless session has none to switch.
+/// A made-up home for PREVIEW_IMPORT: the tests' Arc, a Zen and a Dia, each with one profile.
+fn import_home(fixture: &std::path::Path) -> std::path::PathBuf {
+    fn copy(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            match entry.file_type()?.is_dir() {
+                true => copy(&entry.path(), &to.join(entry.file_name()))?,
+                false => drop(std::fs::copy(entry.path(), to.join(entry.file_name()))?),
+            }
+        }
+        Ok(())
+    }
+    let home = std::env::temp_dir().join(format!("ilo-preview-import-{}", std::process::id()));
+    let support = home.join("Library/Application Support");
+    let made = copy(fixture, &home)
+        .and_then(|()| std::fs::create_dir_all(support.join("zen/p.default")))
+        .and_then(|()| {
+            std::fs::write(
+                support.join("zen/profiles.ini"),
+                "[Profile0]\nName=default\nPath=p.default\n",
+            )
+        })
+        .and_then(|()| std::fs::write(support.join("zen/p.default/places.sqlite"), ""))
+        .and_then(|()| std::fs::create_dir_all(support.join("Dia/User Data/Default")))
+        .and_then(|()| std::fs::write(support.join("Dia/User Data/Default/Preferences"), "{}"))
+        // Its bookmarks and history, as a browser with neither has nothing to bring and isn't listed.
+        .and_then(|()| std::fs::write(support.join("Dia/User Data/Default/Bookmarks"), "{}"))
+        .and_then(|()| std::fs::write(support.join("Dia/User Data/Default/History"), ""));
+    if let Err(error) = made {
+        log!("browser: preview import home: {error}");
+    }
+    home
+}
+
+/// The browser PREVIEW_IMPORT picks and what it finds there, made up.
+fn import_found(given: &str) -> Option<(&'static str, browser::import::found::Found)> {
+    use browser::import::found::{
+        FOUR_TAB_SPLIT, Found, FromProfile, Item, LIVE_FOLDER, NOT_WEB_PAGE, Node, Page,
+        SEPARATE_CONTAINER, SPACE_ICON, Space, SpaceFrom, Tab,
+    };
+    let tab = |name: &str, url: &str| Tab {
+        name: name.into(),
+        url: url.into(),
+    };
+    let tabs = |count: usize, site: &str| -> Vec<Node> {
+        (1..=count)
+            .map(|n| Node::Tab(tab(&format!("{site} {n}"), &format!("https://{site}/{n}"))))
+            .collect()
+    };
+    let space = |from, name: &str, pinned: Vec<Node>, today: Vec<Tab>| Space {
+        from,
+        name: name.into(),
+        profile: FromProfile::Default,
+        icon: String::new(),
+        theme: None,
+        pinned,
+        today,
+    };
+    let history = |count: usize| {
+        let pages = (1..=count)
+            .map(|n| Page {
+                url: format!("https://example.org/{n}"),
+                title: format!("Page {n}"),
+                last_visit: 0,
+                visits: 1,
+                typed: 0,
+            })
+            .collect();
+        vec![(FromProfile::Default, pages)]
+    };
+    let bookmarks = |name: &str| {
+        let mut pinned = tabs(9, "example.com");
+        pinned.push(Node::Folder {
+            name: "Reading".into(),
+            children: tabs(4, "example.net"),
+        });
+        space(SpaceFrom::Bookmarks, name, pinned, Vec::new())
+    };
+    let mut found = Found::default();
+    let name = match given {
+        "one" | "four" => {
+            found.spaces = vec![
+                space(
+                    SpaceFrom::Sidebar,
+                    "Home",
+                    tabs(6, "example.com"),
+                    Vec::new(),
+                ),
+                space(
+                    SpaceFrom::Sidebar,
+                    "Work",
+                    tabs(8, "example.org"),
+                    vec![tab("Notes", "https://example.org/notes")],
+                ),
+            ];
+            found.favorites = vec![(
+                FromProfile::Default,
+                vec![tab("Mail", "https://example.net")],
+            )];
+            found.history = history(1_284);
+            found.leave_out(LIVE_FOLDER, 1);
+            if given == "four" {
+                found.leave_out(LIVE_FOLDER, 1);
+                found.leave_out(FOUR_TAB_SPLIT, 1);
+                found.leave_out(SPACE_ICON, 3);
+                found.leave_out(NOT_WEB_PAGE, 2);
+            }
+            "Arc"
+        }
+        // Every thing Zen's reader leaves out, each many, for the line at its longest. They come
+        // from the tests' Arc, as a Zen's Spaces are a choice only once its reader finds its
+        // session, which the made-up home has none of.
+        "longest" => {
+            found.spaces = vec![
+                space(
+                    SpaceFrom::Sidebar,
+                    "Home",
+                    tabs(7, "example.com"),
+                    Vec::new(),
+                ),
+                space(
+                    SpaceFrom::Sidebar,
+                    "Work",
+                    tabs(5, "example.org"),
+                    Vec::new(),
+                ),
+            ];
+            found.history = history(2_316);
+            // Zen's reader's own words, which come with it.
+            let essentials = Item {
+                one: "a folder in Essentials",
+                many: "folders in Essentials",
+            };
+            found.leave_out(SEPARATE_CONTAINER, 14);
+            found.leave_out(LIVE_FOLDER, 3);
+            found.leave_out(NOT_WEB_PAGE, 6);
+            found.leave_out(FOUR_TAB_SPLIT, 2);
+            found.leave_out(essentials, 4);
+            found.leave_out(SPACE_ICON, 5);
+            "Arc"
+        }
+        "zen" => {
+            found.spaces = vec![bookmarks("Zen")];
+            found.history = history(642);
+            found.note = Some(browser::import::zen::TOO_OLD);
+            "Zen"
+        }
+        "dia" => {
+            found.spaces = vec![bookmarks("Dia")];
+            found.history = history(917);
+            found.note = Some(browser::import::dia::ENCRYPTED);
+            "Dia"
+        }
+        _ => return None,
+    };
+    Some((name, found))
+}
+
 fn preview_tone() -> Option<Tone> {
     match std::env::var("PREVIEW_APPEARANCE").ok()?.as_str() {
         "light" => Some(Tone::Light),
@@ -3481,6 +3644,16 @@ fn main() {
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
                         }
+                    }
+                    // PREVIEW_IMPORT=one, =four, =longest, =zen or =dia, with
+                    // PREVIEW_ONBOARDING=<look>:import, picks a browser there with made-up things
+                    // read: Arc with one thing that won't be imported, or four, or all Zen's
+                    // reader leaves out, and Zen and Dia with their notes in place of their Spaces
+                    // (#4051).
+                    if let Ok(given) = std::env::var("PREVIEW_IMPORT")
+                        && let Some((name, found)) = import_found(&given)
+                    {
+                        shell.onboarding_import_read(name, found, cx);
                     }
                     shell
                 });

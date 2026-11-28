@@ -126,7 +126,7 @@ pub struct Found {
     /// What the browser has that has no place here, said before anything comes.
     pub left_out: Vec<LeftOut>,
     /// Why the browser's Spaces can't be read here, said where they'd be counted, with what the
-    /// user can do instead, if anything. No reader gives one yet, and the screen doesn't draw it.
+    /// user can do instead, if anything.
     pub note: Option<Note>,
 }
 

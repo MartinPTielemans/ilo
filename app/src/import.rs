@@ -1074,6 +1074,19 @@ impl ImportView {
         }
     }
 
+    /// Picks the browser named `name` with `found` as though its files had been read, for the
+    /// preview's captures (PREVIEW_IMPORT).
+    pub fn preview_read(&mut self, name: &str, found: Found, cx: &mut Context<Self>) {
+        let Some(source) = (self.sources.iter()).position(|source| source.browser.name == name)
+        else {
+            return;
+        };
+        self.pick(source, cx);
+        // The read the pick started comes to nothing.
+        self.reads += 1;
+        self.picked_read(source, self.reads, Ok(found), cx);
+    }
+
     pub(crate) fn pick(&mut self, source: usize, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: import pick {}", self.sources[source].name());
@@ -2757,18 +2770,35 @@ impl ImportView {
     }
 
     /// The kinds the browser picked has something of, each with how much comes, once its files
-    /// are read; until then, each kind it offers, counting.
+    /// are read; until then, each kind it offers, counting. Spaces its reader has a note for stay,
+    /// first, with nothing counted, as the note stands in their count's place.
     pub(crate) fn choices(&self) -> Vec<(Kind, String)> {
         let Step::Pick { source, read, .. } = &self.step else {
             return Vec::new();
         };
-        let kinds = read::kinds(&self.sources[*source]).iter();
+        let mut kinds = read::kinds(&self.sources[*source]).to_vec();
+        let noted = read.as_ref().is_some_and(|read| read.found.note.is_some());
+        if noted && !kinds.contains(&Kind::Spaces) {
+            kinds.insert(0, Kind::Spaces);
+        }
         kinds
-            .filter_map(|&kind| match read {
+            .into_iter()
+            .filter_map(|kind| match read {
+                Some(_) if noted && kind == Kind::Spaces => Some((kind, String::new())),
                 Some(read) => kind_count(kind, &read.tally).map(|count| (kind, count)),
                 None => Some((kind, "Counting…".to_string())),
             })
             .collect()
+    }
+
+    /// What the browser picked says in place of its Spaces' count, once its files are read.
+    pub(crate) fn spaces_note(&self) -> Option<&found::Note> {
+        match &self.step {
+            Step::Pick {
+                read: Some(read), ..
+            } => read.found.note.as_ref(),
+            _ => None,
+        }
     }
 
     /// The one line that names the kinds the browser picked has nothing of, which fold out of
@@ -2782,7 +2812,9 @@ impl ImportView {
         else {
             return None;
         };
+        let noted = read.found.note.is_some();
         let empty: Vec<&str> = (read::kinds(&self.sources[*source]).iter())
+            .filter(|&&kind| !(noted && kind == Kind::Spaces))
             .filter(|&&kind| kind_count(kind, &read.tally).is_none())
             .map(|kind| kind.label())
             .collect();
@@ -2840,7 +2872,13 @@ impl ImportView {
             return div().into_any_element();
         };
         let from = &self.sources[source];
+        let note = self.spaces_note().cloned();
         let rows = self.choices().into_iter().map(|(kind, said)| {
+            if kind == Kind::Spaces
+                && let Some(note) = &note
+            {
+                return self.note_row(note, cx);
+            }
             let slid = match self.switched {
                 Some((switched, at)) if switched == kind => {
                     (at.elapsed().as_secs_f32() / SLIDE).min(1.)
@@ -2927,6 +2965,37 @@ impl ImportView {
                 ]))
             })
             .into_any_element()
+    }
+
+    /// The Spaces' row when the browser's can't be read here: why, in its reader's words, and the
+    /// control that brings them another way, if there is one. Its glyph is dimmed only when there's
+    /// none, as the row then offers nothing to do.
+    fn note_row(&self, note: &found::Note, _cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let action = note.action.map(|action| match action {
+            found::Action::ChooseFile => {
+                let label = match self.os {
+                    Os::Mac => "Choose File…",
+                    _ => "Choose file…",
+                };
+                // Called by what it chooses, as the passwords' row's Choose File… is beside it.
+                button(look, "import-choose-spaces", label)
+                    .when(self.a11y, |choose| {
+                        named_button(choose, "Choose Spaces Export…")
+                    })
+                    .into_any_element()
+            }
+        });
+        frame()
+            .child(glyph_plate(look, glyph(Kind::Spaces), action.is_some()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().truncate().child(Kind::Spaces.label()))
+                    .child(marked(look, note.said)),
+            )
+            .child(end(action))
     }
 
     /// The passwords' row among the kinds: where the browser exports them, with Choose File…, or

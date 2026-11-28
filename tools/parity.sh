@@ -29,7 +29,10 @@
 # with a page to open, light and dark (#3652), and Settings › Agents with the ilo command's row not
 # there, there, and in a folder the shell doesn't search, light and dark, and its two longest
 # lines in Settings' narrowest window, and a Flatpak's, not there and there with the line to run
-# on the host, light and dark and in the narrowest window (#3667). The preview's Linux host places no window, so sway
+# on the host, light and dark and in the narrowest window (#3667), and the import's choices from
+# a browser picked at the first launch, with one thing that won't be imported and with four, and
+# Zen's and Dia's notes in place of their Spaces, light and dark, and the line of what won't be
+# imported at its longest, all Zen's reader leaves out, light (#4051). The preview's Linux host places no window, so sway
 # puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
 # would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
@@ -120,6 +123,15 @@ screens=(
   "command-line-flatpak-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light"
   "command-line-flatpak-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=dark"
   "command-line-flatpak-on-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
+  "import-one-light|import drawn pick|PREVIEW_ONBOARDING=light:import PREVIEW_IMPORT=one PREVIEW_APPEARANCE=light"
+  "import-one-dark|import drawn pick|PREVIEW_ONBOARDING=dark:import PREVIEW_IMPORT=one PREVIEW_APPEARANCE=dark"
+  "import-four-light|import drawn pick|PREVIEW_ONBOARDING=light:import PREVIEW_IMPORT=four PREVIEW_APPEARANCE=light"
+  "import-four-dark|import drawn pick|PREVIEW_ONBOARDING=dark:import PREVIEW_IMPORT=four PREVIEW_APPEARANCE=dark"
+  "import-longest-light|import drawn pick|PREVIEW_ONBOARDING=light:import PREVIEW_IMPORT=longest PREVIEW_APPEARANCE=light"
+  "import-zen-light|import drawn pick|PREVIEW_ONBOARDING=light:import PREVIEW_IMPORT=zen PREVIEW_APPEARANCE=light"
+  "import-zen-dark|import drawn pick|PREVIEW_ONBOARDING=dark:import PREVIEW_IMPORT=zen PREVIEW_APPEARANCE=dark"
+  "import-dia-light|import drawn pick|PREVIEW_ONBOARDING=light:import PREVIEW_IMPORT=dia PREVIEW_APPEARANCE=light"
+  "import-dia-dark|import drawn pick|PREVIEW_ONBOARDING=dark:import PREVIEW_IMPORT=dia PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

@@ -174,6 +174,11 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
             found.favorites = sidebar.favorites;
         }
     }
+    // Why its Spaces can't come is said whatever is picked, as their row says it before a pick,
+    // and from a browser with no sidebar file to read too.
+    if found.note.is_none() {
+        found.note = super::sidebar::note(source);
+    }
     let name = source.browser.name;
     let since = now
         .checked_sub(Duration::from_secs(HISTORY_DAYS * 24 * 60 * 60))
