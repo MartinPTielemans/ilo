@@ -3430,13 +3430,17 @@ page-chip-below = 5.0
 page-chip-fill = 0.08
 # The work between two messages (spec-thread-stage.md › The log): one flat running log, a quiet
 # line per step, with no page's line over them. A stretch is a fold: its head `fold-head` tall, at
-# work its word in the text's ink at medium, the time counting up in text-2, and a chevron down;
-# done, one phrase in text-2 and a chevron right, and it closes by itself. Under the head, its
-# lines `stretch-gap` apart, flat at one indent: an icon slot, the words at `trace-text` on
-# `trace-text-line`. A step is its kind's glyph, the assistant's words on it in text-2, and the
-# product's account at the right in text-2; a step with no words of the assistant's is its account
-# alone. The step under way shimmers, with no ring. A failed step is as quiet as any other, a cross
-# for its glyph and its reason in its account: never red.
+# work its word at medium, the time counting up, and a chevron down; done, one phrase and a chevron
+# right, and it closes by itself. Under the head, its lines `stretch-gap` apart, flat at one
+# indent: an icon slot, the words at `trace-text` on `trace-text-line`. A step is its kind's glyph,
+# the assistant's words on it, and the product's account at the right; a step with no words of the
+# assistant's is its account alone. The step under way shimmers, with no ring. A failed step is as
+# quiet as any other, a cross for its glyph and its reason in its account: never red. Everything
+# the trace writes, heads, steps, accounts, helpers' names and times, and the copy row under an
+# answer, is the one grey `trace-ink`, under the user's and the assistant's words in full ink
+# (#4463). While a stretch runs its done steps stay as lines, the step under way last: the newest
+# `steps-live` show, and those before fold into one line at its top; under a helper's row, the
+# newest `helper-steps-live` (#4464).
 trace-line = 26.0
 fold-head = 28.0
 fold-gap = 6.0
@@ -3446,8 +3450,9 @@ trace-text-line = 16.0
 trace-glyph = 16.0
 trace-glyph-alpha = 0.55
 trace-gap = 10.0
-trace-title = 0.6
-trace-note = 0.6
+trace-ink = 0.6
+steps-live = 5
+helper-steps-live = 3
 trace-chevron = 12.0
 trace-hover = 0.06
 trace-hang = 6.0
@@ -3455,10 +3460,11 @@ step-ring = 14.0
 step-ring-stroke = 1.6
 # A helper's row (screen 4c), `helper-above` under the one before it with nothing between them:
 # its knot at `trace-glyph` in the icon slot, `trace-gap` before its name at `trace-text` on
-# `helper-name-line` in the text's ink; under the name at its indent, `helper-quiet-top` below the
-# name's top, one quiet line at `helper-quiet-text` on `helper-quiet-line`, the step it's on as a
-# step's line says it. Done, its knot stands at `knot-done`. At the name line's right, its time
-# from the split at `helper-time` in text-3, which stops as it ends.
+# `helper-name-line` in `trace-ink`; under the name at its indent, `helper-quiet-top` below the
+# name's top, its steps as lines at `helper-quiet-text` on `helper-quiet-line`, the one it's on
+# last, each as a step's line says it; once it ends, the one line of what it did by kind. Done, its
+# knot stands at `knot-done`. At the name line's right, its time from the split at `helper-time`
+# in `trace-ink`, which stops as it ends.
 helper-above = 4.0
 helper-name-line = 16.0
 helper-quiet-top = 20.0

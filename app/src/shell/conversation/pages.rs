@@ -175,6 +175,7 @@ mod tests {
             tab: None,
             began: None,
             ended: None,
+            steps: Vec::new(),
         };
         let items = [
             step(0, None),

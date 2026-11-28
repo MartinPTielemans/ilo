@@ -3211,6 +3211,7 @@ fn helper(step: TraceStep) -> TraceItem {
         tab: None,
         began: None,
         ended: None,
+        steps: Vec::new(),
     }
 }
 
@@ -3257,6 +3258,7 @@ fn a_helpers_time_counts_from_the_split_and_stops_as_it_ends() {
         tab: None,
         began,
         ended: None,
+        steps: Vec::new(),
     };
     let items = [
         TraceItem::Step(step(1, "Searched the web", false)),
@@ -4295,7 +4297,7 @@ fn said_words_between_steps_are_in_the_texts_ink() {
         let palette = Palette::of(None, tone);
         let ink = super::said_ink(&palette);
         assert_ne!(ink, palette.gray(crate::shell::SECONDARY), "{tone:?}");
-        let quiet = crate::tokens::shell::conversation::TRACE_NOTE;
+        let quiet = crate::tokens::shell::conversation::TRACE_INK;
         assert_ne!(ink, palette.gray(quiet), "{tone:?}");
         let ground = gpui::Rgba {
             a: 1.,
@@ -4314,7 +4316,7 @@ fn said_words_between_steps_are_in_the_texts_ink() {
 fn a_failed_line_wears_no_red() {
     use super::TraceLine;
     use crate::palette::{Palette, Tone};
-    use crate::tokens::shell::conversation::TRACE_NOTE;
+    use crate::tokens::shell::conversation::TRACE_INK;
     let step = || {
         let why = "There's no element e7 on the page.";
         let mut line = TraceLine::new(Fold::Step(1), "Couldn't click “Pay”".into(), why.into());
@@ -4344,7 +4346,7 @@ fn a_failed_line_wears_no_red() {
             );
             assert_eq!(
                 inks.note,
-                palette.gray(TRACE_NOTE),
+                palette.gray(TRACE_INK),
                 "{tone:?}: why in text-2"
             );
             let drawn = [
@@ -4377,7 +4379,7 @@ fn a_failed_line_wears_no_red() {
 fn a_still_step_under_way_holds_at_the_titles_ink() {
     use super::{TITLE, TraceLine};
     use crate::palette::{Palette, Tone};
-    use crate::tokens::shell::conversation::TRACE_NOTE;
+    use crate::tokens::shell::conversation::TRACE_INK;
     for tone in [Tone::Dark, Tone::Light] {
         let palette = Palette::of(None, tone);
         let line = || {
@@ -4400,7 +4402,7 @@ fn a_still_step_under_way_holds_at_the_titles_ink() {
         let done = line().inks(&palette);
         assert_eq!(
             done.note,
-            palette.gray(TRACE_NOTE),
+            palette.gray(TRACE_INK),
             "{tone:?}: done, the account in text-2"
         );
     }
@@ -6033,4 +6035,226 @@ fn the_sign_asks_for_frames_only_while_it_moves_where_it_can_be_seen(cx: &mut Te
         None,
         "an ended thread draws the sign"
     );
+}
+
+/// The trace's lines as a screen reader reads them, in order, after a frame with it on.
+fn read_lines(
+    shell: &Entity<Shell>,
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> Vec<String> {
+    use gpui::accesskit::Role;
+    cx.simulate_a11y_activation();
+    redraw(shell, view, cx);
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    (tree.nodes.iter())
+        .filter(|(_, node)| node.role() == Role::Label)
+        .filter_map(|(_, node)| node.label().map(str::to_string))
+        .collect()
+}
+
+/// Task-1's conversation, its stretch `running` on steps `0..steps`, the last under way while it
+/// runs, each its own words.
+fn stepping(steps: usize, running: bool) -> Conversation {
+    let mut talk = conversation(1);
+    let trace = its_trace(&mut talk);
+    (trace.running, trace.took) = (running, (!running).then_some(4));
+    trace.items = (0..steps)
+        .map(|key| {
+            TraceItem::Step(step(
+                key,
+                &format!("Read page {key}"),
+                running && key + 1 == steps,
+            ))
+        })
+        .collect();
+    talk
+}
+
+/// Where `line` stands among `lines`, which must have it.
+fn at(lines: &[String], line: &str) -> usize {
+    (lines.iter().position(|each| each == line))
+        .unwrap_or_else(|| panic!("no line “{line}” among {lines:?}"))
+}
+
+/// A running stretch lists its done steps as lines, the one under way last; a sixth folds the
+/// first into “1 earlier step” at its top, which a click opens and folds again; and when the
+/// assistant speaks, the stretch folds to its summary, which a click opens (#4464).
+#[gpui::test]
+fn a_running_stretch_lists_its_newest_steps_and_folds_the_earlier(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(stepping(5, true)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let lines = read_lines(&shell, &view, cx);
+    let places: Vec<usize> = (0..5)
+        .map(|key| at(&lines, &format!("Read page {key}")))
+        .collect();
+    assert!(
+        places.is_sorted(),
+        "its steps aren't in order, the one under way last: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("earlier")),
+        "five fold none: {lines:?}"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(stepping(6, true)), cx)
+    });
+    let lines = read_lines(&shell, &view, cx);
+    assert!(
+        !lines.contains(&"Read page 0".to_string()),
+        "the first still shows: {lines:?}"
+    );
+    let earlier = at(&lines, "1 earlier step");
+    let places: Vec<usize> = (1..6)
+        .map(|key| at(&lines, &format!("Read page {key}")))
+        .collect();
+    assert!(
+        places.is_sorted(),
+        "the one under way isn't last: {lines:?}"
+    );
+    assert!(
+        earlier < places[0],
+        "“1 earlier step” isn't at the stretch's top: {lines:?}"
+    );
+    assert_eq!(super::words::earlier(2), "2 earlier steps");
+
+    view.update(cx, |view, cx| view.toggle(Fold::Earlier(0), false, cx));
+    let lines = read_lines(&shell, &view, cx);
+    assert!(
+        at(&lines, "Read page 0") < at(&lines, "Read page 1"),
+        "a click didn't open it"
+    );
+    view.update(cx, |view, cx| view.toggle(Fold::Earlier(0), false, cx));
+    let lines = read_lines(&shell, &view, cx);
+    assert!(
+        !lines.contains(&"Read page 0".to_string()),
+        "a second click didn't fold it"
+    );
+
+    // The assistant speaks: the stretch is over, and folds to its summary.
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(stepping(6, false)), cx)
+    });
+    let lines = read_lines(&shell, &view, cx);
+    let open = view.read_with(cx, |view, _| view.is_open(Fold::Trace(0), false));
+    assert!(!open, "it didn't fold as the assistant spoke");
+    assert!(
+        !lines.iter().any(|line| line.contains("earlier")),
+        "it kept its earlier line: {lines:?}"
+    );
+    view.update(cx, |view, cx| view.toggle(Fold::Trace(0), false, cx));
+    let lines = read_lines(&shell, &view, cx);
+    for key in 0..6 {
+        at(&lines, &format!("Read page {key}"));
+    }
+}
+
+/// Task-1's working stretch with one named helper on `done` steps done and one under way, the
+/// last, until it ended in `times`.
+fn with_helper_steps(
+    done: usize,
+    times: Option<(std::time::Instant, std::time::Instant)>,
+) -> Conversation {
+    let ended = times.is_some();
+    let steps: Vec<TraceStep> = (0..=done)
+        .map(|at| step(20 + at, &format!("Read shop {at}"), at == done && !ended))
+        .collect();
+    let mut talk = conversation(1);
+    let trace = its_trace(&mut talk);
+    trace.items = vec![
+        TraceItem::Helper {
+            step: steps[done].clone(),
+            name: "Hexa".into(),
+            tab: None,
+            began: times.map(|(began, _)| began),
+            ended: times.map(|(_, ended)| ended),
+            steps,
+        },
+        TraceItem::Step(step(0, "Reading reviews.example", true)),
+    ];
+    talk
+}
+
+/// Under a working helper's row its steps are lines as they're done, the one it's on last; its
+/// fourth folds the first into “1 earlier step”, which a click opens. Once it ends, its row folds
+/// to one line of what it did by kind, which a click opens to its steps (#4464).
+#[gpui::test]
+fn a_helpers_row_lists_its_newest_steps_and_folds_once_it_ends(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(with_helper_steps(2, None)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let lines = read_lines(&shell, &view, cx);
+    let row = at(&lines, "Hexa");
+    let places: Vec<usize> = (0..3)
+        .map(|key| at(&lines, &format!("Read shop {key}")))
+        .collect();
+    assert!(
+        places.is_sorted(),
+        "its steps aren't in order, the one it's on last: {lines:?}"
+    );
+    assert!(row < places[0], "its steps aren't under its row: {lines:?}");
+    assert!(
+        places[2] < at(&lines, "Reading reviews.example"),
+        "they're not under its row"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("earlier")),
+        "three fold none: {lines:?}"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(with_helper_steps(3, None)), cx)
+    });
+    let lines = read_lines(&shell, &view, cx);
+    assert!(
+        !lines.contains(&"Read shop 0".to_string()),
+        "the first still shows: {lines:?}"
+    );
+    let earlier = at(&lines, "1 earlier step");
+    assert!(
+        at(&lines, "Hexa") < earlier && earlier < at(&lines, "Read shop 1"),
+        "{lines:?}"
+    );
+    view.update(cx, |view, cx| {
+        view.toggle(Fold::HelperEarlier(23), false, cx)
+    });
+    let lines = read_lines(&shell, &view, cx);
+    assert!(
+        at(&lines, "Read shop 0") < at(&lines, "Read shop 1"),
+        "a click didn't open it"
+    );
+
+    // It ends while its stretch works on: one line of what it did.
+    let began = std::time::Instant::now();
+    let times = Some((began, began + std::time::Duration::from_secs(12)));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(with_helper_steps(3, times)), cx)
+    });
+    let lines = read_lines(&shell, &view, cx);
+    for key in 0..4 {
+        let line = format!("Read shop {key}");
+        assert!(!lines.contains(&line), "“{line}” still shows: {lines:?}");
+    }
+    // Its row has its time now, at the right.
+    let row = |lines: &[String]| {
+        (lines.iter().position(|line| line.starts_with("Hexa ")))
+            .unwrap_or_else(|| panic!("no row for Hexa among {lines:?}"))
+    };
+    let did = row(&lines) + 1;
+    assert_eq!(
+        lines[did], "Ran 4 steps",
+        "no line of what it did: {lines:?}"
+    );
+    view.update(cx, |view, cx| view.toggle(Fold::Helper(23), false, cx));
+    let lines = read_lines(&shell, &view, cx);
+    let places: Vec<usize> = (0..4)
+        .map(|key| at(&lines, &format!("Read shop {key}")))
+        .collect();
+    assert!(places.is_sorted() && row(&lines) < places[0], "{lines:?}");
 }

@@ -298,41 +298,45 @@ impl Trace {
     /// picture, is never counted in: each stands apart, by its key, as its own line. The pages
     /// read are counted by page, and one it opened too counts once, as opened (TS1).
     pub fn folded(&self) -> Folded {
-        let steps = (self.items.iter()).flat_map(|item| match item {
-            TraceItem::Step(step) => match &step.opens {
-                Opens::Steps(tabs) if !tabs.is_empty() => tabs.iter().collect(),
-                _ => vec![step],
-            },
+        folded((self.items.iter()).flat_map(|item| match item {
+            TraceItem::Step(step) => vec![step],
             TraceItem::Said(_) | TraceItem::Helper { .. } => Vec::new(),
-        });
-        let mut folded = Folded::default();
-        let (mut opened, mut read) = (Vec::new(), Vec::new());
-        for step in steps {
-            if step.failed || matches!(step.opens, Opens::Picture(_)) {
-                folded.apart.push(step.key);
-                continue;
-            }
-            match (folded.kinds.iter_mut()).find(|(kind, _)| *kind == step.kind) {
-                Some((_, count)) => *count += 1,
-                None => folded.kinds.push((step.kind, 1)),
-            }
-            let Some(page) = step.page.as_ref() else {
-                folded.read += usize::from(step.kind == tools::StepKind::Read);
-                continue;
-            };
-            match step.kind {
-                tools::StepKind::Opened => opened.push(page),
-                tools::StepKind::Read
-                    if !(opened.iter().chain(&read)).any(|was| page.same(was)) =>
-                {
-                    read.push(page);
-                    folded.read += 1;
-                }
-                _ => {}
-            }
-        }
-        folded
+        }))
     }
+}
+
+/// What `steps` count folded, as `Trace::folded` says: a stretch's own, or a helper's once it
+/// ended (#4464). A row that's the same step on several tabs counts each.
+pub fn folded<'a>(steps: impl Iterator<Item = &'a TraceStep>) -> Folded {
+    let steps = steps.flat_map(|step| match &step.opens {
+        Opens::Steps(tabs) if !tabs.is_empty() => tabs.iter().collect(),
+        _ => vec![step],
+    });
+    let mut folded = Folded::default();
+    let (mut opened, mut read) = (Vec::new(), Vec::new());
+    for step in steps {
+        if step.failed || matches!(step.opens, Opens::Picture(_)) {
+            folded.apart.push(step.key);
+            continue;
+        }
+        match (folded.kinds.iter_mut()).find(|(kind, _)| *kind == step.kind) {
+            Some((_, count)) => *count += 1,
+            None => folded.kinds.push((step.kind, 1)),
+        }
+        let Some(page) = step.page.as_ref() else {
+            folded.read += usize::from(step.kind == tools::StepKind::Read);
+            continue;
+        };
+        match step.kind {
+            tools::StepKind::Opened => opened.push(page),
+            tools::StepKind::Read if !(opened.iter().chain(&read)).any(|was| page.same(was)) => {
+                read.push(page);
+                folded.read += 1;
+            }
+            _ => {}
+        }
+    }
+    folded
 }
 
 /// A stretch as its folded line counts it (`Trace::folded`).
@@ -389,6 +393,9 @@ pub enum TraceItem {
         /// stretch's end: its line's time stops there (screen 4c).
         began: Option<Instant>,
         ended: Option<Instant>,
+        /// Its steps so far, oldest first, each at its own place in the trace: the last is the
+        /// one it's on. Its row lists them as they happen (#4464).
+        steps: Vec<TraceStep>,
     },
 }
 
@@ -5483,7 +5490,8 @@ impl<'a> Stretch<'a> {
                 // A helper's one line is the step it's on, where it started or in the place of
                 // its first. Its page is that step's, the one the step opened, or before it has
                 // a step, the one it opened or named.
-                Together::Helper { helper, key, on } => {
+                Together::Helper { helper, key, steps } => {
+                    let on = steps.last().copied();
                     let all = self.helpers;
                     let page = |key: usize| all.and_then(|all| all.opened_at(key));
                     let (began, ended) = all.map_or((None, None), |all| all.times(helper));
@@ -5499,6 +5507,10 @@ impl<'a> Stretch<'a> {
                         },
                         began,
                         ended,
+                        // Each step at its own place, so a line keeps its key as it finishes.
+                        steps: (steps.iter())
+                            .map(|&(at, step)| helper_step(at, (at, step)))
+                            .collect(),
                     }
                 }
             })
@@ -5510,6 +5522,9 @@ impl<'a> Stretch<'a> {
             for item in &mut items {
                 if let TraceItem::Helper { ended, .. } = item {
                     *ended = ended.or(over);
+                }
+                if let TraceItem::Helper { steps, .. } = item {
+                    steps.iter_mut().for_each(|step| step.running = false);
                 }
                 if let TraceItem::Step(step) | TraceItem::Helper { step, .. } = item {
                     step.running = false;
@@ -5539,11 +5554,11 @@ enum Together<'a> {
     Steps(Vec<(usize, &'a Traced)>),
     Said(SharedString),
     /// A helper as one line (#4102): which helper, the line's key, which is its own from where
-    /// it started and else its first step's place, and the step it's on, if it has one yet.
+    /// it started and else its first step's place, and its steps so far, the last the one it's on.
     Helper {
         helper: usize,
         key: usize,
-        on: Option<(usize, &'a Traced)>,
+        steps: Vec<(usize, &'a Traced)>,
     },
 }
 
@@ -5567,16 +5582,18 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             Gathered::Helper(helper, at, step) => {
                 let line = lines.iter_mut().find_map(|line| match line {
                     Together::Helper {
-                        helper: each, on, ..
-                    } if *each == helper => Some(on),
+                        helper: each,
+                        steps,
+                        ..
+                    } if *each == helper => Some(steps),
                     _ => None,
                 });
                 match line {
-                    Some(on) => *on = Some((at, step)),
+                    Some(steps) => steps.push((at, step)),
                     None => lines.push(Together::Helper {
                         helper,
                         key: at,
-                        on: Some((at, step)),
+                        steps: vec![(at, step)],
                     }),
                 }
                 continue;
@@ -5587,7 +5604,7 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
                     lines.push(Together::Helper {
                         helper,
                         key: helpers::BEGAN + helper,
-                        on: None,
+                        steps: Vec::new(),
                     });
                 }
                 continue;

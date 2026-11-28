@@ -164,24 +164,56 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
     let began = now.checked_sub(std::time::Duration::from_secs(21));
     // A helper's step leads with the assistant's own words and has the account at the right,
     // as on sheet 45; the one handed over has only the account.
-    let helper = |at: usize, tool: &str, did: &str, words: &str, under_way| TraceItem::Helper {
-        step: TraceStep {
-            kind: Default::default(),
-            key: 10 + at,
-            glyph: browser::agents::tools::step_glyph(tool),
-            title: format!("{did} {}", sites[at].1).into(),
-            description: "".into(),
-            running: under_way,
-            failed: false,
-            opens: Opens::Nothing,
-            under: "".into(),
-            page: None,
-            says: words.into(),
-        },
-        name: HELPER_NAMES[at].into(),
-        tab: Some(sites[at].0),
-        began,
-        ended: (!running).then_some(now),
+    let step = |key: usize, tool: &str, title: String, words: &str, under_way| TraceStep {
+        kind: Default::default(),
+        key,
+        glyph: browser::agents::tools::step_glyph(tool),
+        title: title.into(),
+        description: "".into(),
+        running: under_way,
+        failed: false,
+        opens: Opens::Nothing,
+        under: "".into(),
+        page: None,
+        says: words.into(),
+    };
+    // The first one has worked a while (#4464): its done steps stay under its row, those past
+    // the newest few folded into one line over them.
+    let before = |at: usize, site: &str| -> Vec<TraceStep> {
+        let done = [
+            ("open_tab", format!("Opened {site}")),
+            ("click", "Clicked “Seating plan”".to_string()),
+            ("scroll", "Scrolled to “Stalls”".to_string()),
+            ("click", "Clicked “Saturday 14 Dec”".to_string()),
+        ];
+        let done = if at == 0 { &done[..] } else { &done[..1] };
+        (done.iter().enumerate())
+            .map(|(each, (tool, title))| {
+                step(100 * (at + 1) + each, tool, title.clone(), "", false)
+            })
+            .collect()
+    };
+    let helper = |at: usize, tool: &str, did: &str, words: &str, under_way| {
+        let on = step(
+            10 + at,
+            tool,
+            format!("{did} {}", sites[at].1),
+            words,
+            under_way,
+        );
+        let mut steps = before(at, &sites[at].1);
+        steps.push(TraceStep {
+            key: 100 * (at + 1) + 50,
+            ..on.clone()
+        });
+        TraceItem::Helper {
+            step: on,
+            name: HELPER_NAMES[at].into(),
+            tab: Some(sites[at].0),
+            began,
+            ended: (!running).then_some(now),
+            steps,
+        }
     };
     (0..count)
         .map(|at| match (at == HELPER_WAITING && waits, running) {

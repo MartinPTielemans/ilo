@@ -30,6 +30,15 @@ const YOU_STOPPED: &str = "You stopped it";
 /// The button under an answer that copies it, as a screen reader names it (Z18).
 pub const COPY_ANSWER: &str = "Copy Answer";
 
+/// The line over a running stretch's steps, or a working helper's, before the newest it shows
+/// (#4464). A draft, owed to the words table.
+pub fn earlier(steps: usize) -> String {
+    match steps {
+        1 => "1 earlier step".to_string(),
+        steps => format!("{steps} earlier steps"),
+    }
+}
+
 /// The line over a stretch's helpers (Z16), for two or more: the table has no line for one.
 pub fn split(strands: usize) -> Option<String> {
     (strands > 1).then(|| format!("Split into {strands} strands"))

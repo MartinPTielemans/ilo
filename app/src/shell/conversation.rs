@@ -69,16 +69,16 @@ use crate::tokens::shell::conversation::{
     COMPOSER_RADIUS, COMPOSER_RIM, COMPOSER_ROUND, COMPOSER_ROW, COMPOSER_ROW_GAP,
     COMPOSER_ROW_UNDER, COMPOSER_ROW_X, COMPOSER_SQUARE, COMPOSER_SQUARE_RADIUS, COMPOSER_TEXT,
     COPY_GLYPH, FOLD_GAP, FOLD_HEAD, HEADER_BOTTOM, HELPER_ABOVE, HELPER_NAME_LINE,
-    HELPER_QUIET_LINE, HELPER_QUIET_TEXT, HELPER_QUIET_TOP, HELPER_TIME, INSET, ITEM_GAP,
-    KNOT_DONE, LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE,
+    HELPER_QUIET_LINE, HELPER_QUIET_TEXT, HELPER_QUIET_TOP, HELPER_STEPS_LIVE, HELPER_TIME, INSET,
+    ITEM_GAP, KNOT_DONE, LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW, LINK_LINE, LINK_UNDERLINE,
     LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON,
     PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP,
     PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL,
     REPLY_GAP, REPLY_HEIGHT, SAID_GAP, SAID_INK, SAID_RULE, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD,
-    SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE,
-    TITLE_SIZE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA,
-    TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS,
-    TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
+    SITE_GAP, STEP_RING, STEP_RING_STROKE, STEPS_LIVE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE,
+    TITLE_LINE, TITLE_SIZE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
+    TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_INK, TRACE_LINE, TRACE_PICTURE_HEIGHT,
+    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RAIL, RING_TURN};
 use crate::tokens::shell::task::{
@@ -341,6 +341,12 @@ pub(super) enum Fold {
     Trace(usize),
     Step(usize),
     Group(usize),
+    /// A running stretch's steps before the newest it shows, by its key (#4464).
+    Earlier(usize),
+    /// A working helper's steps before the newest under its row, by its row's key.
+    HelperEarlier(usize),
+    /// A helper that ended: the line of what it did, which opens to its steps, by its row's key.
+    Helper(usize),
 }
 
 impl Shell {
@@ -1446,7 +1452,7 @@ impl TalkView {
                     .whitespace_nowrap()
                     .text_size(px(text::BODY))
                     .line_height(px(META_LINE))
-                    .text_color(palette.gray(TRACE_NOTE))
+                    .text_color(palette.gray(TRACE_INK))
                     .child(about),
             );
         div()
@@ -1692,7 +1698,7 @@ impl TalkView {
                 .truncate()
                 .text_size(px(panel::LIVE))
                 .line_height(px(panel::LIVE_LINE))
-                .text_color(palette.gray(TRACE_NOTE))
+                .text_color(palette.gray(TRACE_INK))
                 .child(said)
         });
         let button = row.case.as_ref().map(|case| {
@@ -2355,6 +2361,22 @@ impl TalkView {
         self.crossfade(fold, &mut line, look);
         let paged = pages::paged(&trace.items);
         let mut nest = nest();
+        // While it runs, its steps stay as lines once done, the one under way last: the newest
+        // show, and those before fold into one line at its top, which a click opens (#4464).
+        let earlier = Fold::Earlier(trace.key);
+        let keys: Vec<usize> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step.key),
+                _ => None,
+            })
+            .collect();
+        let before = keys.len().saturating_sub(STEPS_LIVE as usize);
+        let before = if running { before } else { 0 };
+        let hidden = match self.is_open(earlier, false) {
+            true => &[][..],
+            false => &keys[..before],
+        };
+        nest = nest.children((before > 0).then(|| self.earlier_line(earlier, before, look, cx)));
         // Where the run of helpers in hand split, from its first helper's start: each one's time
         // counts from there.
         let mut split_at = None;
@@ -2375,21 +2397,23 @@ impl TalkView {
             }
             let (index, item) = match each {
                 pages::Paged::Page(page) => {
-                    let steps = page.steps.iter();
+                    let steps = (page.steps.iter()).filter(|step| !hidden.contains(&step.key));
                     nest = nest.children(steps.flat_map(|step| self.step(step, true, look, cx)));
                     continue;
                 }
                 pages::Paged::Item(index, item) => (*index, *item),
             };
             nest = match item {
+                TraceItem::Step(step) if hidden.contains(&step.key) => nest,
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
                 // A helper's line has no Take Over, which is the one page's the task stands on.
                 TraceItem::Helper {
                     step,
                     name,
                     tab,
+                    began,
                     ended,
-                    ..
+                    steps,
                 } => {
                     let page = tab.and_then(|tab| look.helper_page(tab));
                     let time = split_at.map(|split| helper_time(split, *ended, look.now));
@@ -2403,7 +2427,13 @@ impl TalkView {
                                 .w_full()
                                 .pt(px(HELPER_ABOVE))
                                 .child(trace_line(look, line))
-                                .children(self.quiet_line(step, look));
+                                .children(self.helper_steps(
+                                    step.key,
+                                    steps,
+                                    (*began).zip(*ended),
+                                    look,
+                                    cx,
+                                ));
                             let row = row.into_any_element();
                             nest.child(risen(row, self.motion.came(Key::Step(step.key)), look))
                         }
@@ -2660,7 +2690,7 @@ impl TalkView {
         let sub = (!step.under.is_empty()).then(|| {
             div()
                 .pl(px(under))
-                .text_color(palette.gray(TRACE_NOTE))
+                .text_color(palette.gray(TRACE_INK))
                 .child(step.under.clone())
                 .into_any_element()
         });
@@ -2676,10 +2706,86 @@ impl TalkView {
         })
     }
 
-    /// A helper's quiet line under its name: its `step` as a step's line says it, at the name's
-    /// indent, shimmering while it's under way. A helper's line never opens. None before its
-    /// first step has words.
-    fn quiet_line(&self, step: &TraceStep, look: &Look) -> Option<gpui::AnyElement> {
+    /// The line over a running stretch's or a helper's steps before the newest it shows: how
+    /// many, with a chevron, which a click opens to them and folds again (#4464).
+    fn earlier_line(
+        &self,
+        fold: Fold,
+        before: usize,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let open = self.is_open(fold, false);
+        let mut line = TraceLine::new(fold, words::earlier(before).into(), "".into());
+        line.chevron = Some(self.chevron(fold, open, look));
+        let line = trace_line(look, line)
+            .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
+        // At the steps' words, past their glyphs' slot.
+        div()
+            .pl(px(TRACE_GLYPH + TRACE_GAP))
+            .child(line)
+            .into_any_element()
+    }
+
+    /// A helper's steps under its row (#4464): while it works each as a line once done, the one
+    /// it's on last, the newest `HELPER_STEPS_LIVE`, those before folded into one line over them;
+    /// once it ended (`times`, from its start to its end), the one line of what it did by kind
+    /// (TS1), which a click opens to them all.
+    fn helper_steps(
+        &self,
+        row: usize,
+        steps: &[TraceStep],
+        times: Option<(Instant, Instant)>,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let mut lines = Vec::new();
+        let shown = match times {
+            Some((began, ended)) => {
+                let took = ended.saturating_duration_since(began).as_secs().max(1);
+                let did = words::summary(&crate::agents::task::folded(steps.iter()), 0, took);
+                let Some(did) = did else { return lines };
+                let fold = Fold::Helper(row);
+                let open = self.is_open(fold, false);
+                let mut line = TraceLine::new(fold, did.into(), "".into());
+                line.quiet = true;
+                line.chevron = Some(self.chevron(fold, open, look));
+                self.crossfade(fold, &mut line, look);
+                let line = trace_line(look, line)
+                    .on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
+                lines.push(under_row(line.into_any_element(), true));
+                if !open {
+                    return lines;
+                }
+                steps
+            }
+            None => {
+                let before = steps.len().saturating_sub(HELPER_STEPS_LIVE as usize);
+                let fold = Fold::HelperEarlier(row);
+                if before > 0 {
+                    let line = self.earlier_line(fold, before, look, cx);
+                    lines.push(under_row(line, true));
+                }
+                match self.is_open(fold, false) {
+                    true => steps,
+                    false => &steps[before..],
+                }
+            }
+        };
+        for step in shown {
+            let first = lines.is_empty();
+            lines.extend(
+                self.helper_step_line(step, look)
+                    .map(|line| under_row(line, first)),
+            );
+        }
+        lines
+    }
+
+    /// A step of a helper's under its row, as a step's line says it, its glyph first, shimmering
+    /// while it's under way. It rises in as it comes and crossfades to its past tense as it ends.
+    /// A helper's step never opens. None before it has words.
+    fn helper_step_line(&self, step: &TraceStep, look: &Look) -> Option<gpui::AnyElement> {
         let (title, note) = step_words(step);
         if title.is_empty() {
             return None;
@@ -2687,15 +2793,13 @@ impl TalkView {
         let mut line = TraceLine::new(Fold::Step(step.key), title, note);
         line.heard = self.heard(step);
         line.quiet = true;
+        line.glyph = Some(step.glyph);
+        line.failed = step.failed;
         line.shimmers = step.running.then(|| look.shimmer(self.made));
         self.crossfade(Fold::Step(step.key), &mut line, look);
         line.note_alpha = line.note_alpha.min(self.motion.note(step.key, look.now));
-        let quiet = div()
-            .flex_none()
-            .pl(px(TRACE_GLYPH + TRACE_GAP))
-            .pt(px(HELPER_QUIET_TOP - HELPER_NAME_LINE))
-            .child(trace_line(look, line));
-        Some(quiet.into_any_element())
+        let line = trace_line(look, line).into_any_element();
+        Some(risen(line, self.motion.came(Key::Step(step.key)), look))
     }
 
     /// What was asked, with its page, and the lines after it, then the answers to the question it
@@ -2845,7 +2949,7 @@ impl TalkView {
         cx: &mut Context<Self>,
     ) -> Option<gpui::Div> {
         let (_, time) = finished.iter().find(|(at, _)| *at == index)?;
-        let quiet = answer_text_3(&look.palette);
+        let quiet = trace_ink(&look.palette);
         let copy = div()
             .id(("conversation-copy", index))
             .when(look.a11y, |copy| {
@@ -3299,7 +3403,7 @@ impl TalkView {
             true => div()
                 .text_size(px(HELD_REASON))
                 .line_height(px(HELD_REASON_LINE))
-                .text_color(palette.gray(TRACE_NOTE))
+                .text_color(palette.gray(TRACE_INK))
                 .child(body),
             false => div()
                 .pl(under)
@@ -3727,8 +3831,14 @@ fn assistant_words(palette: super::Palette, text: SharedString) -> gpui::Div {
         .border_l(px(SAID_RULE))
         .border_color(palette.text(SAID_INK))
         .pl(px(SAID_GAP))
-        .text_color(palette.gray(TRACE_NOTE))
+        .text_color(palette.gray(TRACE_INK))
         .child(text)
+}
+
+/// The one grey of everything the trace writes, and of the copy row under an answer, under the
+/// user's and the assistant's words in full ink (#4463).
+fn trace_ink(palette: &super::Palette) -> Hsla {
+    palette.gray(TRACE_INK)
 }
 
 fn answer_text_3(palette: &super::Palette) -> Hsla {
@@ -3929,11 +4039,11 @@ impl TraceLine {
         let ilos = self.mark.is_some();
         let words = match self.shimmers {
             _ if ilos => palette.text(ILO_INK),
-            _ if self.head == Some(true) || self.knot.is_some() => palette.text(TITLE),
             Some(None) => palette.text(TITLE),
             // At the shimmer's peak, which each part fades down from.
-            Some(Some(_)) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
-            None => palette.text(TRACE_TITLE),
+            Some(Some(_)) => palette.lit(TRACE_INK, SHIMMER, 1.),
+            // A head, a helper's name and a step alike: the trace is one grey (#4463).
+            None => trace_ink(palette),
         };
         let opens = self.chevron.is_some();
         // A shimmering title is lit by its shimmer, under the pointer too.
@@ -3943,9 +4053,8 @@ impl TraceLine {
             // Under Reduce Motion the step under way holds whole at the title's ink, its account
             // too, in place of the shimmer (TS7).
             note: match self.shimmers {
-                _ if self.knot.is_some() => answer_text_3(palette),
                 Some(None) => palette.text(TITLE),
-                _ => palette.gray(TRACE_NOTE),
+                _ => trace_ink(palette),
             },
             glyph: match ilos {
                 true => palette.text(MARK_INK),
@@ -3993,6 +4102,20 @@ enum HelperRow {
     /// No line yet: it has no name, no page with a title and no step, so it would be a glyph
     /// alone. Its stretch's count is all that shows it until it has its first words.
     Nothing,
+}
+
+/// A line under a helper's row, at its name's indent: the `first` under the name stands where the
+/// name's line ends.
+fn under_row(line: gpui::AnyElement, first: bool) -> gpui::AnyElement {
+    div()
+        .flex_none()
+        .w_full()
+        .pl(px(TRACE_GLYPH + TRACE_GAP))
+        .when(first, |line| {
+            line.pt(px(HELPER_QUIET_TOP - HELPER_NAME_LINE))
+        })
+        .child(line)
+        .into_any_element()
 }
 
 fn helper_row(
@@ -4167,6 +4290,18 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         LineKey::Fold(Fold::Group(key)) => (
             ("trace-group", key).into(),
             format!("trace-group-{key}").into(),
+        ),
+        LineKey::Fold(Fold::Earlier(key)) => (
+            ("trace-earlier", key).into(),
+            format!("trace-earlier-{key}").into(),
+        ),
+        LineKey::Fold(Fold::HelperEarlier(key)) => (
+            ("trace-helper-earlier", key).into(),
+            format!("trace-helper-earlier-{key}").into(),
+        ),
+        LineKey::Fold(Fold::Helper(key)) => (
+            ("trace-helper-did", key).into(),
+            format!("trace-helper-did-{key}").into(),
         ),
     };
     let LineInks {
@@ -4369,7 +4504,7 @@ fn shimmering(palette: &super::Palette, title: SharedString, phase: f32) -> Styl
         .map(|(index, (at, char))| {
             let along = (index as f32 + 0.5) / count;
             let near = (1. - (along - middle).abs() / SHIMMER_BAND).max(0.);
-            let highlight = palette.lit_highlight(TRACE_TITLE, SHIMMER, near);
+            let highlight = palette.lit_highlight(TRACE_INK, SHIMMER, near);
             (at..at + char.len_utf8(), highlight)
         })
         .collect();

@@ -353,6 +353,7 @@ fn with_helpers(helpers: usize, steps: usize) -> Line {
         tab: None,
         began: None,
         ended: None,
+        steps: Vec::new(),
     });
     trace.items.splice(0..0, lines);
     Line::Trace(trace)

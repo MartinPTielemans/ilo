@@ -239,9 +239,15 @@ pub(super) fn fading(
 /// Where a trace's steps are, each by its key, those of a turn's same step on several tabs too.
 fn steps(trace: &Trace) -> impl Iterator<Item = &TraceStep> {
     (trace.items.iter())
-        .filter_map(|item| match item {
-            TraceItem::Step(step) | TraceItem::Helper { step, .. } => Some(step),
-            TraceItem::Said(_) => None,
+        .flat_map(|item| match item {
+            TraceItem::Step(step) => vec![step],
+            // A helper's steps under its row (#4464), and its row's own step where that isn't
+            // one of them: the row of one that started before its first step.
+            TraceItem::Helper { step, steps, .. } => {
+                let row = (!steps.iter().any(|each| each.key == step.key)).then_some(step);
+                row.into_iter().chain(steps).collect()
+            }
+            TraceItem::Said(_) => Vec::new(),
         })
         .flat_map(and_inner)
 }
