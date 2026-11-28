@@ -23,8 +23,9 @@ use gpui::{
 };
 
 use crate::elevation::{Level, WINDOW_MARGIN};
+use crate::hover_intent::{Intent, Next};
 use crate::palette::{
-    Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
+    Float, Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
 };
 use crate::recent::{List, Recent, Row as RecentRow};
 use crate::shell::{PagePicture, cubic_bezier, scaled::scaled, spring};
@@ -353,6 +354,8 @@ pub struct HoverCard {
     /// The dwell's timer, or the leave's once the pointer has left the shown card's row. Dropping
     /// it cancels it.
     wait: Option<Task<()>>,
+    /// When the card shows: after DWELL, or at once while one shows.
+    intent: Intent,
     /// The pointer is on the card, which keeps it.
     on_card: bool,
     drawn: Option<Drawn>,
@@ -431,6 +434,7 @@ pub fn open_at(
             shown: None,
             resting: None,
             wait: None,
+            intent: Intent::new(DWELL),
             on_card: false,
             drawn: None,
             appeared: None,
@@ -574,30 +578,45 @@ pub fn forget_all(cx: &mut App) {
 
 impl HoverCard {
     fn rest(&mut self, rest: Rest, cx: &mut Context<Self>) {
-        if self.shown.is_some() {
-            self.wait = None;
-            self.resting = None;
-            return self.show(rest, cx);
-        }
+        // The row it already waits on keeps its wait, and shows as it is now.
         let tab = rest.card.tab;
-        let waiting = self
-            .resting
-            .as_ref()
-            .is_some_and(|resting| resting.card.tab == tab);
-        self.resting = Some(rest);
-        if waiting {
+        if (self.resting.as_ref()).is_some_and(|resting| resting.card.tab == tab) {
+            self.resting = Some(rest);
             return;
         }
+        match self.intent.enter(self.clock.now()) {
+            Next::Open => {
+                self.wait = None;
+                self.resting = None;
+                self.show(rest, cx)
+            }
+            Next::Wait(delay) => {
+                self.resting = Some(rest);
+                self.wake_after(delay, cx);
+            }
+        }
+    }
+
+    /// Wakes after `delay` for the row it waits on.
+    fn wake_after(&mut self, delay: Duration, cx: &mut Context<Self>) {
         self.wait = Some(cx.spawn(async move |card, cx| {
-            cx.background_executor().timer(DWELL).await;
-            card.update(cx, |card, cx| {
-                card.wait = None;
-                if let Some(rest) = card.resting.take() {
-                    card.show(rest, cx)
-                }
-            })
-            .ok();
+            cx.background_executor().timer(delay).await;
+            card.update(cx, |card, cx| card.woke(cx)).ok();
         }));
+    }
+
+    /// Its timer woke: the card shows once the pointer has rested its whole dwell, and a wake that
+    /// came early waits out the rest.
+    fn woke(&mut self, cx: &mut Context<Self>) {
+        self.wait = None;
+        let now = self.clock.now();
+        if self.intent.due(now) {
+            if let Some(rest) = self.resting.take() {
+                self.show(rest, cx)
+            }
+        } else if let Some(left) = self.intent.early(now) {
+            self.wake_after(left, cx)
+        }
     }
 
     fn left(&mut self, tab: u64, cx: &mut Context<Self>) {
@@ -608,6 +627,7 @@ impl HoverCard {
         {
             self.resting = None;
             self.wait = None;
+            self.intent.leave();
         }
         if self.shown.as_ref().is_some_and(|rest| rest.card.tab == tab) && !self.on_card {
             self.leave_after(cx);
@@ -738,6 +758,7 @@ impl HoverCard {
     fn close(&mut self, cx: &mut Context<Self>) {
         self.wait = None;
         self.resting = None;
+        self.intent.close(self.clock.now());
         self.pointer_on(false, cx);
         if self.shown.is_none() {
             return;
@@ -1044,7 +1065,7 @@ impl Render for HoverCard {
                 .h(px(drawn.height))
                 .rounded(px(RADIUS))
                 .shadow(Level::Popover.shadow())
-                .bg(palette.overlay)
+                .bg(Float::HoverCard.fill(palette.tone))
                 .opacity(pose.opacity)
                 .children(picture)
                 .child(title)

@@ -22,6 +22,7 @@ fn launch(cli: Cli) -> Launch {
         model: Some("haiku".into()),
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
+        helpers: false,
     }
 }
 

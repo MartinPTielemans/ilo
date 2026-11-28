@@ -29,15 +29,22 @@ use super::{
     row_spring,
 };
 use crate::agents::Status;
+use crate::agents::page::clip;
+use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep,
 };
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
 use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
+use crate::tokens::shell::conversation::ilo::{
+    ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
+    COMPOSER_TOP, GLYPH as ILO_GLYPH, INK as ILO_INK, NOTE_INK, NOTE_TOP, QUOTED_CHARS,
+    TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
+};
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::{
     BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_TOP, BUBBLE_WIDTH, BUBBLE_X, CHIP_KEY,
@@ -65,6 +72,7 @@ actions!(conversation, [SendReply, StopTask]);
 
 mod markdown;
 mod motion;
+mod words;
 
 /// A chip at the page's scale, the toast's: its words, and its key after them, fainter. The
 /// conversation's and the page strip's buttons are these.
@@ -94,9 +102,9 @@ pub(super) fn page_chip_keyed(
         .items_center()
         .gap(px(KEY_GAP))
         .rounded(px(CHIP_RADIUS))
-        .bg(palette.plate(CHIP_FILL))
-        .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
-        .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+        .bg(palette.ground_plate(Ground::Chip, CHIP_FILL))
+        .hover(move |style| style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_HOVERED)))
+        .active(move |style| style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_PRESSED)))
         .whitespace_nowrap()
         .text_size(px(text::BODY))
         .font_weight(FontWeight::MEDIUM)
@@ -210,6 +218,20 @@ pub struct TalkView {
     motion: Motion,
     reply_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     answers_drawn: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    /// Each ilo line's button, by its line's key, where it was drawn last and since when it has
+    /// stood there: one that widens what the agent may do takes no press until it has stood a
+    /// moment (`armed`).
+    ilo_drawn: Rc<RefCell<HashMap<(usize, IloButton), (Bounds<Pixels>, Instant)>>>,
+    /// Whether the pointer rests on such a button, which holds the lines still as more come.
+    ilo_hovered: Rc<Cell<bool>>,
+    /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
+    ilo_words_drawn: WordsDrawn,
+    /// Where each ilo line's link was drawn, by the line's key.
+    ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    /// Where the level's chip under the reply field was drawn, if the last frame drew it.
+    level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the last frame drew Take Over on the lines: once, on the live line.
+    take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -261,6 +283,13 @@ impl Shell {
         (self.talk.as_ref()).is_some_and(|talk| talk.view.read(cx).on_pages())
     }
 
+    /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
+    /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
+    pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
+        self.run(super::Command::NewTab, "start again", cx);
+        self.browser.ask_again(asked, cx);
+    }
+
     pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         if self.talk_agent().as_ref() != Some(&agent) {
             self.show_task(agent, cx);
@@ -292,7 +321,7 @@ impl Shell {
                 }
                 let placeholder = self.palette.text(FORM_PLACEHOLDER);
                 let reply = cx.new(|cx| {
-                    TextInput::new(format!("Reply to {name}…"), cx).placeholder_color(placeholder)
+                    TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder)
                 });
                 let shell = cx.weak_entity();
                 cx.new(|_| TalkView {
@@ -321,6 +350,12 @@ impl Shell {
                     motion: Motion::default(),
                     reply_drawn: Rc::default(),
                     answers_drawn: Rc::default(),
+                    ilo_drawn: Rc::default(),
+                    ilo_hovered: Rc::default(),
+                    ilo_words_drawn: Rc::default(),
+                    ilo_links: Rc::default(),
+                    level_drawn: Rc::default(),
+                    take_over_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                 })
@@ -445,8 +480,11 @@ impl Shell {
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
         let view = talk.view.read(cx);
-        let (reply, replies) = (view.reply.focus_handle(cx), view.replies);
-        if self.watched_task_page().is_some() {
+        let (reply, replies) = (view.reply.focus_handle(cx), view.takes_reply());
+        // A task that ended while the user was in its field may take no reply: the field went.
+        let field_went = !replies && reply.is_focused(window);
+        // Standing on a page, the field is beside it and keeps the keyboard the user gives it.
+        if field_went || self.watched_task_page().is_some() && !self.task_standing() {
             if reply.is_focused(window) {
                 window.focus(&self.focus_handle, cx);
             }
@@ -509,7 +547,7 @@ impl TalkView {
         }
         if self.shown.as_ref() != Some(&conversation) {
             let now = Instant::now();
-            self.motion.still = cx.reduce_motion();
+            self.motion.still = crate::motion::still(cx);
             if let Some(old) = self.shown.as_ref().filter(|_| self.motion.live) {
                 self.motion.changed(old, &conversation, &self.opened, now);
             }
@@ -534,7 +572,7 @@ impl TalkView {
                 grew,
                 self.shown.is_none(),
                 pinned,
-                self.motion.live && !cx.reduce_motion(),
+                self.motion.live && !crate::motion::still(cx),
             ) {
                 Follows::Not => {}
                 Follows::AtOnce => self.scroll.scroll_to_bottom(),
@@ -617,7 +655,7 @@ impl TalkView {
             return;
         }
         // It goes from where it was typed to its plate, the field's box around its words.
-        if let Some(field) = self.reply_drawn.get().filter(|_| !cx.reduce_motion()) {
+        if let Some(field) = self.reply_drawn.get().filter(|_| !crate::motion::still(cx)) {
             let style = window.text_style();
             let words = (window.text_system())
                 .shape_line(
@@ -647,7 +685,12 @@ impl TalkView {
         });
         // What the user sent, and the Thinking under it, show even if they'd scrolled up, the
         // lines making room on the curve it lands on.
-        match follows(true, false, true, self.motion.live && !cx.reduce_motion()) {
+        match follows(
+            true,
+            false,
+            true,
+            self.motion.live && !crate::motion::still(cx),
+        ) {
             Follows::Eased => {
                 let at = f32::from(self.scroll.offset().y);
                 self.motion.follow = Some(Follow {
@@ -671,7 +714,7 @@ impl TalkView {
             return;
         };
         let from = self.answers_drawn.borrow().get(&index).copied();
-        if let Some(from) = from.filter(|_| !cx.reduce_motion()) {
+        if let Some(from) = from.filter(|_| !crate::motion::still(cx)) {
             let now = Instant::now();
             self.landed.set(None);
             self.motion.landing = Some(Landing {
@@ -689,6 +732,33 @@ impl TalkView {
             });
         }
         self.act(TaskAction::Answer(answer), cx);
+    }
+
+    /// ilo's line in the reply field's place: the task has ended and takes no reply (#4105).
+    fn in_field(&self) -> Option<IloLine> {
+        match self.shown.as_ref()?.lines.last()? {
+            Line::Ilo(line) if ilo::in_field(&line.kind) => Some(line.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether the reply field shows: a task's, unless ilo's line stands in its place.
+    pub(super) fn takes_reply(&self) -> bool {
+        self.replies && self.in_field().is_none()
+    }
+
+    /// Start Again: the command bar opens with what the task was first asked, as an ask the user
+    /// sends or changes. Once this view's own update is over, as the bar's opening reaches it.
+    fn start_again(&self, cx: &mut Context<Self>) {
+        let Some(asked) = self.shown.as_ref().map(|shown| shown.asked.clone()) else {
+            return;
+        };
+        let shell = self.shell.clone();
+        cx.defer(move |cx| {
+            shell
+                .update(cx, |shell, cx| shell.ask_again(asked, cx))
+                .ok();
+        });
     }
 
     fn act(&self, action: TaskAction, cx: &mut Context<Self>) {
@@ -745,7 +815,7 @@ impl TalkView {
                     ));
                     (trace.items.iter())
                         .filter_map(|item| match item {
-                            TraceItem::Step(step) => Some(step),
+                            TraceItem::Step(step) | TraceItem::Helper(step) => Some(step),
                             TraceItem::Said(_) => None,
                         })
                         .collect()
@@ -869,41 +939,8 @@ impl TalkView {
                     .truncate()
                     .child(format!("\u{a0}· {progress}"))
             }));
-        // Stop comes and goes with the work it stops.
-        let stoppable = shown.is_some_and(|shown| shown.stoppable);
-        let opacity = self.motion.stop(stoppable, look.now);
-        let stop = (opacity > 0.).then(|| {
-            let chip =
-                page_chip(palette, "conversation-stop", "Stop", Some(stop_keys())).opacity(opacity);
-            match stoppable {
-                true => {
-                    let logged = self.stop_logged.clone();
-                    let at = canvas(
-                        move |bounds, _, _| {
-                            if logged.replace(Some(bounds)) != Some(bounds) {
-                                // check.sh reads this line, to click it.
-                                log!(
-                                    "browser: task stop at {:.0} {:.0} {:.0} {:.0}",
-                                    f32::from(bounds.origin.x),
-                                    f32::from(bounds.origin.y),
-                                    f32::from(bounds.size.width),
-                                    f32::from(bounds.size.height)
-                                );
-                            }
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .size_full();
-                    chip.relative()
-                        .child(at)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
-                        }))
-                }
-                false => chip,
-            }
-        });
+        // Beside the page, Stop is in the composer's row.
+        let stop = (!look.beside).then(|| self.stop(look, cx)).flatten();
         let words = div()
             .flex_1()
             .min_w_0()
@@ -1003,6 +1040,47 @@ impl TalkView {
             .children(stop)
     }
 
+    /// Stop ⌘., which comes and goes with the work it stops: at the header's end, or beside the
+    /// page at the composer's row's.
+    fn stop(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
+        let palette = look.palette;
+        // Stop comes and goes with the work it stops.
+        let stoppable = (self.shown.as_ref()).is_some_and(|shown| shown.stoppable);
+        let opacity = self.motion.stop(stoppable, look.now);
+        (opacity > 0.).then(|| {
+            let chip = page_chip(palette, "conversation-stop", words::STOP, Some(stop_keys()))
+                .opacity(opacity);
+            match stoppable {
+                true => {
+                    let logged = self.stop_logged.clone();
+                    let at = canvas(
+                        move |bounds, _, _| {
+                            if logged.replace(Some(bounds)) != Some(bounds) {
+                                // check.sh reads this line, to click it.
+                                log!(
+                                    "browser: task stop at {:.0} {:.0} {:.0} {:.0}",
+                                    f32::from(bounds.origin.x),
+                                    f32::from(bounds.origin.y),
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height)
+                                );
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full();
+                    chip.relative()
+                        .child(at)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.shell.update(cx, |shell, cx| shell.stop_talk(cx)).ok();
+                        }))
+                }
+                false => chip,
+            }
+        })
+    }
+
     /// Pages: its pages' pictures in a grid, up to three across as the area holds them, each over
     /// its site, the agent's page ringed Signal while it works, with its step, and one the user
     /// holds from the agent with why: "You're driving", or "Needs you · Sign in" (#1080). A pick zooms the
@@ -1016,11 +1094,15 @@ impl TalkView {
             .unwrap_or_default();
         let on = self.shown.as_ref().and_then(|shown| shown.on);
         let step = self.running_step();
+        // Each page's own step, once the task works on several.
+        let pages = (self.shown.as_ref().zip(self.shell.upgrade()))
+            .map(|(shown, shell)| shell.read(cx).task_page_steps(&shown.agent).to_vec())
+            .unwrap_or_default();
         // The area's own width as it last drew, the grid taking its inset but a gap each side.
         let area = (self.drawn_at.get()).map_or(self.viewport.width, |bounds| bounds.size.width);
         let room = f32::from(area) - 2. * PICTURE_GAP;
-        let columns = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
-            .clamp(1., PICTURES_COLUMNS) as usize;
+        let (columns, wide) = grid_shape(room, tabs.len());
+        let high = wide * PICTURE_HEIGHT / PICTURE_WIDTH;
         let tiles: Vec<_> = (tabs.iter().enumerate())
             .map(|(index, (tab, site))| {
                 let tab = *tab;
@@ -1056,7 +1138,10 @@ impl TalkView {
                 )
                 .absolute()
                 .size_full();
-                let working = on == Some(tab);
+                // A page the user holds says why under its site, in the title's ink, where the
+                // agent's page has its step: the bar over the page says the same.
+                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
+                let (working, step) = picture_work(tab, on, step.clone(), &pages, held.is_some());
                 // Until its picture comes, the tile says it has none yet, rather than show nothing,
                 // and once the core had none to give, that the next action takes one.
                 let empty = (!pictured).then(|| {
@@ -1086,8 +1171,8 @@ impl TalkView {
                 });
                 let picture = div()
                     .relative()
-                    .w(px(PICTURE_WIDTH))
-                    .h(px(PICTURE_HEIGHT))
+                    .w(px(wide))
+                    .h(px(high))
                     .rounded(px(PICTURE_RADIUS))
                     .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
                     .overflow_hidden()
@@ -1105,7 +1190,7 @@ impl TalkView {
                     });
                 let line = |words: SharedString, color: Hsla| {
                     div()
-                        .w(px(PICTURE_WIDTH))
+                        .w(px(wide))
                         .h(px(SITE))
                         .truncate()
                         .text_size(px(text::SMALL))
@@ -1142,11 +1227,11 @@ impl TalkView {
                     .flex()
                     .items_center()
                     .children(sound)
-                    .child(line(site.clone(), look.palette.text(TITLE)));
-                // A page the user holds says why under its site, in the title's ink, where the
-                // agent's page has its step: the bar over the page says the same.
-                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
-                let status = picture_status(held.as_ref(), step.clone().filter(|_| working));
+                    .child(
+                        line(site.clone(), look.palette.text(TITLE))
+                            .font_weight(caption_weight(Caption::Site)),
+                    );
+                let status = picture_status(held.as_ref(), step.filter(|_| working));
                 if let Some(words) = &status {
                     let mut said = self.said_logged.borrow_mut();
                     if said.get(&tab) != Some(words) {
@@ -1156,15 +1241,16 @@ impl TalkView {
                     }
                 }
                 let status = status.map(|words| match held {
-                    Some(_) => {
-                        line(words, look.palette.text(TITLE)).font_weight(FontWeight::MEDIUM)
-                    }
-                    None => line(words, rgb(SIGNAL).into()),
+                    Some(_) => line(words, look.palette.text(TITLE))
+                        .font_weight(caption_weight(Caption::Hold)),
+                    // The ring says it's working: no text is written in the working green.
+                    None => line(words, look.palette.text(SECONDARY))
+                        .font_weight(caption_weight(Caption::Step)),
                 });
                 div()
                     .id(("conversation-page", tab))
                     .flex_none()
-                    .w(px(PICTURE_WIDTH))
+                    .w(px(wide))
                     .when(index % columns > 0, |tile| tile.ml(px(PICTURE_GAP)))
                     .mb(px(PICTURES_ROW_GAP))
                     .opacity(opacity)
@@ -1175,7 +1261,7 @@ impl TalkView {
                     .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
             })
             .collect();
-        let width = columns as f32 * PICTURE_WIDTH + (columns as f32 - 1.) * PICTURE_GAP;
+        let width = columns as f32 * wide + (columns as f32 - 1.) * PICTURE_GAP;
         div()
             .id("conversation-pages")
             .flex_1()
@@ -1429,9 +1515,8 @@ impl TalkView {
     fn trace(&self, trace: &Trace, look: &Look, cx: &mut Context<Self>) -> gpui::AnyElement {
         let fold = Fold::Trace(trace.key);
         let open = self.is_open(fold, trace.running);
-        let (title, steps) = trace.summary();
         let running = trace.running;
-        let mut line = TraceLine::new(fold, title, steps);
+        let mut line = summary_line(trace);
         line.chevron = Some(self.chevron(fold, open, look));
         line.rolled = self.motion.count(trace.key).cloned();
         self.crossfade(fold, &mut line, look);
@@ -1441,6 +1526,11 @@ impl TalkView {
         for (index, item) in trace.items.iter().enumerate() {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
+                // A helper's line is a step's, without the live line's Take Over, which is the
+                // one page's the task stands on.
+                TraceItem::Helper(step) => {
+                    nest.children(self.step_line(step, true, false, look, cx))
+                }
                 TraceItem::Said(text) => {
                     let said = div()
                         .py(px((TRACE_LINE - TEXT_LINE) / 2.))
@@ -1530,12 +1620,13 @@ impl TalkView {
         let shimmers = self.shown.as_ref().is_some_and(|shown| {
             shown.lines.iter().any(|line| match line {
                 Line::Trace(trace) => {
+                    let under_way = |item: &TraceItem| match item {
+                        TraceItem::Step(step) | TraceItem::Helper(step) => step.running,
+                        TraceItem::Said(_) => false,
+                    };
                     trace.running
                         && self.is_open(Fold::Trace(trace.key), true)
-                        && trace
-                            .items
-                            .iter()
-                            .any(|item| matches!(item, TraceItem::Step(step) if step.running))
+                        && trace.items.iter().any(under_way)
                 }
                 Line::Thinking { failed, .. } => failed.is_none(),
                 Line::Step(step) => step.running,
@@ -1556,6 +1647,18 @@ impl TalkView {
         look: &Look,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
+        self.step_line(step, glyph, glyph, look, cx)
+    }
+
+    /// As `step`, which may be the `live` line beside the page or, as a helper's, never is.
+    fn step_line(
+        &self,
+        step: &TraceStep,
+        glyph: bool,
+        live: bool,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
         let fold = match step.opens {
             Opens::Steps(_) => Fold::Group(step.key),
             _ => Fold::Step(step.key),
@@ -1573,11 +1676,46 @@ impl TalkView {
         if opens {
             line = line.on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
         }
-        let line = risen(
-            line.into_any_element(),
-            self.motion.came(Key::Step(step.key)),
-            look,
-        );
+        // Beside the page, the step under way on it is the live line, with Take over at its end,
+        // unless the user stands on the page, whose strip has it.
+        let live = (self.shown.as_ref())
+            .filter(|shown| {
+                look.beside && !look.standing && live && step.running && shown.stoppable
+            })
+            .and_then(|shown| shown.on);
+        let drawn = self.take_over_drawn.clone();
+        let line = match live {
+            None => line.into_any_element(),
+            Some(tab) => div()
+                .w_full()
+                .flex()
+                .items_center()
+                .child(div().flex_1().min_w_0().flex().child(line))
+                .child(
+                    page_chip(
+                        look.palette,
+                        "conversation-take-over",
+                        words::TAKE_OVER,
+                        None,
+                    )
+                    .relative()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| drawn.borrow_mut().push(bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
+                    .on_click(
+                        cx.listener(move |view, _, _, cx| view.act(TaskAction::TakeOver(tab), cx)),
+                    ),
+                )
+                .into_any_element(),
+        };
+        let line = risen(line, self.motion.came(Key::Step(step.key)), look);
         let palette = look.palette;
         // What a line opens to starts under its title.
         let under = if glyph { TRACE_GLYPH + TRACE_GAP } else { 0. };
@@ -1613,7 +1751,16 @@ impl TalkView {
             ),
         };
         let opened = content.and_then(|content| self.unfolding(fold, open, content.w_full(), look));
-        std::iter::once(line).chain(opened).collect()
+        // The line under its title, as the task made it (the site's notes its answer carried), in
+        // the grey of a line's own detail, quieter than its title.
+        let sub = (!step.under.is_empty()).then(|| {
+            div()
+                .pl(px(under))
+                .text_color(palette.text(TRACE_NOTE))
+                .child(step.under.clone())
+                .into_any_element()
+        });
+        std::iter::once(line).chain(sub).chain(opened).collect()
     }
 
     /// What was asked, with its page, and the lines after it, then the answers to the question it
@@ -1643,7 +1790,33 @@ impl TalkView {
             .map(|(index, _)| index);
         let answered =
             (self.motion.answered.as_ref()).filter(|_| !look.still && shown.answers.is_empty());
+        // A button no longer drawn starts its wait again if it comes back.
+        let buttons: Vec<(usize, IloButton)> = (shown.lines.iter())
+            .filter_map(|line| match line {
+                Line::Ilo(line) => {
+                    Some(ilo::buttons(line).into_iter().map(|each| (line.key, each)))
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        self.ilo_drawn
+            .borrow_mut()
+            .retain(|key, _| buttons.contains(key));
+        (self.ilo_words_drawn.borrow_mut()).retain(|key, _| {
+            (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
+        });
+        (self.ilo_links.borrow_mut()).retain(|key, _| {
+            (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
+        });
+        if !buttons.iter().any(|(_, button)| button.widens()) {
+            self.ilo_hovered.set(false);
+        }
         for (index, line) in shown.lines.iter().enumerate() {
+            // The line in the reply field's place is drawn there.
+            if matches!(line, Line::Ilo(line) if ilo::in_field(&line.kind)) {
+                continue;
+            }
             if let Some(answered) = answered.filter(|answered| answered.at == index) {
                 lines.push(self.answered(answered, look));
             }
@@ -1662,6 +1835,7 @@ impl TalkView {
                     .items_start()
                     .children(self.step(step, true, look, cx))
                     .into_any_element(),
+                Line::Ilo(line) => self.ilo(line, &shown.name, look, cx),
             };
             lines.push(risen(line, self.motion.came(Key::Line(index)), look));
         }
@@ -1808,6 +1982,16 @@ impl TalkView {
                 .text_color(look.palette.text(SECONDARY))
                 .child(quiet);
         }
+        // An ended task that takes no reply: ilo's line says why, with Start Again (#4105).
+        if let Some(line) = self.in_field() {
+            let name = (self.shown.as_ref())
+                .map(|shown| shown.name.clone())
+                .unwrap_or_default();
+            return div()
+                .id("conversation-ended")
+                .flex_none()
+                .child(self.ilo(&line, &name, look, cx));
+        }
         let reply = self.reply.clone();
         let drawn = self.reply_drawn.clone();
         let palette = look.palette;
@@ -1853,8 +2037,255 @@ impl TalkView {
             )
     }
 
+    /// The composer's row under the reply field, beside the page: the task's access on a chip,
+    /// which opens its menu (#4094), and Stop at the row's end.
+    fn composer(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
+        let palette = look.palette;
+        let tier = self
+            .shown
+            .as_ref()
+            .map(|shown| shown.tier)
+            .unwrap_or_default();
+        let drawn = self.level_drawn.clone();
+        let chip = page_chip(palette, "conversation-tier", tier.label(), None)
+            .relative()
+            .child(
+                svg()
+                    .flex_none()
+                    .ml(px(COMPOSER_CHEVRON_GAP - KEY_GAP))
+                    .path("icons/chevron-down.svg")
+                    .size(px(COMPOSER_CHEVRON))
+                    .text_color(palette.glyph(CHIP_KEY)),
+            )
+            .child(
+                canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            );
+        div()
+            .mt(px(COMPOSER_TOP))
+            .flex()
+            .items_center()
+            .child(chip)
+            .child(div().flex_1())
+            .children(self.stop(look, cx))
+    }
+
+    /// One of ilo's own lines: its glyph and mark, its words with the name it took from a page
+    /// apart from them, what it says more under them, and its buttons. Its words and buttons come
+    /// from its kind (words.rs, `ilo::buttons`), never from the agent's or a page's text.
+    fn ilo(
+        &self,
+        line: &IloLine,
+        agent: &SharedString,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let palette = look.palette;
+        let ink = palette.text(ILO_INK);
+        let (own, name) = words::head(&line.kind, agent);
+        // ilo's mark is the first word of what it says, in the display face, so its words wrap
+        // under it: an ilo line has one left edge, its mark's.
+        let mark = 0..words::MARK.len();
+        let own = format!("{} {own}", words::MARK);
+        let marked = HighlightStyle {
+            font_weight: Some(FontWeight::MEDIUM),
+            ..Default::default()
+        };
+        // A page's words or a site are cut short, in the title's ink, so they read as a name.
+        let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
+        let (said, highlights) = match &name {
+            Some(name) => {
+                let said = words::with_name(&line.kind, &own, name);
+                let quoted = own.len() + 1..said.len();
+                let style = HighlightStyle {
+                    color: Some(palette.text(TITLE)),
+                    ..Default::default()
+                };
+                (said, vec![(mark.clone(), marked), (quoted, style)])
+            }
+            None => (own, vec![(mark.clone(), marked)]),
+        };
+        let count = match &line.kind {
+            IloKind::Stopped { count, .. } => words::count(*count),
+            _ => None,
+        };
+        let glyph = match &line.kind {
+            IloKind::Stopped { .. } | IloKind::Helpers { .. } => "icons/ban.svg",
+            IloKind::Yours { .. } => "icons/user.svg",
+            IloKind::TabBack { .. } => "icons/undo-2.svg",
+            IloKind::SignedIn { .. } => "icons/key-round.svg",
+            IloKind::TierChanged { .. } => "icons/shield.svg",
+            IloKind::Resumed { .. } => "icons/play.svg",
+            IloKind::KeptHere => "icons/save.svg",
+            IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => "icons/message-circle.svg",
+        };
+        let head = trace_line(
+            look,
+            TraceLine {
+                glyph: Some(glyph),
+                mark: Some((mark, super::display_face::family(cx))),
+                highlights,
+                words_drawn: Some((line.key, self.ilo_words_drawn.clone())),
+                ..TraceLine::new(
+                    LineKey::Ilo(line.key),
+                    said.into(),
+                    count.unwrap_or_default().into(),
+                )
+            },
+        );
+        // What it says more starts under its words.
+        let under = px(ILO_GLYPH + TRACE_GAP);
+        let body = words::body(&line.kind, name.as_deref().unwrap_or("")).map(|body| {
+            div()
+                .pl(under)
+                .mt(px(TEXT_TOP))
+                .line_height(px(ILO_TEXT_LINE))
+                .text_color(ink)
+                .child(body)
+        });
+        let link = words::link(&line.kind).map(|words| {
+            let drawn = self.ilo_links.clone();
+            let key = line.key;
+            div()
+                .id(SharedString::from(format!("ilo-{key}-link")))
+                .relative()
+                .pl(under)
+                .mt(px(NOTE_TOP))
+                .text_size(px(text::SMALL))
+                .text_color(palette.text(NOTE_INK))
+                .cursor_pointer()
+                .child(words)
+                .child(
+                    canvas(
+                        move |bounds, _, _| _ = drawn.borrow_mut().insert(key, bounds),
+                        |_, _, _, _| {},
+                    )
+                    // Pinned to the corner: unpinned, it would stand after the words, a line below.
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+                .on_click(cx.listener(|view, _, _, cx| view.open_off_limits(cx)))
+        });
+        let buttons = ilo::buttons(line);
+        let note = words::note(&buttons).map(|note| {
+            div()
+                .pl(under)
+                .mt(px(NOTE_TOP))
+                .text_size(px(text::SMALL))
+                .text_color(palette.text(NOTE_INK))
+                .child(note)
+        });
+        let row = (!buttons.is_empty()).then(|| {
+            div()
+                .pl(under)
+                .mt(px(BUTTONS_TOP))
+                .flex()
+                .flex_wrap()
+                .gap(px(BUTTONS_GAP))
+                .children(
+                    (buttons.into_iter()).map(|button| self.ilo_button(line, button, look, cx)),
+                )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .mb(px(ILO_BELOW))
+            .child(head)
+            .children(body)
+            .children(link)
+            .children(row)
+            .children(note)
+            .into_any_element()
+    }
+
+    /// An ilo line's button, which notes where it stands and since when.
+    fn ilo_button(
+        &self,
+        line: &IloLine,
+        button: IloButton,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let key = (line.key, button);
+        let tab = ilo::tab(&line.kind);
+        let drawn = self.ilo_drawn.clone();
+        let hovered = self.ilo_hovered.clone();
+        let id = SharedString::from(format!("ilo-{}-{button:?}", line.key));
+        page_chip(look.palette, id, words::button(button), None)
+            .relative()
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        let mut drawn = drawn.borrow_mut();
+                        if drawn.get(&key).is_none_or(|(was, _)| *was != bounds) {
+                            drawn.insert(key, (bounds, Instant::now()));
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                // At the chip's own corner: with no place given it would start inside the
+                // chip's padding.
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .when(button.widens(), |chip| {
+                chip.on_hover(move |over, _, _| hovered.set(*over))
+            })
+            .on_click(cx.listener(move |view, _, _, cx| view.press_ilo(key, tab, cx)))
+    }
+
+    /// The link under a fence's refusal: Settings, on its Off limits list. It only opens it, so
+    /// nothing it does lifts a fence or raises a task's access.
+    fn open_off_limits(&mut self, cx: &mut Context<Self>) {
+        self.shell
+            .update(cx, |shell, cx| shell.browser.off_limits(cx))
+            .ok();
+    }
+
+    /// A press on an ilo line's button. One that widens what the agent may do counts only once it
+    /// has stood where it is a moment: an agent decides when its line comes, so a press meant for
+    /// what was there before mustn't land on it. No key presses one: the keyboard reaches an ilo
+    /// line only through the user's Focus command (#3955).
+    fn press_ilo(&mut self, key: (usize, IloButton), tab: Option<u64>, cx: &mut Context<Self>) {
+        let (line, button) = key;
+        let stood = self.ilo_drawn.borrow().get(&key).map(|(_, since)| *since);
+        if button.widens() && !stood.is_some_and(|since| armed(since, Instant::now())) {
+            // check.sh reads this line.
+            log!("browser: task {} {button:?} too soon", self.agent);
+            return;
+        }
+        let action = match button {
+            IloButton::TakeOver => tab.map(TaskAction::TakeOver),
+            IloButton::Raise(tier) => Some(TaskAction::SetTier(tier)),
+            IloButton::AnySite => Some(TaskAction::AnySite),
+            IloButton::HandBack => tab.map(TaskAction::HandBack),
+            IloButton::NotNow => Some(TaskAction::NotNow(line)),
+            IloButton::StartAgain => {
+                self.start_again(cx);
+                None
+            }
+        };
+        if let Some(action) = action {
+            self.act(action, cx);
+        }
+    }
+
     /// The lines follow what came at their end on the curve it lands on, until the user scrolls.
     fn follow_on(&mut self, now: Instant) {
+        // What comes never moves a button that widens what the agent may do from under the
+        // pointer resting on it.
+        if self.ilo_hovered.get() {
+            self.motion.follow = None;
+            return;
+        }
         let Some(follow) = self.motion.follow.as_mut() else {
             return;
         };
@@ -1872,6 +2303,12 @@ impl TalkView {
             follow.set = y;
         }
     }
+}
+
+/// Whether a button that widens what the agent may do, standing where it is `since`, takes a press
+/// `now`.
+fn armed(since: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(since).as_secs_f32() >= ARM
 }
 
 /// A line that came while the conversation showed, rising into its place.
@@ -1986,13 +2423,24 @@ fn steps(lines: &[Line]) -> usize {
         .sum()
 }
 
+/// Where the words of ilo's lines were drawn and how they were laid out, by line.
+type WordsDrawn = Rc<RefCell<HashMap<usize, (Bounds<Pixels>, gpui::TextLayout)>>>;
+
 /// A line of a trace as it draws: its glyph, its title, what it took or why it failed, and how
 /// open its chevron is if it opens. The step under way's title `shimmers`, as far through its pass
 /// as it says, or under Reduce Motion, holds at the title's colour. What changed on it fades or
 /// rolls in by the rest.
 struct TraceLine {
-    fold: Fold,
+    key: LineKey,
     glyph: Option<&'static str>,
+    /// ilo's mark, the first word of its title, and the display face's family it's set in, which
+    /// makes it one of ilo's lines: its glyph and words in ilo's ink and size, its words wrapping
+    /// under its mark.
+    mark: Option<(std::ops::Range<usize>, SharedString)>,
+    /// Its words' parts set apart, as an ilo line's name from a page.
+    highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+    /// Where its words were drawn goes here, by its line.
+    words_drawn: Option<(usize, WordsDrawn)>,
     failed: bool,
     title: SharedString,
     note: SharedString,
@@ -2003,13 +2451,19 @@ struct TraceLine {
     chevron_alpha: f32,
     /// Its count of steps before the last came, and since when, which rolls up out of it.
     rolled: Option<(SharedString, Instant)>,
+    /// Its note follows its title as one string, a middle dot between them: a stretch's summary,
+    /// "Worked for 40 s · 4 steps", as its task's card writes it.
+    joined: bool,
 }
 
 impl TraceLine {
-    fn new(fold: Fold, title: SharedString, note: SharedString) -> Self {
+    fn new(key: impl Into<LineKey>, title: SharedString, note: SharedString) -> Self {
         TraceLine {
-            fold,
+            key: key.into(),
             glyph: None,
+            mark: None,
+            highlights: Vec::new(),
+            words_drawn: None,
             failed: false,
             title,
             note,
@@ -2019,7 +2473,52 @@ impl TraceLine {
             note_alpha: 1.,
             chevron_alpha: 1.,
             rolled: None,
+            joined: false,
         }
+    }
+
+    /// Its note's words as they draw after its title, the count apart from the rest as it rolls
+    /// by itself: after a middle dot on a line that's `joined`. Each part starts with its own
+    /// space, so the parts in a row read as one string.
+    fn note_parts(&self) -> [String; 3] {
+        let lead = if self.joined { " \u{b7}" } else { "" };
+        let space = if self.joined { " " } else { "" };
+        match self.note.split_once(' ') {
+            Some((count, rest)) => [lead.into(), format!("{space}{count}"), format!(" {rest}")],
+            None => [lead.into(), format!("{space}{}", self.note), String::new()],
+        }
+    }
+
+    /// The line's words as drawn, in one.
+    #[cfg(test)]
+    fn text(&self) -> String {
+        match self.note.is_empty() {
+            true => self.title.to_string(),
+            false if self.joined => format!("{}{}", self.title, self.note_parts().concat()),
+            false => format!("{} {}", self.title, self.note_parts().concat()),
+        }
+    }
+}
+
+/// A stretch's summary line: its title and what it counts, joined as one string.
+fn summary_line(trace: &Trace) -> TraceLine {
+    let (title, counted) = trace.summary();
+    TraceLine {
+        joined: true,
+        ..TraceLine::new(Fold::Trace(trace.key), title, counted)
+    }
+}
+
+/// Which line a `TraceLine` is: a trace's, which folds, or one of ilo's.
+#[derive(Clone, Copy)]
+enum LineKey {
+    Fold(Fold),
+    Ilo(usize),
+}
+
+impl From<Fold> for LineKey {
+    fn from(fold: Fold) -> Self {
+        LineKey::Fold(fold)
     }
 }
 
@@ -2027,9 +2526,13 @@ impl TraceLine {
 /// line that opens has a plate hanging outside its text, which goes to the title's colour.
 fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let palette = look.palette;
+    let parts = line.note_parts();
     let TraceLine {
-        fold,
+        key,
         glyph,
+        mark,
+        highlights,
+        words_drawn,
         failed,
         title,
         note: description,
@@ -2039,14 +2542,18 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         note_alpha,
         chevron_alpha,
         rolled,
+        joined,
     } = line;
-    let (id, group): (ElementId, SharedString) = match fold {
-        Fold::Trace(key) => (("trace", key).into(), format!("trace-{key}").into()),
-        Fold::Step(key) => (
+    let [lead, count, rest] = parts;
+    let space = if joined { " " } else { "" };
+    let (id, group): (ElementId, SharedString) = match key {
+        LineKey::Ilo(key) => (("ilo", key).into(), format!("ilo-{key}").into()),
+        LineKey::Fold(Fold::Trace(key)) => (("trace", key).into(), format!("trace-{key}").into()),
+        LineKey::Fold(Fold::Step(key)) => (
             ("trace-step", key).into(),
             format!("trace-step-{key}").into(),
         ),
-        Fold::Group(key) => (
+        LineKey::Fold(Fold::Group(key)) => (
             ("trace-group", key).into(),
             format!("trace-group-{key}").into(),
         ),
@@ -2058,25 +2565,39 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     } else {
         palette.text(TRACE_NOTE)
     };
+    let ilos = mark.is_some();
     let words = match (failed, shimmers) {
         (true, _) => red,
+        (false, _) if ilos => palette.text(ILO_INK),
         (false, Some(None)) => palette.text(TITLE),
         // At the shimmer's peak, which each part fades down from.
         (false, Some(Some(_))) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
         (false, None) => palette.text(TRACE_TITLE),
     };
     let glyph = glyph.map(|glyph| {
-        let color = if failed {
-            red
-        } else {
-            palette.glyph(TRACE_GLYPH_ALPHA)
+        let (color, size) = match (failed, ilos) {
+            (true, _) => (red, TRACE_GLYPH),
+            (false, true) => (palette.glyph(ILO_INK), ILO_GLYPH),
+            (false, false) => (palette.glyph(TRACE_GLYPH_ALPHA), TRACE_GLYPH),
         };
         svg()
             .flex_none()
             .path(glyph)
-            .size(px(TRACE_GLYPH))
+            .size(px(size))
             .text_color(color)
     });
+    // One of ilo's lines wraps its words and never cuts them (#4105), so what stands beside them
+    // keeps to their first line, which is where a trace's one line is.
+    let first = |part: gpui::AnyElement| match ilos {
+        true => div()
+            .flex_none()
+            .h(px(TRACE_LINE))
+            .flex()
+            .items_center()
+            .child(part)
+            .into_any_element(),
+        false => part,
+    };
     let opens = chevron.is_some();
     let chevron = chevron.map(|open| {
         svg()
@@ -2089,70 +2610,111 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 glyph.with_transformation(Transformation::rotate(Radians(-FRAC_PI_2 * (1. - open))))
             })
     });
-    // A count that changed rolls its number, and the words after it stay.
+    // A count that changed rolls its number, and the words before and after it stay.
     let noted = !description.is_empty();
-    let description = match (rolled, description.split_once(' ')) {
-        (Some(was), Some((count, rest))) => div()
+    let description = match rolled {
+        Some((was, since)) if !rest.is_empty() => div()
             .flex_none()
             .flex()
+            .child(lead)
             .child(self::rolled(
-                count.to_string().into(),
-                Some(&was),
+                count.into(),
+                // The old count takes the new one's space before it, if it has one.
+                Some(&(format!("{space}{was}").into(), since)),
                 TRACE_LINE,
                 look,
             ))
-            .child(format!(" {rest}"))
+            .child(rest)
             .into_any_element(),
         _ => div()
             .flex_none()
-            .child(description.clone())
+            .child(format!("{lead}{count}{rest}"))
             .into_any_element(),
     };
     let hover = group.clone();
+    let mut laid = None;
+    let title = div()
+        .min_w_0()
+        .map(|title| match ilos {
+            true => title
+                .relative()
+                .py(px((TRACE_LINE - ILO_TEXT_LINE) / 2.))
+                .line_height(px(ILO_TEXT_LINE)),
+            false => title.truncate(),
+        })
+        .opacity(alpha)
+        .text_color(words)
+        // A shimmering title is lit by its shimmer, under the pointer too.
+        .when(
+            opens && !failed && !matches!(shimmers, Some(Some(_))),
+            |title| title.group_hover(hover, move |style| style.text_color(palette.text(TITLE))),
+        )
+        .child(match shimmers {
+            Some(Some(phase)) => shimmering(&palette, title, phase),
+            _ => {
+                let text = StyledText::new(title)
+                    .with_highlights(highlights)
+                    .with_font_family_overrides(mark);
+                laid = Some(text.layout().clone());
+                text
+            }
+        })
+        .children(words_drawn.zip(laid).map(|((key, drawn), laid)| {
+            canvas(
+                move |bounds, _, _| _ = drawn.borrow_mut().insert(key, (bounds, laid)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        }));
     div()
         .id(id)
         .group(group)
         .flex_none()
         .max_w_full()
-        .h(px(TRACE_LINE))
-        .ml(px(-TRACE_HANG))
-        .px(px(TRACE_HANG))
         .flex()
-        .items_center()
         .gap(px(TRACE_GAP))
         .rounded(px(NAV_RADIUS))
-        .whitespace_nowrap()
+        .map(|line| match ilos {
+            true => line.min_h(px(TRACE_LINE)).items_start(),
+            // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
+            false => line
+                .h(px(TRACE_LINE))
+                .ml(px(-TRACE_HANG))
+                .px(px(TRACE_HANG))
+                .items_center()
+                .whitespace_nowrap(),
+        })
         .when(opens, |line| {
             line.cursor_pointer()
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
-        .children(glyph)
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .opacity(alpha)
-                .text_color(words)
-                // A shimmering title is lit by its shimmer, under the pointer too.
-                .when(
-                    opens && !failed && !matches!(shimmers, Some(Some(_))),
-                    |title| {
-                        title.group_hover(hover, move |style| style.text_color(palette.text(TITLE)))
-                    },
+        .children(glyph.map(|glyph| first(glyph.into_any_element())))
+        .map(|line| {
+            let note = noted.then(|| {
+                first(
+                    div()
+                        .flex_none()
+                        .opacity(note_alpha)
+                        .text_color(note)
+                        .child(description)
+                        .into_any_element(),
                 )
-                .child(match shimmers {
-                    Some(Some(phase)) => shimmering(&palette, title, phase),
-                    _ => StyledText::new(title),
-                }),
-        )
-        .when(noted, |line| {
-            line.child(
-                div()
-                    .flex_none()
-                    .opacity(note_alpha)
-                    .text_color(note)
-                    .child(description),
-            )
+            });
+            match joined {
+                // One string: the note right after the title, its dot and spaces its own.
+                true => line.child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .child(title)
+                        .children(note),
+                ),
+                false => line.child(title).children(note),
+            }
         })
         .children(chevron)
 }
@@ -2181,6 +2743,10 @@ struct Look {
     asked_favicon: Option<Arc<Image>>,
     /// A page watched is going back into its picture over it, which hides what's under it.
     behind: bool,
+    /// The conversation stands beside the page it watches (`Shell::talk_beside`).
+    beside: bool,
+    /// The user stands on one of its pages, the conversation in a panel beside it.
+    standing: bool,
 }
 
 impl Look {
@@ -2202,7 +2768,7 @@ impl Shell {
 impl Render for TalkView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let asked = self
             .shown
             .as_ref()
@@ -2217,6 +2783,8 @@ impl Render for TalkView {
                 still,
                 asked_favicon,
                 behind: shell.task_page_going_back(),
+                beside: shell.talk_beside,
+                standing: shell.task_standing(),
             }
         }) else {
             return div().into_any_element();
@@ -2231,6 +2799,8 @@ impl Render for TalkView {
         if std::mem::replace(&mut self.viewport, viewport) != viewport && self.at_end() {
             self.scroll.scroll_to_bottom();
         }
+        self.level_drawn.set(None);
+        self.take_over_drawn.borrow_mut().clear();
         let busy = self.motion.settle(now);
         self.follow_on(now);
         // What changes once it has shown moves.
@@ -2311,7 +2881,13 @@ impl Render for TalkView {
             .text_color(palette.text(TITLE))
             .child(shut(on_column(self.header(&look, cx).into_any_element())))
             .child(middle)
-            .child(shut(on_column(self.reply(&look, cx).into_any_element())));
+            .child(shut(on_column(self.reply(&look, cx).into_any_element())))
+            // With ilo's line and Start Again in the field's place there is no level to set, so
+            // the row goes with the field (#4105).
+            .children(
+                (look.beside && self.in_field().is_none())
+                    .then(|| shut(on_column(self.composer(&look, cx).into_any_element()))),
+            );
         let drawn = self.drawn_at.clone();
         div()
             .id("conversation")
@@ -2348,6 +2924,55 @@ fn unpressed() -> gpui::Div {
         .top_0()
         .size_full()
         .block_mouse_except_scroll()
+}
+
+/// How many pictures a row of Pages holds in `room`, and how wide each is, for `pages` of them:
+/// as many at their full size as fit, up to `PICTURES_COLUMNS`. Where only one fits, three pages
+/// or more go two across, each half the room at the picture's own shape, so four pages beside a
+/// page aren't a column the user scrolls for the third (#4102).
+pub(super) fn grid_shape(room: f32, pages: usize) -> (usize, f32) {
+    let fit = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
+        .clamp(1., PICTURES_COLUMNS) as usize;
+    match (fit, pages) {
+        (1, 3..) => (2, ((room - PICTURE_GAP) / 2.).floor().max(1.)),
+        _ => (fit, PICTURE_WIDTH),
+    }
+}
+
+/// Whether the task works on `tab`'s page, which rings its picture, and the step the picture says
+/// then. A task on one page works on the page it's `on`, at the step under way, `running`. One
+/// that works on several, `pages` having each one's own step, works on every page that has one
+/// and that the user doesn't hold: each says its own step, never another page's (#4102).
+pub(super) fn picture_work(
+    tab: u64,
+    on: Option<u64>,
+    running: Option<SharedString>,
+    pages: &[(u64, SharedString)],
+    held: bool,
+) -> (bool, Option<SharedString>) {
+    let own = pages.iter().find(|(each, _)| *each == tab);
+    match pages.is_empty() {
+        true => (on == Some(tab), running),
+        false => (own.is_some() && !held, own.map(|(_, step)| step.clone())),
+    }
+}
+
+/// A line under a page's picture: its site, why the user holds it, or the agent's step there.
+#[derive(Clone, Copy)]
+enum Caption {
+    Site,
+    Hold,
+    Step,
+}
+
+/// The weight a page's picture sets a line under it in. Its site is the tile's title and a hold
+/// asks for the user as loudly; the agent's step is regular under its site, which it has to say,
+/// as the panel's text is medium and a line that names no weight takes that.
+fn caption_weight(line: Caption) -> FontWeight {
+    match line {
+        Caption::Site | Caption::Hold => FontWeight::MEDIUM,
+        Caption::Step => FontWeight::NORMAL,
+    }
 }
 
 /// What a page's picture says under its site: why the user holds it from the agent, `held`, as

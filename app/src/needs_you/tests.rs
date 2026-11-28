@@ -48,8 +48,9 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 

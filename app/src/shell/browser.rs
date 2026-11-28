@@ -1015,6 +1015,8 @@ pub trait Browser {
     }
     /// Opens the Settings window, or brings it to the front.
     fn settings(&self, cx: &mut App);
+    /// Opens the Settings window on Agents' Off limits list, scrolled to it.
+    fn off_limits(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.
     fn shortcuts(&self, cx: &mut App);
     /// Opens the Settings window on its About tab.
@@ -1042,6 +1044,9 @@ pub trait Browser {
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
     /// changes.
     fn show_task(&self, agent: SharedString, cx: &mut App);
+    /// The command bar, just opened for a new tab, takes `asked` as an ask, as if the user had
+    /// typed it and pressed ⇥: an ended task's Start Again (#4105). Nothing is sent.
+    fn ask_again(&self, _asked: SharedString, _cx: &mut App) {}
     /// Asks for a picture of a task's page for its conversation, which the browser answers with
     /// `Shell::page_pictured` and `request`.
     fn task_picture(&self, tab: u64, request: u64, cx: &mut App);

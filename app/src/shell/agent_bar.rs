@@ -209,7 +209,10 @@ impl Shell {
     /// Take Over, or Hand Back: the bar's first button and ⌘↩.
     pub(super) fn agent_bar_primary(&mut self, cx: &mut Context<Self>) {
         match self.agent_bar() {
+            // The page the bar is on, never another its agent is at work in: a task works on
+            // several at once (#4102).
             Some(Bar::Working { agent, tab, .. }) => {
+                let tab = self.agent_page().map_or(tab, |(_, shown)| shown);
                 self.browser.take_over(agent, tab, cx);
                 self.select(tab, cx);
             }
