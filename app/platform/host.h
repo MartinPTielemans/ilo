@@ -118,8 +118,8 @@ void host_show_window(void* ui_view);
 
 // Keeps the window holding |ui_view|, which the core put on screen as it made it, off screen until
 // host_show_window, whatever else asks to show it: first run's window is the only one on screen
-// until it ends. It then comes on at its frame whole, without the system's motion for a window
-// ordered in. Off the Mac, nothing.
+// until it ends, and holds the keyboard. It then comes on at its frame whole, without the system's
+// motion for a window ordered in. Windows only keeps it hidden and inactive; Linux does nothing.
 void host_hold_window(void* ui_view);
 
 // Shows the window holding |ui_view| as host_show_window does, but right behind the browser window
