@@ -578,7 +578,7 @@ impl Shell {
         let (size, shown) = (grown(open), rows_shown(open));
         let tone = self.palette.tone;
         // The window's look at its foot, where the plate lies.
-        let fill = plate(tone, self.window_fill_at(1.));
+        let fill = plate(tone, self.window_fill());
         let rim = Hsla::from(rgba(match tone {
             Tone::Dark => crate::tokens::floating::RIM,
             Tone::Light => crate::tokens::floating::LIGHT_RIM,
@@ -707,7 +707,7 @@ impl Shell {
                         .text_color(self.palette.glyph(t::TILE_GLYPH_INK)),
                 ),
         };
-        let on = plate(self.palette.tone, self.window_fill_at(1.));
+        let on = plate(self.palette.tone, self.window_fill());
         let [name_ink, quiet, _] = inks(&self.palette, on);
         let line = |text: SharedString| {
             div()

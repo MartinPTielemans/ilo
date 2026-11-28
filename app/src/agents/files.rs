@@ -284,23 +284,6 @@ impl Given {
     pub fn any(&self) -> bool {
         self.folder.is_some() || self.attached.is_some()
     }
-
-    /// Whether a task with these files is allowed the same at `from` and at `to`: a wall made
-    /// for one is then the wall for the other. True of a task with none, and of one whose files
-    /// are attached copies alone, which every level only reads.
-    pub fn same_rules(&self, from: Tier, to: Tier) -> bool {
-        // A wall holds no place outside the folders: the product's own tools reach there.
-        let has = |place| match place {
-            Place::Attached => self.attached.is_some(),
-            Place::Folder => self.folder.is_some(),
-            Place::Outside => false,
-        };
-        (Place::ALL.into_iter().filter(|&place| has(place))).all(|place| {
-            Op::ALL
-                .iter()
-                .all(|&op| allows(from, place, op) == allows(to, place, op))
-        })
-    }
 }
 
 /// What ilo never gives a task as its folder: the folders whose contents are the user's secrets,
@@ -1325,25 +1308,6 @@ mod tests {
         assert_eq!(look, [Op::Read, Op::Search]);
         assert_eq!(work, [Op::Read, Op::Search, Op::Make, Op::Change]);
         assert_eq!(full, Op::ALL);
-    }
-
-    #[test]
-    fn a_level_changes_the_rules_only_of_a_task_with_a_folder() {
-        let folder = Given {
-            folder: Some(Granted::for_test()),
-            attached: Some(PathBuf::from("/nonexistent/attached")),
-        };
-        let attached = Given {
-            folder: None,
-            ..folder.clone()
-        };
-        for from in Tier::ALL {
-            for to in Tier::ALL {
-                assert!(Given::default().same_rules(from, to));
-                assert!(attached.same_rules(from, to));
-                assert_eq!(folder.same_rules(from, to), from == to, "{from:?} {to:?}");
-            }
-        }
     }
 
     const OPS: [Op; 7] = Op::ALL;

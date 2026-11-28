@@ -2114,3 +2114,18 @@ fn a_menu_led_by_a_drag_highlights_the_row_under_it_and_closes_with_it(cx: &mut 
             .update(|cx: &mut App| cx.has_global::<super::LedByDrag>())
     );
 }
+
+/// A menu's row under the keys or the pointer is the flat plate the command bar and the tab
+/// switcher light (#4402), at its strength in each look, in the menu's own ink.
+#[test]
+fn a_menus_row_is_the_flat_plate_in_both_looks() {
+    for tone in [crate::palette::Tone::Dark, crate::palette::Tone::Light] {
+        let palette = crate::palette::Palette::of(None, tone);
+        let row = super::Highlight::plate(tone == crate::palette::Tone::Light);
+        assert_eq!(row.fill.a, palette.flat_plate().a, "{tone:?}");
+        assert!(
+            row.pressed.a > row.fill.a,
+            "{tone:?}: pressed is no stronger"
+        );
+    }
+}

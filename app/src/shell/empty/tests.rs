@@ -243,6 +243,23 @@ fn the_welcome_opens_a_new_tab(cx: &mut TestAppContext) {
     assert_eq!(host.command_bars.take(), [None]);
 }
 
+/// First run's hint on the welcome lies under ⌘T's bar's field, so it's drawn only while the bar is
+/// over the card: put up a frame before the bar, it stood alone beside the welcome's mark.
+#[gpui::test]
+fn the_welcomes_hint_shows_only_under_the_bar(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_welcome(cx);
+        shell.show_hint(cx);
+    });
+    let drawn = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.welcome_hint(0., 600., cx).is_some())
+    };
+    assert!(!drawn(cx), "drawn with no bar over the card");
+    shell.update(cx, |shell, cx| shell.set_bar_over_card(true, cx));
+    assert!(drawn(cx), "not drawn under the bar");
+}
+
 /// The welcome is the mark, its one line and the button: nothing stands between the line and the
 /// button, and the bar's mark isn't there with it.
 #[gpui::test]
@@ -286,15 +303,16 @@ fn rested(host: &Recorder) -> Vec<String> {
 }
 
 /// The empty card's field is made with the card's first frame and asks the core nothing for it:
-/// no suggestion, no assistant, no task, until the user types or grows it with ⇥ (#4140).
+/// no suggestion, no task, until the user types or grows it with ⇥ (#4140). It reads only what the
+/// browser knows of the assistants, in memory, so its placeholder says it starts threads (#4393).
 #[gpui::test]
 fn the_empty_card_rests_on_a_field_that_asks_nothing(cx: &mut TestAppContext) {
     let (shell, cx, host) = window_with_no_tab(cx);
     assert!(host.take().contains(&"command bar in place".to_string()));
-    assert_eq!(*host.resting.borrow(), Vec::<String>::new());
+    assert_eq!(*host.resting.borrow(), ["task agents"]);
     assert_eq!(
         composer(&shell, cx),
-        (false, "Search or enter address".into())
+        (false, "Search, or start a thread".into())
     );
 }
 
@@ -307,6 +325,7 @@ fn a_page_shown_drops_the_field(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_selected(1, cx));
     cx.run_until_parked();
     assert!(shell.read_with(cx, |shell, _| shell.resting.is_none()));
+    host.resting.take();
     cx.simulate_input("ex");
     assert_eq!(
         *host.resting.borrow(),
@@ -551,6 +570,7 @@ fn command_z_while_composing_in_the_field_at_rest_is_the_fields(cx: &mut TestApp
 fn an_assistant_found_later_shows_at_rest(cx: &mut TestAppContext) {
     let (shell, cx, host) = window_with_no_tab(cx);
     host.unlearned.set(true);
+    shell.update(cx, |shell, cx| shell.assistants_learned(cx));
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
     cx.simulate_input("book a table");
     host.resting.take();
@@ -1156,7 +1176,7 @@ fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert_eq!(
         composer(&shell, cx),
-        (false, "Search or enter address".into())
+        (false, "Search, or start a thread".into())
     );
     assert!(
         field_focused(&shell, cx),
@@ -1170,7 +1190,9 @@ fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) 
 fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
     for private in [true, false] {
         let (shell, cx, host) = window_with_no_tab(cx);
+        // The window learns it's private as it's made, which the bar then reads.
         host.private_bar.set(private);
+        shell.update(cx, |shell, cx| shell.assistants_learned(cx));
         cx.simulate_click(middle(&shell, cx), Modifiers::none());
         cx.simulate_input("book a table");
         cx.simulate_keystrokes("tab");

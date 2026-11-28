@@ -5,7 +5,7 @@
 //! moves only where it can be seen to, on the frames something already asks for.
 use std::time::Instant;
 
-use gpui::{App, Svg, Window};
+use gpui::{App, Styled as _, Svg, Window};
 
 use crate::agents::task::Live;
 use crate::palette::Palette;
@@ -56,9 +56,19 @@ pub(crate) fn moves(window: &Window, cx: &App) -> bool {
     window.is_visible() && !crate::motion::still(cx)
 }
 
-/// The knot `size` across in the mark's ink, with `gap` left out of its cord, or whole.
-pub(crate) fn knot(size: f32, palette: &Palette, gap: Option<(f32, f32)>) -> Svg {
+/// The knot `size` across, saying `says`: in the mark's ink, or amber while its thread waits on
+/// the user (#4402), with `gap` left out of its cord, or whole.
+pub(crate) fn knot(
+    size: f32,
+    palette: &Palette,
+    says: Option<Knot>,
+    gap: Option<(f32, f32)>,
+) -> Svg {
     let mark = crate::product::mark(size, palette);
+    let mark = match says {
+        Some(Knot::Waiting) => mark.text_color(palette.needs_you),
+        _ => mark,
+    };
     match gap {
         Some((at, gap)) => mark.path(crate::product::gapped_mark_path(at, gap)),
         None => mark,

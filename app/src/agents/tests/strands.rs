@@ -4,12 +4,11 @@
 
 use super::kept::{Run, after};
 use super::*;
-use crate::agents::files::Given;
 use crate::agents::runner::{Cli, Failure, Out};
 use crate::agents::task::ilo::{HelpersLimit, IloKind};
 use crate::agents::task::{Line, State, TraceItem};
 use crate::agents::tier::Tier;
-use crate::agents::wall::{Granted, Wall, WallFor};
+use crate::agents::wall::{Wall, WallFor};
 use crate::tokens::agents::helpers::MOST;
 
 /// The thread starts a strand for `goal`: its call, which waits on the strand.
@@ -410,68 +409,60 @@ fn a_strand_that_never_answers_ends_as_its_thread_would(cx: &mut TestAppContext)
     assert_eq!(run.state(&thread, cx), State::Working);
 }
 
-/// Each wall a stand-in for the system's was asked for: its level, and the folder and config of
-/// the run it was for, by their names.
-type Walls = std::rc::Rc<std::cell::RefCell<Vec<(Tier, String, String)>>>;
+/// Each box a stand-in for the system's was asked for: the folder and config of the run it was
+/// for, by their names, and whether that run keeps its conversation.
+type Boxes = std::rc::Rc<std::cell::RefCell<Vec<(String, String, bool)>>>;
 
-/// A thread started with a folder, at Work on pages, whose walls a stand-in puts up.
-fn walled(name: &str, cx: &mut TestAppContext) -> (Run, Walls, String) {
+/// A thread started where the system boxes each run in, whose boxes a stand-in puts up.
+fn boxed(name: &str, cx: &mut TestAppContext) -> (Run, Boxes, String) {
     let run = Run::new(name, cx);
-    let walls = Walls::default();
-    let asked = walls.clone();
+    let boxes = Boxes::default();
+    let asked = boxes.clone();
     (run.agents).update(cx, |agents, _| {
-        agents.tasks.files = Given {
-            folder: Some(Granted::for_test()),
-            attached: None,
-        };
+        agents.tasks.box_available = Some(Ok(()));
         agents.tasks.wall = Some(std::rc::Rc::new(move |wall: &WallFor| {
+            // As the system's box resolves them, each strand's folder is there before its box.
+            assert!(
+                wall.task_dir.is_dir(),
+                "the strand's folder is made before its box"
+            );
             let name = |path: &std::path::Path| path.file_name().unwrap().to_string_lossy().into();
-            (asked.borrow_mut()).push((wall.level, name(wall.task_dir), name(wall.config)));
+            (asked.borrow_mut()).push((name(wall.task_dir), name(wall.config), wall.keeps));
             Ok(Wall::for_test(None))
         }));
     });
     let thread = run.start(Cli::Claude, cx);
-    (run, walls, thread)
+    (run, boxes, thread)
 }
 
-/// A strand of a thread with files runs inside a wall of its own, made for its own folder and
-/// config, which hold its token, never for its thread's.
+/// A strand runs in a box of its own, made for its own folder and config, which hold its token,
+/// never for its thread's, and keeps nothing.
 #[gpui::test]
-fn a_strands_wall_is_its_own(cx: &mut TestAppContext) {
-    let (run, walls, thread) = walled("strand-walled", cx);
+fn a_strands_box_is_its_own(cx: &mut TestAppContext) {
+    let (run, boxes, thread) = boxed("strand-boxed", cx);
     let _answer = strand(&run, &thread, "Find the fare", cx);
     let id = format!("{thread}-1");
-    assert_eq!(
-        *walls.borrow(),
-        [
-            (Tier::Work, thread.clone(), format!("{thread}.json")),
-            (Tier::Work, id.clone(), format!("{id}.json")),
-        ]
-    );
+    let asked = boxes.borrow().clone();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert_eq!((&asked[0].1, asked[0].2), (&format!("{thread}.json"), true));
+    assert_eq!(asked[1], (id.clone(), format!("{id}.json"), false));
     assert_eq!(strands(&run, &thread, cx), [id]);
 }
 
-/// A level that changes its thread's wall takes effect on the next action: the strand inside the
-/// old wall ends, its call answered as stopped, and the thread goes on inside the new one.
+/// A change of its thread's level ends no strand: its box is the same at every level, so the
+/// strand goes on and no box is asked for again.
 #[gpui::test]
-fn a_lower_level_ends_the_strands_inside_the_higher_ones_wall(cx: &mut TestAppContext) {
-    let (run, walls, thread) = walled("strand-lowered", cx);
+fn a_change_of_level_ends_no_strand(cx: &mut TestAppContext) {
+    let (run, boxes, thread) = boxed("strand-level", cx);
     let set = |tier, cx: &mut TestAppContext| {
         (run.agents).update(cx, |agents, cx| agents.set_tier(&thread, tier, cx))
     };
     set(Tier::Full, cx);
     let answer = strand(&run, &thread, "Find the fare", cx);
     let id = format!("{thread}-1");
-    assert_eq!(
-        walls.borrow().last(),
-        Some(&(Tier::Full, id.clone(), format!("{id}.json")))
-    );
     set(Tier::Work, cx);
-    let answered = answer.try_recv().expect("answered");
-    assert_eq!(
-        (answered.kind, answered.text.as_str()),
-        (Some(tools::Kind::Stopped), STOPPED)
-    );
-    assert!(strands(&run, &thread, cx).is_empty());
+    assert!(answer.try_recv().is_err(), "the strand's call was answered");
+    assert_eq!(boxes.borrow().len(), 2);
+    assert_eq!(strands(&run, &thread, cx), [id]);
     assert_eq!(run.state(&thread, cx), State::Working);
 }

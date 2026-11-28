@@ -2,8 +2,8 @@
 //! own state and read here as its conversation has them: a refusal with its count, a step handed
 //! to the user, a tab asked back and a change of access, with their buttons doing what they say.
 
+use super::boxed::sent;
 use super::kept::Run;
-use super::rewall::sent;
 use super::searches::titles;
 use super::*;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
@@ -214,7 +214,7 @@ fn a_page_that_moved_on_tells_the_thread_as_hand_back_does(cx: &mut TestAppConte
         steps[steps.len() - 2..],
         [
             "Handed you tickets.example",
-            "Went on when tickets.example moved past your step"
+            "Took tickets.example back when the page moved on"
         ]
     );
     let logged = (run.agents).read_with(cx, |agents, _| {

@@ -5,7 +5,7 @@
 use crate::agents::kept;
 use crate::agents::task::Live;
 use crate::agents::task::ilo::{
-    HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
+    HelpersLimit as Limit, IloButton, IloKind, LeftOut, NotGiven, SignedInWith,
 };
 use crate::agents::tier::{self, Tier, Why};
 use crate::product::PRODUCT;
@@ -120,68 +120,10 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             format!("stopped {agent}: it started with tools {PRODUCT} doesn't allow"),
             None,
         ),
-        // A wall ilo couldn't put up (#4101). Each names what the user gave, and `tail` ends it.
-        IloKind::StartedWithout {
-            left: LeftOut::Folder(name) | LeftOut::File(name),
-        } => ("started this thread without".into(), Some(name.to_string())),
-        IloKind::StartedWithout {
-            left: LeftOut::Files(files),
-        } => (
-            format!(
-                "started this thread without your {files} files: {PRODUCT} couldn't limit {agent} to them"
-            ),
-            None,
-        ),
-        IloKind::KeptAt { at, folder, .. } => (
-            format!(
-                "kept this thread at {}: {PRODUCT} couldn't limit {agent} to",
-                at.label()
-            ),
+        // What the user gave that the task didn't get (#4101). Each names it, and `tail` ends it.
+        IloKind::StartedWithout { folder, .. } => (
+            "started this thread without".into(),
             Some(folder.to_string()),
-        ),
-        IloKind::SetBack { at, folder, .. } => (
-            format!(
-                "set this thread back to {}: {PRODUCT} couldn't limit {agent} to",
-                at.label()
-            ),
-            Some(folder.to_string()),
-        ),
-        IloKind::NotRestarted {
-            left: LeftOut::Folder(name) | LeftOut::File(name),
-        } => (
-            format!("stopped this thread: {PRODUCT} couldn't restart {agent} without"),
-            Some(name.to_string()),
-        ),
-        IloKind::NotRestarted {
-            left: LeftOut::Files(files),
-        } => (
-            format!(
-                "stopped this thread: {PRODUCT} couldn't restart {agent} without your {files} files"
-            ),
-            None,
-        ),
-        IloKind::NotRaised { refused } => (
-            format!(
-                "stopped this thread: {PRODUCT} couldn't restart {agent} at {}",
-                refused.label()
-            ),
-            None,
-        ),
-        // What a run left running (#4101): what it can still reach, and what ends it.
-        IloKind::LeftRunning {
-            reach: Reach::Folder(folder) | Reach::Both(folder),
-        } => (
-            format!("couldn't end everything {agent} started: what's left can still reach"),
-            Some(folder.to_string()),
-        ),
-        IloKind::LeftRunning {
-            reach: Reach::Files,
-        } => (
-            format!(
-                "couldn't end everything {agent} started: what's left can still reach this \
-                 thread's files{RESTART_ENDS}"
-            ),
-            None,
         ),
         IloKind::EndedLeft => (format!("ended what {agent} had left running"), None),
         // The user is the subject, as of a change of level.
@@ -243,21 +185,11 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
 pub fn stored(kind: &IloKind, agent: &str) -> String {
     let (own, name) = head(kind, agent);
     let unnamed = match kind {
-        IloKind::StartedWithout {
-            left: LeftOut::File(_),
-        }
-        | IloKind::NotRestarted {
-            left: LeftOut::File(_),
-        }
-        | IloKind::NotCopied {
+        IloKind::NotCopied {
             left: LeftOut::File(_),
         } => Some("a file"),
         IloKind::StartedWithout { .. }
-        | IloKind::NotRestarted { .. }
         | IloKind::NotCopied { .. }
-        | IloKind::KeptAt { .. }
-        | IloKind::SetBack { .. }
-        | IloKind::LeftRunning { .. }
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. } => Some("a folder"),
         _ => None,
@@ -267,7 +199,7 @@ pub fn stored(kind: &IloKind, agent: &str) -> String {
         (Some(name), None) => with_name(kind, &own, name).0,
         (None, _) => own,
     };
-    words.extend(tail(kind, agent));
+    words.extend(tail(kind));
     let why = match kind {
         IloKind::SignedIn { .. } => None,
         _ => body(kind, name.as_deref().unwrap_or_default()),
@@ -279,27 +211,17 @@ pub fn stored(kind: &IloKind, agent: &str) -> String {
     words
 }
 
-/// How the line of what a run left running ends: what the user can do about it.
-const RESTART_ENDS: &str = ". Restarting this computer ends it.";
-
 /// What a line says after its name, to its sentence's end, if anything.
-pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
+pub fn tail(kind: &IloKind) -> Option<String> {
     match kind {
         IloKind::StartedWithout {
-            left: LeftOut::Folder(_),
-        } => Some(format!(": {PRODUCT} couldn't limit {agent} to that folder")),
+            why: NotGiven::Gone,
+            ..
+        } => Some(format!(": {PRODUCT} couldn't find it")),
         IloKind::StartedWithout {
-            left: LeftOut::File(_),
-        } => Some(format!(": {PRODUCT} couldn't limit {agent} to that file")),
-        IloKind::KeptAt { refused, .. } | IloKind::SetBack { refused, .. } => {
-            Some(format!(" at {}", refused.label()))
-        }
-        IloKind::LeftRunning {
-            reach: Reach::Folder(_),
-        } => Some(RESTART_ENDS.into()),
-        IloKind::LeftRunning {
-            reach: Reach::Both(_),
-        } => Some(format!(" and this thread's files{RESTART_ENDS}")),
+            why: NotGiven::Never,
+            ..
+        } => Some(format!(": {PRODUCT} keeps it from threads")),
         IloKind::FolderGone { .. } => Some(format!(": {PRODUCT} couldn't find it")),
         IloKind::NotCopied {
             left: LeftOut::File(_) | LeftOut::Folder(_),
@@ -335,11 +257,6 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         IloKind::YouStopped { .. } => None,
         IloKind::Helpers { .. } | IloKind::NotOurTools => None,
         IloKind::StartedWithout { .. }
-        | IloKind::KeptAt { .. }
-        | IloKind::SetBack { .. }
-        | IloKind::NotRestarted { .. }
-        | IloKind::NotRaised { .. }
-        | IloKind::LeftRunning { .. }
         | IloKind::EndedLeft
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
