@@ -28,10 +28,26 @@ else
       *) fail "the sidebar's edge isn't GPUI's view ($1): $last" ;;
     esac
   }
+  # What GPUI asks the platform for on the edge: the app's own cursor asked there (the gpui_macos
+  # patch's "browser: cursor style" line, check-only) and whether it reached a GPUI window.
+  edge_asks() {
+    send cursor "$2" 300
+    expect '^browser: cursor ' "the driver didn't read the edge ($1)"
+    asked=$(grep '^browser: cursor style ' "$log" | tail -1)
+    echo "$1: $asked" >> "$out/sidebar.txt"
+    case "$asked" in
+      "browser: cursor style ResizeLeftRight applied") ;;
+      "browser: cursor style ResizeLeftRight dropped")
+        fail "GPUI asked for the resize arrows on the sidebar's edge ($1) but the platform dropped it, as the key window isn't GPUI's: $asked" ;;
+      *) fail "GPUI didn't ask for the resize arrows on the sidebar's edge ($1): ${asked:-no cursor style asked}" ;;
+    esac
+  }
   : > "$out/sidebar.txt"
   edge_hit "left, the keyboard in the UI" 223
+  edge_asks "left, the keyboard in the UI" 223
   send click 700 300
   edge_hit "left, the page has the keyboard" 223
+  edge_asks "left, the page has the keyboard" 223
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   send type move sidebar
@@ -40,6 +56,7 @@ else
   send key return
   expect '^browser: sidebar on the right$' "Move Sidebar to the Right didn't move it"
   edge_hit "right" -223
+  edge_asks "right" -223
   quit
   echo "ok: the sidebar's edge is GPUI's view on the left, with the page focused, and on the right: $out/sidebar.txt"
 fi
