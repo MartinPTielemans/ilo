@@ -246,21 +246,10 @@ impl command_bar::Host for Bar {
         }
     }
 
-    fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)> {
-        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
-        let shell = shell?.upgrade()?;
-        let shell = shell.read(cx);
-        let tab = shell::shown_tab(cx);
-        let url = shell.page(tab).url;
-        let web = url.starts_with("https://") || url.starts_with("http://");
-        web.then(|| (url.into(), shell.title(tab).into()))
-    }
-
     fn run_task(
         &self,
         agent: &str,
         asked: &str,
-        page: Option<(SharedString, SharedString)>,
         tier: browser::agents::tier::Tier,
         model: Option<String>,
         effort: Option<&'static str>,
@@ -270,7 +259,6 @@ impl command_bar::Host for Bar {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
             return;
         };
-        let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
         // The bar folds into the slot at the foot that its task's card takes, where the window
         // shows one; elsewhere it hides, and the card fades in.
         let window = front().0;
@@ -307,7 +295,7 @@ impl command_bar::Host for Bar {
             shell.fold_started(folded, cx);
             shell.bar_starting();
         });
-        start_thread(cli, asked, page, (tier, model, effort, files), window, cx);
+        start_thread(cli, asked, (tier, model, effort, files), window, cx);
     }
 
     fn run_task_at_rest(
@@ -325,7 +313,7 @@ impl command_bar::Host for Bar {
         };
         let window = front().0;
         update_window_in(window, cx, |shell, _| shell.bar_starting());
-        start_thread(cli, asked, None, (tier, model, effort, files), window, cx);
+        start_thread(cli, asked, (tier, model, effort, files), window, cx);
     }
 
     fn files_available(&self, _: &App) -> bool {
@@ -397,14 +385,13 @@ pub(crate) fn front_space(cx: &App) -> u64 {
     (space.and_then(|shell| shell.upgrade())).map_or(0, |shell| shell.read(cx).space())
 }
 
-/// Starts the composer's thread, `asked` on `cli` with `page`, from the Space shown in the front
+/// Starts the composer's thread, `asked` on `cli` with no page of the user's, from the Space shown in the front
 /// window, at the level on the model with the files its choices hold, the first two of which the
 /// profile remembers as the composer's last once it starts. Its conversation then takes the place
 /// of what `window` shows: ⌘T's slot, or a resting bar's empty page.
 fn start_thread(
     cli: browser::agents::runner::Cli,
     asked: &str,
-    page: Option<browser::agents::task::AskedOn>,
     (tier, model, effort, files): (
         browser::agents::tier::Tier,
         Option<String>,
@@ -426,7 +413,7 @@ fn start_thread(
             // thread only inside its wall.
             files: files.clone(),
         };
-        let started = agents.start_task(cli, &asked, page, home, start, cx);
+        let started = agents.start_task(cli, &asked, None, home, start, cx);
         if started.is_some() {
             agents.remember_start(home, cli, tier, model, effort);
         }

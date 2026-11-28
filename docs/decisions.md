@@ -86,7 +86,7 @@ Revisit the look if Arc users moving over say ilo doesn't feel like Arc continue
 
 ## 8. Agents: the user's own agents, in their real browser
 
-Agents drive the user's real browser through ilo's built-in MCP server, a first-class capability. They come two ways, which the core treats alike, with the same tools, permission checks, confirmations and activity log:
+Agents drive the user's real browser through ilo's built-in MCP server, a first-class capability. They come two ways, which the core treats alike, with the same page tools, permission checks, confirmations and activity log:
 
 - **From outside.** Any MCP client (Claude Code, Codex, others) connects to the server.
 - **From ilo.** The user asks from ⌘T, and ilo runs the `claude` or `codex` CLI they installed and signed into, with ilo's MCP server added for that task, on their own subscription. ilo never handles their login, token or key; when the CLI is missing or signed out it says how to fix it.
@@ -94,7 +94,7 @@ Agents drive the user's real browser through ilo's built-in MCP server, a first-
 ilo has no assistant of its own: no model, agent loop or AI account. What answers is the user's agent, which can do in a page only what the MCP server lets any agent do.
 
 - **Built-in MCP server.** Local-only at first, on a socket only this user's processes reach; cloud agents come later, by explicit pairing.
-- **Where the work shows.** Each agent works in its own Space, listed in no window; its pages and steps show on a card at the sidebar's foot, not as tabs. A task asked from ilo and an outside agent's session get the same card; an outside agent's conversation stays in its terminal. An agent never takes the user's focus or cursor; the user can watch, take over and hand back anytime.
+- **Where the work shows.** Each agent works in its own Space, listed in no window; its pages and steps show on a card at the sidebar's foot, not as tabs. A task asked from ilo and an outside agent's session get the same card; an outside agent's conversation stays in its terminal. An agent acts only in its own tabs and never takes the user's focus or cursor; the user can watch, take over and hand back anytime. A thread asked from ilo, and no outside agent, can also list the user's open tabs by title and site while the user leaves that on in Settings, and open a copy of one in a tab of its own, so "the page I was reading" needs no copied link; tabs in private windows, in other profiles and on sites agents are kept from are never listed, and each look is in the activity log.
 - **Engine-native page access.** The core serves the accessibility tree, a cleaned-up DOM, stable element references and screenshots straight from Chromium, with no extension or remote-debugging port.
 - **Levels, permissions per agent and per site,** plus an activity log. The user alone sets a thread's level, Look only, Work on pages or Full access, for one thread or as where new threads and other apps' tasks start, and the client enforces it. Below Full access, payments, orders, messages sent as the user and bank sites are refused; at Full access a thread pays or orders only what the user asked for, as they said it, and asks otherwise. At every level it files, signs or accepts terms only when asked, and sites the user put off limits stay so.
 - **Handoff to the human.** At a login, 2FA prompt or CAPTCHA, the agent's tab pauses and the sidebar asks the user to step in.

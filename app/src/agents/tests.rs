@@ -78,6 +78,8 @@ struct Made {
     private: RefCell<Vec<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
+    /// The tabs whose page was reached by sending a form.
+    posted: RefCell<HashSet<u64>>,
     /// The search engine's host, where a test moves it from search.example.
     engine: std::cell::Cell<Option<&'static str>>,
     /// Whether the system opens links with the browser: another browser does, unless a test says.
@@ -433,6 +435,29 @@ impl Browser for Made {
 
     fn private_space(&self, space: u64) -> bool {
         self.private.borrow().contains(&space)
+    }
+
+    /// The Spaces of `tabs` in `profile`, in their first tab's order, but agents', tasks' and
+    /// private windows'.
+    fn user_spaces(&self, profile: &str) -> Vec<u64> {
+        let agents: Vec<u64> = self.agent_spaces.borrow().values().copied().collect();
+        let tasks = self.task_spaces.borrow();
+        let mut spaces = Vec::new();
+        for &(_, space, _, _) in self.tabs.borrow().iter() {
+            if !spaces.contains(&space)
+                && !agents.contains(&space)
+                && !tasks.contains(&space)
+                && !self.private_space(space)
+                && self.space_profile(space) == profile
+            {
+                spaces.push(space);
+            }
+        }
+        spaces
+    }
+
+    fn posted(&self, tab: u64, _: &App) -> bool {
+        self.posted.borrow().contains(&tab)
     }
 
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
@@ -3757,10 +3782,13 @@ fn no_tool_reads_a_card_or_another_tasks_steps() {
 /// acts on a page would otherwise run at Look only.
 #[test]
 fn every_tool_and_step_is_in_one_class() {
-    // Opens or reads a page, which every tier allows.
-    const READS: [&str; 12] = [
+    // Opens or reads a page, which every tier allows. A copy of the user's tab is open_tab's open,
+    // judged as one, as it's made one before its access is read (#4403).
+    const READS: [&str; 14] = [
         "list_tabs",
         "list_split",
+        "your_tabs",
+        "open_your_tab",
         "open_tab",
         "search",
         "strand",
@@ -5883,9 +5911,10 @@ fn every_tool_has_an_activity_log_entry() {
     let mut names = tools::names("claude-code");
     names.extend(tools::names("task-1"));
     // The log names an action as the core's entry does, which is the tool's name but for select's
-    // (agents.rs).
+    // (agents.rs), and for a copy of the user's tab, which is open_tab's entry (#4403).
     let logged = |name: &str| match name {
         "select" => "select_option".to_string(),
+        "open_your_tab" => "open_tab".to_string(),
         name => name.to_string(),
     };
     let missing: Vec<_> = (names.iter())
@@ -15313,6 +15342,8 @@ mod strands;
 mod switches;
 mod uploads;
 mod went_to;
+#[cfg(unix)]
+mod your_tabs;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
 /// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and

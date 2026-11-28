@@ -45,6 +45,7 @@ pub mod task;
 pub mod tier;
 pub mod tools;
 pub mod wall;
+mod your_tabs;
 
 pub use server::address;
 
@@ -333,6 +334,11 @@ pub trait Browser {
     /// Whether `space` is a private window's own Space. No task starts from one, as agents get
     /// no path into private windows.
     fn private_space(&self, space: u64) -> bool;
+    /// The user's Spaces in the profile whose folder is named `profile`, in the core's order:
+    /// none an agent's or a task's, and never a private window's.
+    fn user_spaces(&self, profile: &str) -> Vec<u64>;
+    /// Whether `tab`'s page was reached by sending a form, so its address alone doesn't give it.
+    fn posted(&self, tab: u64, cx: &App) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
@@ -1310,6 +1316,10 @@ impl Agents {
         };
         self.switches.threads.store(threads_on, SeqCst);
         self.switches.others.store(others_on, SeqCst);
+        let your_tabs = saved.get("your_tabs").and_then(Value::as_bool);
+        self.switches
+            .your_tabs
+            .store(your_tabs != Some(false), SeqCst);
         self.scripts = saved
             .get("scripts")
             .and_then(Value::as_bool)
@@ -1408,6 +1418,29 @@ impl Agents {
             return;
         }
         self.notes_off = !on;
+        self.save();
+        cx.notify();
+    }
+
+    /// Whether threads may list the user's open tabs and copy one: Threads' switch under the inside
+    /// one, on until the user turns it off (#4403).
+    pub fn your_tabs(&self) -> bool {
+        self.switches.your_tabs.load(SeqCst)
+    }
+
+    /// Sets whether threads may see the user's open tabs, the user's click alone. Off, a thread's
+    /// next tools/list has neither tool and a call to either is refused as one it doesn't have;
+    /// what a thread already looked at is forgotten, so nothing of it can be opened after.
+    pub fn set_your_tabs(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.your_tabs() {
+            return;
+        }
+        self.switches.your_tabs.store(on, SeqCst);
+        if !on {
+            for task in &mut self.tasks.tasks {
+                task.seen_tabs.clear();
+            }
+        }
         self.save();
         cx.notify();
     }
@@ -2130,7 +2163,8 @@ impl Agents {
         // an entry from its action. So one that names no tool of the agent's ends here, before
         // anything is run, shown or kept by that word: no call can leave an entry that reads as
         // the browser's own or the user's.
-        if !tools::has(&call.agent, &call.tool) {
+        let your_tabs = self.your_tabs();
+        if !tools::has(&call.agent, &call.tool, your_tabs) {
             let none = format!("There's no tool {}.", call.tool);
             _ = call.reply.send(ToolResult::error(none));
             // A strand that calls one of its thread's own stops the thread, as it isn't allowed.
@@ -2167,7 +2201,7 @@ impl Agents {
     }
 
     /// `call`, once it's known to be the agent's to make and in its thread's name if a strand's.
-    fn called(&mut self, call: Call, says: String, cx: &mut Context<Self>) {
+    fn called(&mut self, mut call: Call, says: String, cx: &mut Context<Self>) {
         // A task the user stopped keeps its connection for their next message, so its calls still
         // come: one that waited its turn in the server behind a slow page, or one its assistant
         // made as it was interrupted. Each is answered as stopped, and nothing of it is run,
@@ -2201,7 +2235,21 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
+        // A copy of the user's tab is open_tab's open of the page it's at, by open_tab's checks,
+        // step and entry, in a tab of the thread's own (#4403). One it can't copy opens nothing.
+        let copy = call.tool == tools::YOUR_TABS[1];
+        if copy {
+            let Some(url) = self.your_tab_url(&call.agent, &call.arguments, cx) else {
+                _ = call.reply.send(ToolResult::error(your_tabs::STALE));
+                return;
+            };
+            call.tool = "open_tab".into();
+            call.arguments = json!({ "url": url });
+        }
         self.trace_call(&call, says, cx);
+        if copy {
+            self.mark_copy(&call.agent, call.id);
+        }
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
         self.live.insert(call.agent.clone());
@@ -2340,6 +2388,13 @@ impl Agents {
                 let current = (self.current.get(&(agent.clone(), connection)).copied())
                     .filter(|tab| !self.withheld(&agent, *tab));
                 _ = reply.send(ToolResult::text(tools::tab_list(&tabs, current, &mine)));
+            }
+            // Each look is in the log, with no title or site of the user's (#4403).
+            "your_tabs" => {
+                let (listed, count) = self.look_at_your_tabs(&agent, cx);
+                self.note_on(&agent, connection, "your_tabs", "", &count.to_string(), "");
+                cx.notify();
+                _ = reply.send(ToolResult::text(listed));
             }
             "read_page" => {
                 let tab = match tools::tab_argument(&arguments) {
@@ -4609,7 +4664,12 @@ impl Agents {
                 _ = reply.send(ToolResult::error("The tab couldn't open."));
                 return;
             }
-            self.note(&agent, connection, action, &site, "");
+            // A copy of the user's tab says so in the log (YT4).
+            let from = match self.is_copy(&agent, call) {
+                true => tools::FROM_YOUR_TABS,
+                false => "",
+            };
+            self.note_on(&agent, connection, action, &site, from, "");
             cx.notify();
             self.current.insert((agent.clone(), connection), tab);
             self.opened(&agent, call, tab);
@@ -6050,6 +6110,7 @@ impl Agents {
         let saved = json!({
             "threads": self.threads(),
             "other_apps": self.other_apps(),
+            "your_tabs": self.your_tabs(),
             "agents": agents,
             "grants": grants,
             "fenced": self.fenced,

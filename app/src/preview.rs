@@ -2226,15 +2226,10 @@ impl command_bar::Host for PreviewBar {
 
     fn asking(&self, _: bool, _: &mut App) {}
 
-    fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
-        None
-    }
-
     fn run_task(
         &self,
         _: &str,
         _: &str,
-        _: Option<(SharedString, SharedString)>,
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
