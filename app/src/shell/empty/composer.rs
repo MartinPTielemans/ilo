@@ -1,27 +1,20 @@
 //! The page an empty Space rests on (#4140): the command bar where ⌘T's opens, whose ⇥ grows it
-//! into the composer in place, and under it the user's recent tasks. The bar is the same bar as
-//! ⌘T's (`command_bar::in_place`), drawn in the page, with its own keys. Nothing of the tasks is
+//! into the composer in place, and under it the recents (`recents.rs`). The bar is the same bar as
+//! ⌘T's (`command_bar::in_place`), drawn in the page, with its own keys. Nothing of the Archive is
 //! read for the page's first frame, and the bar asks the core nothing until it's typed in.
 
 use gpui::{
-    Bounds, Context, Corners, Entity, FontWeight, Hsla, Pixels, SharedString, Window, canvas, div,
-    point, prelude::*, px, rgba,
+    Bounds, Context, Entity, Hsla, Pixels, SharedString, Window, div, point, prelude::*, px, rgba,
 };
 
-use crate::agents::task::{Card, Dot, Word};
+use crate::agents::task::Card;
 use crate::command_bar::CommandBar;
 use crate::palette::{Palette, Tone};
-use crate::product;
 use crate::shell::ShowStarted;
 use crate::tokens::command_bar::{REST_HEIGHT as BAR_HEIGHT, REST_WIDTH as BAR_WIDTH};
 use crate::tokens::shell::composer::*;
-use crate::tokens::shell::empty::MARK_SIZE;
-use crate::tokens::text;
 
-use super::super::{Shell, broom::working_ring, cast::TURN, task_area::covering};
-
-/// Over the cards.
-const LATEST: &str = "Pick up a thread";
+use super::super::Shell;
 
 /// The bar the page rests on, while the Space shows no page.
 pub(in crate::shell) struct Resting {
@@ -33,6 +26,9 @@ pub(in crate::shell) struct Resting {
     wants_keys: Owed,
     /// The Space it rests in.
     space: u64,
+    /// What the recents take the keyboard by, and the row it's on while they have it.
+    pub(super) recents: gpui::FocusHandle,
+    pub(super) recent: usize,
 }
 
 /// Where a chip's menu hangs: 4 under the chip, its names under the chip's own word, or at the
@@ -74,7 +70,9 @@ impl Shell {
                 // GPUI's focus would go with the field, and the shortcuts with it, as the shell's
                 // context holds them, until a click lands on the shell, which a header button's
                 // never does. The shell holds it again; a page that took the keyboard keeps it.
-                if resting.bar.read(cx).field_focus(cx).is_focused(window) {
+                let held = resting.bar.read(cx).field_focus(cx).is_focused(window)
+                    || resting.recents.is_focused(window);
+                if held {
                     if self.page_keyboard.is_some() && self.page_has_keyboard(window, cx) {
                         self.page_keyboard = Some(Some(self.focus_handle.downgrade()));
                     }
@@ -101,6 +99,8 @@ impl Shell {
             painted: false,
             wants_keys: Owed::Shown,
             space,
+            recents: cx.focus_handle(),
+            recent: 0,
         });
         cx.on_next_frame(window, |shell, _, cx| {
             if let Some(resting) = &mut shell.resting {
@@ -235,237 +235,66 @@ impl Shell {
         }
     }
 
-    /// The page in the card at `frame`: the bar at the height ⌘T's opens at, the product's mark
-    /// over it, and under it the recent tasks, which its rows and its composer go over as they
-    /// open, as ⌘T's over a page.
+    /// The page in the card at `frame`: the bar a quarter of the way down, and under it the
+    /// recents, which give way to the bar's rows once something's typed, and to the composer's
+    /// choices once ⇥ grew it. ↓ in the bar with no rows moves into them.
     pub(in crate::shell) fn resting_page(
         &mut self,
         frame: Bounds<Pixels>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<gpui::Div> {
         let width = f32::from(frame.size.width);
         let resting = self.resting.as_ref()?;
         let (bar, painted) = (resting.bar.clone(), resting.painted);
-        let palette = self.palette;
-        let cards: Vec<Card> = match painted {
-            true => self.latest_tasks(CARDS as usize),
-            false => Vec::new(),
-        };
-        let plates = cards.iter().any(|card| self.plate_of(card).is_some());
-        let top = group_top(f32::from(frame.size.height), !cards.is_empty(), plates);
+        let top = group_top(f32::from(frame.size.height));
         // A narrow window keeps the bar inside the card's gutters.
         let bar_width = BAR_WIDTH.min(width - 2. * FIELD_GUTTER).max(0.);
+        let idle = {
+            let bar = bar.read(cx);
+            bar.typed_text(cx).is_empty() && !bar.composing_thread()
+        };
+        // Nothing of the Archive is read for the page's first frame.
+        let recents = (painted && idle)
+            .then(|| self.recents_plate(bar_width, window, cx))
+            .flatten();
         let bar = div()
             .debug_selector(|| "resting-bar".into())
             .absolute()
             .top(px(top))
             .left(px((width - bar_width) / 2.))
             .w(px(bar_width))
+            .on_action(
+                cx.listener(|shell, _: &crate::command_bar::Next, window, cx| {
+                    shell.into_recents(window, cx)
+                }),
+            )
             .child(bar);
-        // The product's mark over the bar, in its column, where the card has the room over it. A
-        // Little Window is a look at one page: its card with no page has no mark.
-        let mark = mark_top(top, self.little.is_some()).map(|mark_top| {
-            div()
-                .debug_selector(|| "resting-mark".into())
-                .absolute()
-                .top(px(mark_top))
-                .left(px((width - MARK_SIZE) / 2.))
-                .child(product::mark(MARK_SIZE, &palette))
-        });
         let hint = self.landing_hint(top, width, cx);
-        let page = div()
-            .size_full()
-            .relative()
-            .flex()
-            .flex_col()
-            .items_center()
-            .pt(px(top + BAR_HEIGHT))
-            .children(mark)
-            .children(hint);
-        if cards.is_empty() {
-            return Some(page.child(bar));
-        }
-        let label_width = LABEL_WIDTH.min(width - 2. * FIELD_GUTTER).max(0.);
-        let cards: Vec<_> = (cards.into_iter().enumerate())
-            .map(|(index, card)| self.recent_card(index, card, cx))
-            .collect();
         Some(
-            page.child(
-                div()
-                    .w(px(label_width))
-                    .line_height(px(LABEL_LINE))
-                    .mt(px(LABEL_TOP))
-                    .mb(px(LABEL_BOTTOM))
-                    .pl(px(LABEL_INSET))
-                    .text_size(px(LABEL_SIZE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.text(1.))
-                    .child(LATEST),
-            )
-            .child(
-                div()
-                    .w(px(label_width))
-                    .flex()
-                    .gap(px(CARD_GAP))
-                    .overflow_hidden()
-                    .children(cards),
-            )
-            // Last, so it's over the cards.
-            .child(bar),
+            div()
+                .size_full()
+                .relative()
+                .flex()
+                .flex_col()
+                .items_center()
+                .pt(px(top + BAR_HEIGHT))
+                .children(hint)
+                .children(recents)
+                // Last, so its rows and choices are over the recents.
+                .child(bar),
         )
     }
-
-    /// A recent task's card: its state, its title and its last steps, the one under way in full
-    /// ink (or its status, with no steps this turn), over the picture its last page's tile ended
-    /// on. Once over, its one line is a done task's answer's first or, quiet, a stopped one's
-    /// last finished step, if it has one; a task a run before left says when it ended, and has
-    /// the line and picture its kept card read back, if any. A card with no picture ends after
-    /// its words. A click opens it.
-    fn recent_card(
-        &self,
-        index: usize,
-        card: Card,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let palette = self.palette;
-        let state = match &card.ended_at {
-            Some(at) => format!("{} · {at}", card.word.alone(&card.name)).into(),
-            None => card.word.alone(&card.name),
-        };
-        // A thread at work wears the state's glyph, the ring, in the text's ink: no green.
-        let ring = (card.dot == Dot::Working).then(|| {
-            let turned = self.breath.turned(TURN, self.clock.now());
-            working_ring(&palette, STATE_GLYPH, turned)
-        });
-        let working = card.dot == Dot::Working;
-        let lines: Vec<(SharedString, bool)> = match card.word {
-            // A done task says its answer's first line; a stopped one only its last finished
-            // step, quiet, or nothing after its title.
-            Word::Done | Word::Stopped => (card.line.clone().into_iter())
-                .map(|line| (line, card.word == Word::Done))
-                .collect(),
-            _ if card.steps.is_empty() => vec![(card.status.clone(), true)],
-            _ => {
-                let last = card.steps.len() - 1;
-                (card.steps.iter().cloned().enumerate())
-                    .map(|(at, step)| (step, working && at == last))
-                    .collect()
-            }
-        };
-        let lines = lines.into_iter().map(|(line, now)| {
-            div()
-                .whitespace_nowrap()
-                .truncate()
-                .text_color(match now {
-                    true => palette.text(1.),
-                    false => palette.text(STEP_INK),
-                })
-                .child(line)
-        });
-        let plate = self.plate_of(&card).map(|picture| {
-            let corners = Corners::all(px(PAGE_RADIUS));
-            div()
-                .h(px(PAGE_HEIGHT))
-                .mx(px(PAGE_INSET))
-                .mb(px(PAGE_INSET))
-                .rounded(px(PAGE_RADIUS))
-                .bg(palette.plate(PAGE_FILL))
-                .child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _| {
-                            let drawn = covering(bounds, picture.size());
-                            (window.paint_image(bounds, drawn, corners, picture.image(), 0, false))
-                                .ok();
-                        },
-                    )
-                    .size_full(),
-                )
-        });
-        let agent = card.agent.clone();
-        div()
-            .id(("composer-task", index))
-            .flex_none()
-            .w(px(CARD_WIDTH))
-            .flex()
-            .flex_col()
-            .rounded(px(CARD_RADIUS))
-            .bg(palette.plate(CARD_FILL))
-            .border_1()
-            .border_color(rim(&palette, CARD_RIM))
-            .overflow_hidden()
-            .text_size(px(text::BODY))
-            .on_click(cx.listener(move |shell, _, _, cx| shell.open_latest(agent.clone(), cx)))
-            .child(
-                div()
-                    .h(px(CARD_WORDS))
-                    .pt(px(CARD_TOP))
-                    .px(px(CARD_INSET))
-                    .pb(px(CARD_BOTTOM))
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(STATE_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .gap(px(STATE_GAP))
-                            .text_size(px(STATE_SIZE))
-                            .text_color(match card.dot {
-                                Dot::Waiting => palette.text(1.),
-                                _ => palette.text(STATE_INK),
-                            })
-                            .children(ring)
-                            .child(state),
-                    )
-                    .child(
-                        div()
-                            .my(px(TITLE_GAP))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(palette.text(1.))
-                            .whitespace_nowrap()
-                            .truncate()
-                            .child(card.title),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .text_size(px(STEP_SIZE))
-                            .line_height(px(STEP_LINE))
-                            .children(lines),
-                    ),
-            )
-            .children(plate)
-    }
 }
 
-/// Where the mark's top is over a bar whose top is `top`, where it's drawn: not in a Little
-/// Window, and not where the card hasn't the room over the bar.
-pub(in crate::shell) fn mark_top(top: f32, little: bool) -> Option<f32> {
-    let at = top - MARK_GAP - MARK_SIZE;
-    (!little && at >= TOP).then_some(at)
-}
-
-/// How far under a card `height` tall the page's bar starts: in its column 150 down, under the
-/// mark's room, or as far up as the group needs to fit through its cards when it has any
-/// (`plates` if one has its site's plate), never above `TOP`.
-pub(in crate::shell) fn group_top(height: f32, cards: bool, plates: bool) -> f32 {
-    let card = match plates {
-        // A card is its words and its plate inside its rim, 1 on each side.
-        true => 2. + CARD_WORDS + PAGE_HEIGHT + PAGE_INSET,
-        false => 2. + CARD_WORDS,
-    };
-    let below = match cards {
-        true => LABEL_TOP + LABEL_LINE + LABEL_BOTTOM + card,
-        false => 0.,
-    };
-    let level = COLUMN_TOP + MARK_SIZE + MARK_GAP;
-    level.min(height - TOP - BAR_HEIGHT - below).max(TOP)
+/// How far down a card `height` tall the page's bar starts: a quarter of the way, never above
+/// `TOP`.
+pub(in crate::shell) fn group_top(height: f32) -> f32 {
+    (height * COLUMN_DOWN).max(TOP)
 }
 
 /// A plate's rim: white `dark` on a dark window, the ink on a light one, where white doesn't show.
-fn rim(palette: &Palette, dark: u32) -> Hsla {
+pub(super) fn rim(palette: &Palette, dark: u32) -> Hsla {
     match palette.tone {
         Tone::Dark => rgba(dark).into(),
         Tone::Light => palette.plate(LIGHT_RIM),

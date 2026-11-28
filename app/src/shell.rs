@@ -1831,10 +1831,6 @@ pub struct Shell {
     /// The picture of the page another window shows, in place of it, and the pictures to let go of.
     picture: Option<picture::Picture>,
     stale_pictures: Vec<Arc<gpui::RenderImage>>,
-    /// The picture each card of Latest tasks shows on its plate, by its task and the page: that
-    /// page's tile's as its conversation's rail left it, in memory only, till the conversation
-    /// shows again or the card no longer pictures that page (`keep_plate`).
-    card_plates: Vec<(SharedString, u64, PagePicture)>,
     /// Each profile's extensions.
     extensions: HashMap<u64, Vec<Extension>>,
     /// Each profile's sidebar backups, as the core last listed them (`set_sidebar_backups`).
@@ -2373,7 +2369,6 @@ impl Shell {
             flight: None,
             picture: None,
             stale_pictures: Vec::new(),
-            card_plates: Vec::new(),
             extensions: HashMap::new(),
             sidebar_backups: HashMap::new(),
             menus: MenuBar::default(),
@@ -5107,7 +5102,7 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
-        let empty_card = self.empty_card(cx);
+        let empty_card = self.empty_card(window, cx);
         let shown = self.content_shown();
         // Drawn each frame while it comes in, and then never again.
         if self.content_since.is_some() {
