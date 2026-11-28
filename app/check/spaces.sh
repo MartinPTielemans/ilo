@@ -690,10 +690,11 @@ EOF
 [ -n "$bh" ] || fail "the Library's column said nothing of where it drew the Spaces button"
 send click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
-spaces_wide=$(($(token shell.library column-width) + $(token shell.library spaces-left) +
+spaces_full=$(($(token shell.library column-width) + $(token shell.library spaces-left) +
   2 * $(token shell.library card-width) + $(token shell.library card-gap) +
   $(token shell.library plus-gap) + $(token shell.library plus-size) +
   $(token shell.library plus-after)))
+spaces_wide=$spaces_full
 page_least=$((${content%x*} - $(token shell.library spaces-page)))
 [ $spaces_wide -gt $page_least ] && spaces_wide=$page_least
 expect "^browser: library spaces 2 wide $spaces_wide\$" \
@@ -861,16 +862,20 @@ expect "^browser: dropped space $first after $second\$" "the first card's handle
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"
 send key z cmd
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back after the flick"
-# In a window 700 wide the two cards, 744 across, don't fit: the section leaves the page 56, 644,
-# and its cards scroll across under two fingers, give past their last and spring back to it once
-# let go, 100 along, the Library staying open (Arc 1.171, #1401).
+# In a window 700 wide the two cards don't fit: the section leaves the page its spaces-page, and
+# its cards scroll across under two fingers, give past their last and spring back to it once let
+# go, as far along as they're wider than the section, the Library staying open (Arc 1.171,
+# #1401). The fingers go 100 past that, 20 a move.
 if [ -n "$fingers" ]; then
+  cards_room=$((spaces_full - (700 - $(token shell.library spaces-page))))
+  [ $cards_room -gt 0 ] || fail "two cards, $spaces_full across, fit a window 700 wide, so nothing scrolls"
   send resize 700 ${content#*x}
   expect "^browser: drawn at 700x${content#*x}\$" "the window didn't draw 700 wide"
   record library-cards 3
-  send swipe 500 $((${content#*x} / 2)) -20 0 10
+  send swipe 500 $((${content#*x} / 2)) -20 0 $(((cards_room + 100) / 20))
   expect '^browser: swipe cards$' "two fingers over the cards that don't fit didn't scroll them"
-  expect '^browser: library cards at 100$' "the cards let go past their last didn't spring back to it"
+  expect "^browser: library cards at $cards_room\$" \
+    "the cards let go past their last didn't spring back to it, $cards_room along"
   recorded
   none_since '^browser: library hidden$' || fail "two fingers over the cards closed the Library"
   ../tools/window-screenshot.sh "$pid" "$out/library-cards.png" || fail "no window to capture"
