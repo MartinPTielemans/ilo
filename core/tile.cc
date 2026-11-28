@@ -3,12 +3,15 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <string>
+#include <utility>
 
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/checked.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
 #include "browser_core/tile_rule.h"
@@ -105,7 +108,25 @@ void LetDialog(bc_id tab, bool show) {
   }
 }
 
+// What each tile's line last said (SayTile).
+std::map<bc_id, std::string>& Said() {
+  static base::NoDestructor<std::map<bc_id, std::string>> said;
+  return *said;
+}
+
+// For the checks: whether |tab|'s page draws at its tile's size and its window's scale (#4441).
+// Once a change, as a tile's motion changes it each frame.
+void SayTile(bc_id tab, content::WebContents* contents) {
+  std::string now = platform::DescribeTile(contents);
+  if (now.empty() || Said()[tab] == now) {
+    return;
+  }
+  fprintf(stderr, "browser: tile %llu %s\n", static_cast<unsigned long long>(tab), now.c_str());
+  Said()[tab] = std::move(now);
+}
+
 void LogEnded(bc_id tab) {
+  Said().erase(tab);
   fprintf(stderr, "browser: tile %llu ended\n", static_cast<unsigned long long>(tab));
 }
 
@@ -126,7 +147,7 @@ bool Out(bc_id tab, const void* view, bool parked, bool leaves_window) {
 
 }  // namespace
 
-bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
+bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius, bool takes_wheel) {
   content::WebContents* contents = Tab::FromId(tab);
   if (!contents) {
     return false;
@@ -147,7 +168,16 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
           !DialogHolds().contains(tab)) {
         DialogHolds().emplace(tab, std::make_unique<DialogHold>(tab));
       }
-      platform::ShowTile(contents, view, frame, corner_radius);
+      Rule().SetTakesWheel(tab, takes_wheel);
+      platform::ShowTile(contents, view, frame, corner_radius, Rule().TakesWheel(tab));
+      // Into a tile, the page takes the size a watch gives it, whatever size the place it came from
+      // gave it, such as a window's pages', so the tile shows it at its own size (#4441).
+      if (shown != TileRule::Shown::kFramed) {
+        Window::GiveAgentPageItsSize(contents);
+      }
+      if (Checked()) {
+        SayTile(tab, contents);
+      }
       // A tile made for a page that died draws nothing, as one whose page dies in it: one a window
       // let go of, handed back with no reload. Not for each frame the app moves it by.
       if (shown != TileRule::Shown::kFramed) {

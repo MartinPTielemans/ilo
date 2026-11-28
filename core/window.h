@@ -94,8 +94,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // null. A window whose page another window took doesn't show it.
   static Window* Showing(bc_id tab);
   // Gives an agent's page the size a watch gives it, the front window's or, with none open, the
-  // last one's (AgentPageArea), so watching it never lays it out again. Not while a window shows
-  // it, whose frame it has, nor for null.
+  // last one's (AgentPageArea), so watching it never lays it out again, and one in a tile is shown
+  // at its own size there (#4441). Not while a window shows it, whose frame it has, nor for null.
   static void GiveAgentPageItsSize(content::WebContents* contents);
   // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
   // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
@@ -294,8 +294,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Where the selected tab's page goes, in the window, and the radius of its corners. A split view
   // shares it out between its pages.
   void SetPageFrame(const gfx::Rect& frame, double corner_radius);
-  // The size this window gives a thread's page it watches (bc_window_set_agent_page_size).
-  void SetAgentPageSize(const gfx::Size& size) { agent_page_size_ = size; }
+  // The size this window gives a thread's page it watches (bc_window_set_agent_page_size). A
+  // change gives every agent's page no window shows its new size, as GiveAgentPageItsSize does.
+  void SetAgentPageSize(const gfx::Size& size);
   // That size, or the page frame's until the app gives one.
   gfx::Size AgentPageSize() const {
     return agent_page_size_.IsEmpty() ? page_frame_.size() : agent_page_size_;

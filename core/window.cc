@@ -714,8 +714,29 @@ void Window::GiveAgentPageItsSize(content::WebContents* contents) {
     }
   }
   const gfx::Size area = AgentPageArea(front_to_back, g_last_agent_page_size);
-  if (!area.IsEmpty()) {
+  if (area.IsEmpty()) {
+    return;
+  }
+  // A tile's page hears no size from its views, which the tile scales.
+  if (tiles::Holds(Tab::IdOf(contents))) {
+    platform::ResizeTilePage(contents, area);
+  } else {
     contents->Resize(gfx::Rect(area));
+  }
+}
+
+void Window::SetAgentPageSize(const gfx::Size& size) {
+  if (agent_page_size_ == size) {
+    return;
+  }
+  agent_page_size_ = size;
+  // The pages made before follow, as a resize by the user carries through to them (#4355), so the
+  // watched tile shows its page at the page's own size (#4441).
+  for (Tab* tab : Tab::All()) {
+    content::WebContents* contents = tab->web_contents();
+    if (contents && IsAgentTab(contents)) {
+      GiveAgentPageItsSize(contents);
+    }
   }
 }
 
